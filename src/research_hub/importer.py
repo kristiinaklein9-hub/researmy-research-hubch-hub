@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import sys
 import warnings
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ import yaml
 
 from research_hub.clusters import ClusterRegistry, slugify
 from research_hub.dedup import DedupHit, DedupIndex
+from research_hub.manifest import Manifest, new_entry
 from research_hub.security import atomic_write_text, safe_join, validate_slug
 
 logger = logging.getLogger(__name__)
@@ -374,8 +377,25 @@ def import_folder(
     use_graphify: bool = False,
     graphify_graph: Path | None = None,
     dry_run: bool = False,
+    with_zotero: bool = False,
+    yes: bool = False,
+    batch_label: str | None = None,
 ) -> ImportReport:
     cluster_slug = validate_slug(cluster_slug, field="cluster_slug")
+    if not with_zotero and not dry_run:
+        msg = (
+            "WARNING: import-folder writes Obsidian only.\n"
+            f"  Cluster '{cluster_slug}' Zotero collection will NOT receive these files.\n"
+            "  To also write Zotero, re-run with --with-zotero (requires Zotero API set up).\n"
+        )
+        print(msg, file=sys.stderr)
+        if not yes and getattr(sys.stdin, "isatty", lambda: False)():
+            try:
+                response = input("Continue with Obsidian-only? [y/N]: ").strip().lower()
+            except EOFError:
+                response = ""
+            if response not in {"y", "yes"}:
+                raise SystemExit("aborted by user")
     folder_path = Path(folder).expanduser().resolve()
     if not folder_path.is_dir():
         raise ValueError(f"folder not found: {folder_path}")
@@ -386,11 +406,13 @@ def import_folder(
     _maybe_create_cluster(cfg, cluster_slug, dry_run=dry_run)
     dedup_path = cfg.research_hub_dir / "dedup_index.json"
     dedup = _load_dedup(dedup_path)
+    manifest = Manifest(cfg.research_hub_dir / "manifest.jsonl")
     cluster_raw_dir = safe_join(cfg.raw, cluster_slug)
     if not dry_run:
         cluster_raw_dir.mkdir(parents=True, exist_ok=True)
 
     report = ImportReport(folder=folder_path, cluster_slug=cluster_slug, dry_run=dry_run)
+    imported_records: list[dict[str, Any]] = []
 
     if use_graphify and not graphify_graph:
         warnings.warn(
@@ -455,12 +477,87 @@ def import_folder(
                     obsidian_path=str(note_path),
                 )
             ]
+            imported_records.append(
+                {
+                    "entry": entry,
+                    "title": title,
+                    "content_hash": content_hash,
+                    "note_path": note_path,
+                    "text": text,
+                }
+            )
 
         entry.status = "imported"
         report.entries.append(entry)
 
     if not dry_run and report.imported_count > 0:
         dedup.save(dedup_path)
+        manifest_query = batch_label or "import-folder"
+        manifest_batch_label = batch_label or ""
+        zotero_keys = [""] * len(imported_records)
+        if with_zotero and imported_records:
+            from research_hub.pipeline import (
+                _ensure_batch_subcollection,
+                resolve_batch_label,
+                write_papers_to_zotero,
+            )
+            from research_hub.zotero.client import get_client
+
+            zot = get_client()
+            cluster = ClusterRegistry(cfg.clusters_file).get(cluster_slug)
+            cluster_coll = cluster.zotero_collection_key if cluster else None
+            zotero_batch_label = resolve_batch_label(None, batch_label)
+            batch_coll = ""
+            if cluster_coll:
+                batch_coll = _ensure_batch_subcollection(
+                    zot,
+                    cluster_coll=cluster_coll,
+                    batch_label=zotero_batch_label,
+                    log=logger.info,
+                )
+            import_papers = [
+                {
+                    "title": record["title"],
+                    "doi": _hash_key(record["content_hash"]),
+                    "authors": [],
+                    "year": datetime.now(timezone.utc).year,
+                    "abstract": "",
+                    "journal": "(local file)",
+                    "slug": record["entry"].slug,
+                    "sub_category": cluster_slug,
+                    "summary": str(record["text"])[:500],
+                    "key_findings": [],
+                    "methodology": "",
+                    "relevance": "",
+                    "url": "",
+                }
+                for record in imported_records
+            ]
+            _zr, _papers_for_notes, errors = write_papers_to_zotero(
+                zot,
+                import_papers,
+                cluster_slug,
+                cluster_coll,
+                batch_coll=batch_coll or None,
+                batch_label=zotero_batch_label if cluster_coll else "",
+                log=logger.info,
+            )
+            if errors:
+                logger.warning("import-folder Zotero write had %d error(s)", len(errors))
+            zotero_keys = [paper.get("zotero_key", "") for paper in import_papers]
+            manifest_batch_label = zotero_batch_label
+        for record, zotero_key in zip(imported_records, zotero_keys):
+            manifest.append(
+                new_entry(
+                    cluster=cluster_slug,
+                    query=manifest_query,
+                    action="import-folder-with-zotero" if with_zotero else "import-folder",
+                    title=record["title"],
+                    zotero_key=zotero_key,
+                    obsidian_path=str(record["note_path"]),
+                    batch_label=manifest_batch_label,
+                )
+            )
 
     if graphify_graph and not dry_run:
         _apply_graphify_assignments(report, Path(graphify_graph))

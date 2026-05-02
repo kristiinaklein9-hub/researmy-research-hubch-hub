@@ -56,6 +56,8 @@ _ZOTERO_WRITE_TEST_MODULES = frozenset({
     "test_v073_parallel_search",
     "test_v073_batched_zotero",
     "test_v073_parallel_summarize",
+    "test_v074_drift_prevention",
+    "test_v074_batch_collection",
 })
 
 

@@ -330,6 +330,147 @@ def check_quote_orphan(cfg) -> CheckResult:
     return CheckResult("quote/orphan", "OK", f"All {quote_count} quotes reference live papers")
 
 
+def check_cluster_zotero_drift(cfg) -> list[CheckResult]:
+    """WARN when Obsidian count drifts materially above in-both count."""
+    from research_hub.clusters import ClusterRegistry
+    from research_hub.vault.sync import compute_sync_status
+    from research_hub.zotero.client import get_client
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    try:
+        zot = get_client()
+    except Exception:
+        return [
+            CheckResult(
+                "cluster/zotero_drift",
+                "INFO",
+                "Zotero client unavailable; drift check skipped",
+            )
+        ]
+
+    drifted: list[str] = []
+    try:
+        for cluster in registry.list():
+            status = compute_sync_status(cluster, zot, cfg.raw)
+            drift = status.obsidian_count - status.in_both
+            threshold = max(5, status.obsidian_count // 20)
+            if drift > threshold:
+                drifted.append(
+                    f"{cluster.slug}: {drift} obsidian-only papers "
+                    f"(obsidian={status.obsidian_count}, in_both={status.in_both})"
+                )
+    except Exception as exc:
+        return [
+            CheckResult(
+                "cluster/zotero_drift",
+                "INFO",
+                f"Zotero drift check skipped: {exc}",
+            )
+        ]
+
+    if drifted:
+        return [
+            CheckResult(
+                "cluster/zotero_drift",
+                "WARN",
+                f"{len(drifted)} cluster(s) have Zotero drift > 5% threshold",
+                remedy="Run: python scripts/backfill_zotero.py --dry-run --cluster <slug>",
+                details="\n  ".join(drifted[:10]),
+            )
+        ]
+    return [
+        CheckResult(
+            "cluster/zotero_drift",
+            "OK",
+            "All clusters have Obsidian/Zotero counts within 5% drift",
+        )
+    ]
+
+
+def check_cluster_test_pattern(cfg) -> CheckResult:
+    """WARN on cluster slugs that look like test or scratch data."""
+    import fnmatch
+
+    from research_hub.clusters import ClusterRegistry
+
+    patterns = ["*-test", "*-scratch", "*-sandbox", "fresh-user-*", "*-smoke", "*-tmp"]
+    registry = ClusterRegistry(cfg.clusters_file)
+    matches: list[str] = []
+    for cluster in registry.list():
+        for pattern in patterns:
+            if fnmatch.fnmatch(cluster.slug, pattern):
+                matches.append(cluster.slug)
+                break
+
+    if matches:
+        return CheckResult(
+            "cluster/test_pattern",
+            "WARN",
+            f"{len(matches)} cluster(s) match a test/scratch slug pattern",
+            remedy="Delete with: python -m research_hub clusters delete <slug> --apply --force",
+            details="\n  ".join(matches),
+        )
+    return CheckResult("cluster/test_pattern", "OK", "No test-pattern clusters found")
+
+
+def check_cluster_collection_collision(cfg) -> CheckResult:
+    """WARN when multiple clusters share the same Zotero collection key."""
+    from research_hub.clusters import ClusterRegistry
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    by_key: dict[str, list[str]] = {}
+    for cluster in registry.list():
+        key = (cluster.zotero_collection_key or "").strip()
+        if key:
+            by_key.setdefault(key, []).append(cluster.slug)
+
+    collisions = [(key, slugs) for key, slugs in by_key.items() if len(slugs) > 1]
+    if collisions:
+        details = "\n  ".join(
+            f"{key} -> [{', '.join(sorted(slugs))}]" for key, slugs in collisions
+        )
+        return CheckResult(
+            "cluster/collection_collision",
+            "WARN",
+            f"{len(collisions)} Zotero collection key(s) bound to >1 cluster",
+            remedy="Run: python -m research_hub clusters bind <slug> --zotero <new-key>",
+            details=details,
+        )
+    return CheckResult(
+        "cluster/collection_collision",
+        "OK",
+        "All cluster zotero_collection_key values are unique",
+    )
+
+
+def check_manifest_orphan_cluster(cfg) -> CheckResult:
+    """INFO on manifest entries that reference deleted clusters."""
+    from research_hub.clusters import ClusterRegistry
+    from research_hub.manifest import Manifest
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    valid = {cluster.slug for cluster in registry.list()}
+    manifest_path = cfg.research_hub_dir / "manifest.jsonl"
+    if not manifest_path.exists():
+        return CheckResult("manifest/orphan_cluster", "OK", "no manifest yet")
+
+    seen: dict[str, int] = {}
+    for entry in Manifest(manifest_path).read_all():
+        if entry.cluster and entry.cluster not in valid:
+            seen[entry.cluster] = seen.get(entry.cluster, 0) + 1
+
+    if seen:
+        details = "\n  ".join(f"{slug}: {count} entries" for slug, count in sorted(seen.items()))
+        return CheckResult(
+            "manifest/orphan_cluster",
+            "INFO",
+            f"{len(seen)} cluster slug(s) in manifest are no longer in clusters.yaml",
+            remedy="Audit trail only. Manual prune of manifest if desired.",
+            details=details,
+        )
+    return CheckResult("manifest/orphan_cluster", "OK", "All manifest cluster references resolve")
+
+
 def check_defuddle_cli() -> CheckResult:
     """Report whether the optional defuddle CLI is available."""
     try:
@@ -834,12 +975,19 @@ def run_doctor(*, strict: bool = False) -> list[CheckResult]:
             results.append(check_nlm_chrome_orphans())
         except Exception as exc:
             results.append(CheckResult("nlm_chrome_orphans", "WARN", f"Could not check: {exc}"))
+        try:
+            results.extend(check_cluster_zotero_drift(cfg))
+        except Exception as exc:
+            results.append(CheckResult("cluster/zotero_drift", "WARN", f"check failed: {exc}"))
         for check in (
             check_cluster_missing_dir,
             check_cluster_orphan_papers,
             check_cluster_empty,
             check_cluster_cross_tagged,
             check_quote_orphan,
+            check_cluster_test_pattern,
+            check_cluster_collection_collision,
+            check_manifest_orphan_cluster,
         ):
             try:
                 results.append(check(cfg))

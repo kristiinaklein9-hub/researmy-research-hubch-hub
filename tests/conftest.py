@@ -81,6 +81,7 @@ _ZOTERO_WRITE_TEST_MODULES = frozenset({
     "test_v076_pdf_chain",
     "test_v076_full_auto",
     "test_v076_pdf_coverage_check",
+    "test_v078_html_entity",
 })
 
 

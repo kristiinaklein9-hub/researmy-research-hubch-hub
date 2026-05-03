@@ -436,8 +436,8 @@ def check_cluster_test_pattern(cfg) -> CheckResult:
     import fnmatch
 
     from research_hub.clusters import ClusterRegistry
+    from research_hub.zotero.gc import TEST_PATTERNS as patterns
 
-    patterns = ["*-test", "*-scratch", "*-sandbox", "fresh-user-*", "*-smoke", "*-tmp"]
     registry = ClusterRegistry(cfg.clusters_file)
     matches: list[str] = []
     for cluster in registry.list():

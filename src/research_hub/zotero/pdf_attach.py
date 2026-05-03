@@ -110,7 +110,11 @@ def find_pdf_url(
 ) -> tuple[str, str]:
     """Return (pdf_url, source) or ("", "") if none found."""
     if arxiv_id:
-        return (f"https://arxiv.org/pdf/{arxiv_id}.pdf", "arxiv")
+        # Sanitize: arXiv IDs are word chars, dots, dashes, slashes only.
+        # Reject anything else to prevent URL/header injection from
+        # adversarial Zotero item data (e.g. newline-encoded DOIs).
+        if re.fullmatch(r"[\w./\-]+", arxiv_id):
+            return (f"https://arxiv.org/pdf/{arxiv_id}.pdf", "arxiv")
     if doi:
         pdf_url = _openalex_oa_url(doi, prefetched=openalex_record)
         if pdf_url:
@@ -175,6 +179,19 @@ def plan_attach_for_items(
     return plans
 
 
+def _is_safe_url(url: str) -> bool:
+    """Reject anything that isn't a clean http(s) URL with no control chars."""
+    if not url:
+        return False
+    if not url.startswith(("http://", "https://")):
+        return False
+    # Disallow whitespace / CR / LF / NUL — defense against header/URL injection
+    # from adversarial Zotero metadata or upstream API responses.
+    if any(ch in url for ch in ("\r", "\n", "\t", " ", "\x00")):
+        return False
+    return True
+
+
 def _has_existing_pdf(zot, item_key: str) -> bool:
     try:
         children = zot.children(item_key) or []
@@ -198,6 +215,9 @@ def attach_pdfs(
     results: dict[str, str] = {}
     for plan in plans:
         if plan.pdf_url:
+            if not _is_safe_url(plan.pdf_url):
+                results[plan.item_key] = "skip:unsafe-url"
+                continue
             if _has_existing_pdf(zot, plan.item_key):
                 results[plan.item_key] = "skip:already-has-pdf"
                 continue
@@ -213,6 +233,9 @@ def attach_pdfs(
             except Exception as exc:
                 results[plan.item_key] = str(exc)[:80]
         elif plan.publisher_url:
+            if not _is_safe_url(plan.publisher_url):
+                results[plan.item_key] = "skip:unsafe-url"
+                continue
             try:
                 template = zot.item_template("attachment", "linked_url")
                 template["parentItem"] = plan.item_key

@@ -123,6 +123,23 @@ def _block_real_zotero(monkeypatch, request):
 
     monkeypatch.setattr("research_hub.zotero.client.get_client", _refuse)
     monkeypatch.setattr("research_hub.zotero.client.ZoteroDualClient.__init__", _refuse)
+    # v0.77 hotfix: pipeline.py / auto.py / doctor.py / clusters.py /
+    # zotero/{enrich,gc,pdf_attach}.py all `from research_hub.zotero.client
+    # import get_client` at module level — that binds get_client into the
+    # importing module's namespace, so monkeypatching the source module is
+    # not enough. Patch every known import site so the guard actually fires.
+    for module_path in (
+        "research_hub.pipeline.get_client",
+        "research_hub.auto.get_client",
+        "research_hub.doctor.get_client",
+        "research_hub.clusters.get_client",
+    ):
+        try:
+            monkeypatch.setattr(module_path, _refuse)
+        except AttributeError:
+            # Module hasn't imported get_client at the top level (or not yet
+            # loaded); the source-module patch above is the safety net.
+            pass
 
 
 @pytest.fixture

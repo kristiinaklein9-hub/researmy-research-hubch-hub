@@ -76,12 +76,29 @@ def _config_encrypt_secrets() -> int:
     return 0
 
 
-def _config_set(key: str, value: str) -> int:
+_ALLOWED_CONFIG_KEYS = frozenset({
+    "unpaywall_email",
+    "zotero.unpaywall_email",
+    "persona",
+})
+
+
+def _config_set(key: str, value: str, force: bool = False) -> int:
     from research_hub import config as hub_config
 
     parts = [part.strip() for part in key.split(".") if part.strip()]
     if not parts:
         print("Config key must not be empty", file=sys.stderr)
+        return 2
+
+    canonical_key = ".".join(parts)
+    if not force and canonical_key not in _ALLOWED_CONFIG_KEYS:
+        print(
+            f"Refusing to set unknown config key '{canonical_key}'.\n"
+            f"Allowed keys: {sorted(_ALLOWED_CONFIG_KEYS)}\n"
+            f"Pass --force to override (you might be making a typo).",
+            file=sys.stderr,
+        )
         return 2
 
     config_path = hub_config._resolve_config_path() or hub_config.CONFIG_PATH
@@ -3021,6 +3038,11 @@ def build_parser() -> argparse.ArgumentParser:
     config_set = config_sub.add_parser("set", help="Set a config field")
     config_set.add_argument("key")
     config_set.add_argument("value")
+    config_set.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow setting a key not in the allowlist (use for new fields)",
+    )
 
     examples_parser = subparsers.add_parser(
         "examples",
@@ -4477,7 +4499,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.config_command == "encrypt-secrets":
             return _config_encrypt_secrets()
         if args.config_command == "set":
-            return _config_set(args.key, args.value)
+            return _config_set(args.key, args.value, force=getattr(args, "force", False))
         parser.error("config requires a subcommand")
         return 2
     if args.command == "examples":

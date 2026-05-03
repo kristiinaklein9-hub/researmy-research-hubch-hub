@@ -115,6 +115,42 @@ def _auto_generate_missing_fields(pp: dict, cluster_slug: str | None) -> None:
         pp["sub_category"] = cluster_slug or "uncategorized"
 
 
+_HTML_TEXT_FIELDS = ("title", "journal", "abstract", "publicationTitle", "abstractNote")
+
+
+def _unescape_html_in_paper(pp: dict) -> None:
+    """Decode HTML entities in user-visible string fields, in-place.
+
+    Search backends (Crossref, OpenAlex, Semantic Scholar) sometimes
+    return HTML-escaped strings in journal names, titles, and abstracts —
+    e.g. "AI &amp; SOCIETY", "Computers &amp; Education". Decoding once
+    at the pipeline layer keeps Zotero items + Obsidian frontmatter clean
+    regardless of which backend supplied the data.
+    """
+    import html as _html
+
+    for field in _HTML_TEXT_FIELDS:
+        value = pp.get(field)
+        if isinstance(value, str) and "&" in value:
+            decoded = _html.unescape(value)
+            if decoded != value:
+                pp[field] = decoded
+    # Authors are a list of dicts (creatorType, firstName, lastName, name);
+    # decode the name parts too (publishers occasionally HTML-escape
+    # diacritics in author names).
+    authors = pp.get("authors") or []
+    if isinstance(authors, list):
+        for author in authors:
+            if not isinstance(author, dict):
+                continue
+            for name_field in ("firstName", "lastName", "name"):
+                v = author.get(name_field)
+                if isinstance(v, str) and "&" in v:
+                    decoded = _html.unescape(v)
+                    if decoded != v:
+                        author[name_field] = decoded
+
+
 def _validate_paper_input(pp: dict, idx: int) -> list[str]:
     """Validate one paper entry before any Zotero writes."""
     errors: list[str] = []
@@ -661,6 +697,7 @@ def run_pipeline(
             skipped_invalid: list[tuple[int, dict, list[str]]] = []
             for idx, paper in enumerate(papers):
                 _auto_generate_missing_fields(paper, cluster_slug)
+                _unescape_html_in_paper(paper)
                 paper_errors = _validate_paper_input(paper, idx)
                 missing_doi_only = (
                     not dry_run

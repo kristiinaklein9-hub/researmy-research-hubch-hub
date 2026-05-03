@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.78.0 (2026-05-03)
+
+Single-bug hotfix: HTML-entity decoding before Zotero write.
+
+### Fixed
+- Search backends (Crossref, OpenAlex, Semantic Scholar) sometimes
+  returned HTML-escaped strings (e.g. `AI &amp; SOCIETY`,
+  `Computers &amp; Education`, `M&uuml;ller`). The pipeline wrote
+  these straight to Zotero `publicationTitle` / `title` /
+  `abstractNote` / author name fields. Now `_unescape_html_in_paper`
+  decodes once at the pipeline layer right after
+  `_auto_generate_missing_fields` — before validation, dedup, and
+  Zotero/Obsidian writes. Catches the issue regardless of which
+  backend supplied the data.
+- 8 new tests in `tests/test_v078_html_entity.py`.
+
+Tests: 2083 → 2091.
+
 ## v0.77.0 (2026-05-03)
 
 Polish fixes from the v0.74-v0.76 stacked-PR code review (items #7-#10).

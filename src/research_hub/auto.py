@@ -157,6 +157,7 @@ def auto_pipeline(
     print_progress: bool = True,
     zotero_batch_size: int = 50,
     with_pdfs: bool = False,
+    with_summary: bool = False,
 ) -> AutoReport:
     """End-to-end ingest + optional NotebookLM publish.
 
@@ -230,7 +231,10 @@ def auto_pipeline(
             )
         plan_lines.append(f"  ingest into cluster {slug}")
         if with_pdfs:
-            plan_lines.append("  attach open-access PDFs from arXiv/Unpaywall")
+            plan_lines.append("  attach open-access PDFs from arXiv/OpenAlex/Unpaywall/Crossref")
+        if with_summary:
+            cli = llm_cli or detect_llm_cli() or "(none on PATH -> will skip)"
+            plan_lines.append(f"  summarize per-paper notes via LLM CLI ({cli})")
         if do_cluster_overview:
             cli = llm_cli or detect_llm_cli() or "(none on PATH -> save prompt only)"
             plan_lines.append(f"  cluster overview auto-fill via LLM CLI ({cli})")
@@ -315,6 +319,9 @@ def auto_pipeline(
         report.error = "ingest failed: " + str(exc)
         return report
 
+    if with_summary:
+        _run_summary_step(cfg, slug, llm_cli, report, started, print_progress)
+
     if do_cluster_overview:
         _run_cluster_overview_step(cfg, slug, llm_cli, report, started, print_progress)
 
@@ -371,6 +378,60 @@ def auto_pipeline(
     if print_progress:
         _print_next_steps(report, slug, do_crystals=do_crystals)
     return report
+
+
+def _run_summary_step(
+    cfg,
+    slug: str,
+    llm_cli: Optional[str],
+    report: AutoReport,
+    started: float,
+    print_progress: bool,
+) -> None:
+    """Best-effort per-paper summary autofill after ingest."""
+    from research_hub.summarize import summarize_cluster
+
+    cli = llm_cli or detect_llm_cli()
+    if not cli:
+        _step_log(report, "summary", True, _elapsed(started, report),
+                  "skipped (no claude/codex/gemini on PATH)", print_progress)
+        return
+
+    try:
+        summary_report = summarize_cluster(cfg, slug, llm_cli=cli, apply=True)
+    except Exception as exc:
+        _step_log(report, "summary", False, _elapsed(started, report),
+                  f"summarize failed: {exc}", print_progress)
+        return
+
+    if not summary_report.ok:
+        _step_log(report, "summary", False, _elapsed(started, report),
+                  summary_report.error or "summarize failed", print_progress)
+        return
+
+    apply_result = summary_report.apply_result
+    if apply_result is None:
+        _step_log(report, "summary", True, _elapsed(started, report),
+                  f"summary completed via {summary_report.cli_used or cli}", print_progress)
+        return
+
+    if apply_result.errors:
+        _step_log(
+            report,
+            "summary",
+            False,
+            _elapsed(started, report),
+            (
+                f"applied {len(apply_result.applied)} summaries via "
+                f"{summary_report.cli_used or cli}; {len(apply_result.errors)} error(s)"
+            ),
+            print_progress,
+        )
+        return
+
+    _step_log(report, "summary", True, _elapsed(started, report),
+              f"applied {len(apply_result.applied)} summaries via {summary_report.cli_used or cli}",
+              print_progress)
 
 
 def _run_crystal_step(

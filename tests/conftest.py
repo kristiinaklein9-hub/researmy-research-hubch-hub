@@ -65,6 +65,9 @@ _ZOTERO_WRITE_TEST_MODULES = frozenset({
     "test_v075_test_isolation",
     "test_v075_enrich_existing",
     "test_v075_pdf_attach",
+    "test_v076_pdf_chain",
+    "test_v076_full_auto",
+    "test_v076_pdf_coverage_check",
 })
 
 
@@ -217,6 +220,18 @@ def _force_writable_tempdir(monkeypatch):
     monkeypatch.setenv("TMP", str(temp_root))
     monkeypatch.setenv("TEMP", str(temp_root))
     monkeypatch.setenv("TMPDIR", str(temp_root))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_home_manifest_test(request, monkeypatch, tmp_path):
+    """Keep the live-home manifest integrity test from depending on the
+    maintainer's real ~/knowledge-base contents."""
+    module_stem = request.module.__name__.rsplit(".", 1)[-1]
+    if module_stem != "test_manifest_integrity":
+        return
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
 
 
 @pytest.fixture(autouse=True)

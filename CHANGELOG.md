@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.76.0 (2026-05-03)
+
+PDF coverage 4-source chain + true full-auto mode + pdf_coverage doctor check.
+
+### Added
+- `paper attach-pdfs` chain: arXiv -> OpenAlex oa_url -> Unpaywall -> Crossref `link[]` (4 sources). Expected hit rate 80%+ vs v0.75's arXiv-only 46%.
+- `paper attach-pdfs --include-publisher-link` falls back to a linked publisher-page bookmark when no OA PDF exists (100% something-rate).
+- `auto --full-auto` umbrella flag enables `--with-pdfs --with-summary --with-crystals` (do_nlm stays default ON).
+- `auto --with-summary` runs `summarize --apply` after ingest (auto-detects claude/codex/gemini CLI).
+- doctor `cluster/pdf_coverage` INFO check (5th cluster check after v0.75).
+- `unpaywall_email` auto-hint stderr message when absent (printed once per process).
+- `attach_pdfs` skips items that already have a PDF child (no duplicates on re-runs).
+- `config set <key> <value>` CLI for one-shot config tweaks.
+
+### Changed
+- `find_pdf_url()` now uses a chained, graceful-degrade lookup across arXiv, OpenAlex, Unpaywall, and Crossref.
+
+Tests: 2070 -> ~2083.
+
 ## v0.75.0 (2026-05-02)
 
 Workflow drift fixes (round 2) + test isolation + PDF auto-attach.

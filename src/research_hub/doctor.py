@@ -514,6 +514,12 @@ def check_cluster_pdf_coverage(cfg) -> CheckResult:
             "Zotero client unavailable; pdf coverage check skipped",
         )
 
+    # PDF coverage requires N+1 API calls per cluster (one zot.children
+    # per item). Cap at 50 sampled items per cluster to keep `doctor`
+    # response time reasonable on large vaults — the percentage is still
+    # representative; users wanting the exact count can run
+    # `research-hub paper attach-pdfs --cluster <slug>` directly.
+    SAMPLE_CAP = 50
     low: list[str] = []
     for cluster in registry.list():
         if not cluster.zotero_collection_key:
@@ -524,8 +530,9 @@ def check_cluster_pdf_coverage(cfg) -> CheckResult:
             continue
         if not items:
             continue
+        sampled = items[:SAMPLE_CAP]
         with_pdf = 0
-        for item in items:
+        for item in sampled:
             try:
                 children = zot.children(item.get("key", "")) or []
             except Exception:
@@ -536,9 +543,10 @@ def check_cluster_pdf_coverage(cfg) -> CheckResult:
                 for child in children
             ):
                 with_pdf += 1
-        pct = (with_pdf / len(items)) * 100
+        pct = (with_pdf / len(sampled)) * 100
         if pct < 50:
-            low.append(f"{cluster.slug}: {with_pdf}/{len(items)} ({pct:.0f}%)")
+            sampled_note = f" (sampled {len(sampled)}/{len(items)})" if len(items) > SAMPLE_CAP else ""
+            low.append(f"{cluster.slug}: {with_pdf}/{len(sampled)} ({pct:.0f}%){sampled_note}")
 
     if low:
         remedy = "Run: python -m research_hub paper attach-pdfs --cluster <slug> --apply"

@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.77.0 (2026-05-03)
+
+Polish fixes from the v0.74-v0.76 stacked-PR code review (items #7-#10).
+No new features; correctness, rate-limit, and test-isolation tweaks only.
+
+### Changed
+- `zotero/enrich.py` `plan_enrichment()` gains `rate_limit_rps=5.0`
+  default (sleep between Crossref/OpenAlex backend calls). Prevents
+  hitting either backend's polite-pool when re-enriching 250+ items.
+- `doctor.check_cluster_pdf_coverage` caps per-cluster sampling at
+  50 items (was N+1 unbounded). The reported percentage is still
+  representative; users wanting the exact count run
+  `paper attach-pdfs --cluster <slug>` directly.
+- `auto --full-auto` help text now explicitly notes that NotebookLM
+  upload also stays ON by default — pair with `--no-nlm` for fully
+  local automation without the patchright/Google login step.
+
+### Fixed
+- `zotero/pdf_attach._HINT_SHOWN` is module-level state that survived
+  across pytest tests. Added `_reset_hint_state()` + autouse fixture
+  in `tests/conftest.py` so hint-text assertions are no longer
+  order-dependent.
+
+Tests: 2083 passing (no regression).
+
 ## v0.76.0 (2026-05-03)
 
 PDF coverage 4-source chain + true full-auto mode + pdf_coverage doctor check.

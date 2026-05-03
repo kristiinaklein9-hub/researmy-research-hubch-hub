@@ -18,6 +18,19 @@ def pytest_configure(config) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _reset_pdf_hint_flag():
+    """v0.77: pdf_attach._HINT_SHOWN is module-level state that survives
+    across tests in the same process. Reset before every test so hint-text
+    assertions are not order-dependent."""
+    try:
+        from research_hub.zotero.pdf_attach import _reset_hint_state
+        _reset_hint_state()
+    except Exception:
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _block_real_webbrowser_open(monkeypatch):
     """v0.68.5: globally stub `webbrowser.open` for every test.
 

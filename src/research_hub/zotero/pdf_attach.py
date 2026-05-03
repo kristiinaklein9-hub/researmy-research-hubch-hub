@@ -14,7 +14,14 @@ OPENALEX_BASE = "https://api.openalex.org/works/doi"
 UNPAYWALL_BASE = "https://api.unpaywall.org/v2"
 CROSSREF_BASE = "https://api.crossref.org/works"
 
-_HINT_SHOWN = False
+_HINT_SHOWN = False  # once-per-process flag for the unpaywall_email hint
+
+
+def _reset_hint_state() -> None:
+    """Reset the once-per-process hint flag. Used by tests to avoid
+    order-dependent behavior when multiple tests exercise the hint path."""
+    global _HINT_SHOWN
+    _HINT_SHOWN = False
 
 
 @dataclass

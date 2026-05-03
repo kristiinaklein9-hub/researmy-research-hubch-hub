@@ -38,12 +38,25 @@ def _result_value(result, field_name: str) -> str:
     return str(value or "").strip()
 
 
-def plan_enrichment(zot_or_items, items: list[dict] | None = None) -> list[EnrichPlan]:
-    """Identify empty Zotero fields and plan DOI-based metadata fill-ins."""
+def plan_enrichment(
+    zot_or_items,
+    items: list[dict] | None = None,
+    *,
+    rate_limit_rps: float = 5.0,
+) -> list[EnrichPlan]:
+    """Identify empty Zotero fields and plan DOI-based metadata fill-ins.
+
+    Each per-item probe hits both Crossref AND OpenAlex (~2 outbound HTTP
+    per item). For 250+ items that's 500 calls — Crossref's polite-pool
+    allows ~50 rps, OpenAlex caps at ~10 rps. Default 5 rps stays safely
+    under both. Override via rate_limit_rps for explicit faster/slower.
+    """
+    import time as _time
     if items is None:
         items = zot_or_items
     crossref = CrossrefBackend()
     openalex = OpenAlexBackend()
+    sleep_s = 1.0 / max(rate_limit_rps, 0.1)
     plans: list[EnrichPlan] = []
     for item in items:
         data = item.get("data", {})
@@ -64,6 +77,7 @@ def plan_enrichment(zot_or_items, items: list[dict] | None = None) -> list[Enric
                 result = backend.get_paper(doi)
             except Exception:
                 result = None
+            _time.sleep(sleep_s)
             if result is None:
                 continue
             for field_name in empty_fields:

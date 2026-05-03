@@ -3186,7 +3186,12 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument(
         "--full-auto",
         action="store_true",
-        help="Enable --with-pdfs --with-summary --with-crystals (do_nlm stays default ON)",
+        help=(
+            "Enable --with-pdfs --with-summary --with-crystals. "
+            "NotebookLM upload also stays ON by default — pair with "
+            "--no-nlm if you want fully local automation without the "
+            "browser step (NLM upload uses patchright + Google login)."
+        ),
     )
     auto_parser.add_argument(
         "--no-cluster-overview", action="store_true",

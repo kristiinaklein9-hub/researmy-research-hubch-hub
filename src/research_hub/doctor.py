@@ -436,8 +436,8 @@ def check_cluster_test_pattern(cfg) -> CheckResult:
     import fnmatch
 
     from research_hub.clusters import ClusterRegistry
+    from research_hub.zotero.gc import TEST_PATTERNS as patterns
 
-    patterns = ["*-test", "*-scratch", "*-sandbox", "fresh-user-*", "*-smoke", "*-tmp"]
     registry = ClusterRegistry(cfg.clusters_file)
     matches: list[str] = []
     for cluster in registry.list():
@@ -484,6 +484,77 @@ def check_cluster_collection_collision(cfg) -> CheckResult:
         "cluster/collection_collision",
         "OK",
         "All cluster zotero_collection_key values are unique",
+    )
+
+
+def _get_unpaywall_email(cfg) -> str:
+    """Read unpaywall_email from cfg (top-level OR cfg.zotero)."""
+    value = getattr(cfg, "unpaywall_email", "") or ""
+    if value:
+        return str(value)
+    zotero = getattr(cfg, "zotero", None) or {}
+    if isinstance(zotero, dict):
+        return str(zotero.get("unpaywall_email", "") or "")
+    return str(getattr(zotero, "unpaywall_email", "") or "")
+
+
+def check_cluster_pdf_coverage(cfg) -> CheckResult:
+    """INFO when a cluster has < 50% items with PDF child attachments."""
+    from research_hub.clusters import ClusterRegistry
+    from research_hub.vault.sync import list_zotero_collection_items
+    from research_hub.zotero.client import get_client
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    try:
+        zot = get_client()
+    except Exception:
+        return CheckResult(
+            "cluster/pdf_coverage",
+            "INFO",
+            "Zotero client unavailable; pdf coverage check skipped",
+        )
+
+    low: list[str] = []
+    for cluster in registry.list():
+        if not cluster.zotero_collection_key:
+            continue
+        try:
+            items = list_zotero_collection_items(zot, cluster.zotero_collection_key)
+        except Exception:
+            continue
+        if not items:
+            continue
+        with_pdf = 0
+        for item in items:
+            try:
+                children = zot.children(item.get("key", "")) or []
+            except Exception:
+                continue
+            if any(
+                child.get("data", {}).get("itemType") == "attachment"
+                and "pdf" in str(child.get("data", {}).get("contentType") or "").lower()
+                for child in children
+            ):
+                with_pdf += 1
+        pct = (with_pdf / len(items)) * 100
+        if pct < 50:
+            low.append(f"{cluster.slug}: {with_pdf}/{len(items)} ({pct:.0f}%)")
+
+    if low:
+        remedy = "Run: python -m research_hub paper attach-pdfs --cluster <slug> --apply"
+        if not _get_unpaywall_email(cfg):
+            remedy += "\n  Also: python -m research_hub config set unpaywall_email <email>"
+        return CheckResult(
+            "cluster/pdf_coverage",
+            "INFO",
+            f"{len(low)} cluster(s) under 50% PDF coverage",
+            remedy=remedy,
+            details="\n  ".join(low[:10]),
+        )
+    return CheckResult(
+        "cluster/pdf_coverage",
+        "OK",
+        "All clusters have >=50% PDF coverage",
     )
 
 
@@ -1035,6 +1106,7 @@ def run_doctor(*, strict: bool = False) -> list[CheckResult]:
             check_quote_orphan,
             check_cluster_test_pattern,
             check_cluster_collection_collision,
+            check_cluster_pdf_coverage,
             check_manifest_orphan_cluster,
         ):
             try:

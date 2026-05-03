@@ -65,6 +65,9 @@ _ZOTERO_WRITE_TEST_MODULES = frozenset({
     "test_v075_test_isolation",
     "test_v075_enrich_existing",
     "test_v075_pdf_attach",
+    "test_v076_pdf_chain",
+    "test_v076_full_auto",
+    "test_v076_pdf_coverage_check",
 })
 
 
@@ -120,6 +123,23 @@ def _block_real_zotero(monkeypatch, request):
 
     monkeypatch.setattr("research_hub.zotero.client.get_client", _refuse)
     monkeypatch.setattr("research_hub.zotero.client.ZoteroDualClient.__init__", _refuse)
+    # v0.77 hotfix: pipeline.py / auto.py / doctor.py / clusters.py /
+    # zotero/{enrich,gc,pdf_attach}.py all `from research_hub.zotero.client
+    # import get_client` at module level — that binds get_client into the
+    # importing module's namespace, so monkeypatching the source module is
+    # not enough. Patch every known import site so the guard actually fires.
+    for module_path in (
+        "research_hub.pipeline.get_client",
+        "research_hub.auto.get_client",
+        "research_hub.doctor.get_client",
+        "research_hub.clusters.get_client",
+    ):
+        try:
+            monkeypatch.setattr(module_path, _refuse)
+        except AttributeError:
+            # Module hasn't imported get_client at the top level (or not yet
+            # loaded); the source-module patch above is the safety net.
+            pass
 
 
 @pytest.fixture
@@ -217,6 +237,18 @@ def _force_writable_tempdir(monkeypatch):
     monkeypatch.setenv("TMP", str(temp_root))
     monkeypatch.setenv("TEMP", str(temp_root))
     monkeypatch.setenv("TMPDIR", str(temp_root))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_home_manifest_test(request, monkeypatch, tmp_path):
+    """Keep the live-home manifest integrity test from depending on the
+    maintainer's real ~/knowledge-base contents."""
+    module_stem = request.module.__name__.rsplit(".", 1)[-1]
+    if module_stem != "test_manifest_integrity":
+        return
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
 
 
 @pytest.fixture(autouse=True)

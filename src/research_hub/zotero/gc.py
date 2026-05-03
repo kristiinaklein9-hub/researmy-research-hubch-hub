@@ -7,7 +7,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
-TEST_PATTERNS = ["*-test", "*-scratch", "persona-*", "test-*", "*-tmp", "*-sandbox", "Beta"]
+# Single source of truth — doctor.check_cluster_test_pattern imports this list.
+# Keep test/scratch patterns conservative: exact match for ambiguous names like
+# 'Beta', wildcards only for clearly-test naming conventions.
+TEST_PATTERNS = [
+    "*-test",
+    "*-scratch",
+    "*-sandbox",
+    "*-tmp",
+    "*-smoke",
+    "persona-*",
+    "test-*",
+    "fresh-user-*",
+    "Beta",
+]
 DEFAULT_AGE_DAYS = 30
 
 
@@ -80,9 +93,20 @@ def scan_zotero_for_gc(
 
 
 def delete_candidates(zot, candidates: Iterable[GCCandidate]) -> dict[str, str]:
-    """Delete each candidate via the Zotero web API."""
+    """Delete each candidate via the Zotero web API.
+
+    Hard safety: refuse to delete a collection that holds items or
+    sub-collections, even if the candidate matched a test-pattern.
+    Pattern-only matches are advisory; emptiness is required for delete.
+    """
     results: dict[str, str] = {}
     for candidate in candidates:
+        if candidate.num_items > 0 or candidate.num_collections > 0:
+            results[candidate.key] = (
+                f"skip:non-empty({candidate.num_items} items, "
+                f"{candidate.num_collections} sub-collections)"
+            )
+            continue
         try:
             coll = zot.collection(candidate.key)
             zot.delete_collection(coll)

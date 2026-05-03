@@ -76,6 +76,63 @@ def _config_encrypt_secrets() -> int:
     return 0
 
 
+_ALLOWED_CONFIG_KEYS = frozenset({
+    "unpaywall_email",
+    "zotero.unpaywall_email",
+    "persona",
+})
+
+
+def _config_set(key: str, value: str, force: bool = False) -> int:
+    from research_hub import config as hub_config
+
+    parts = [part.strip() for part in key.split(".") if part.strip()]
+    if not parts:
+        print("Config key must not be empty", file=sys.stderr)
+        return 2
+
+    canonical_key = ".".join(parts)
+    if not force and canonical_key not in _ALLOWED_CONFIG_KEYS:
+        print(
+            f"Refusing to set unknown config key '{canonical_key}'.\n"
+            f"Allowed keys: {sorted(_ALLOWED_CONFIG_KEYS)}\n"
+            f"Pass --force to override (you might be making a typo).",
+            file=sys.stderr,
+        )
+        return 2
+
+    config_path = hub_config._resolve_config_path() or hub_config.CONFIG_PATH
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    except Exception as exc:
+        print(f"Could not read config: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(data, dict):
+        print("Config file must contain a top-level JSON object", file=sys.stderr)
+        return 1
+
+    cursor = data
+    walked: list[str] = []
+    for part in parts[:-1]:
+        walked.append(part)
+        current = cursor.get(part)
+        if current is None:
+            current = {}
+            cursor[part] = current
+        if not isinstance(current, dict):
+            print(f"Cannot set nested key under non-object: {'.'.join(walked)}", file=sys.stderr)
+            return 2
+        cursor = current
+    cursor[parts[-1]] = value
+
+    config_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    hub_config._config = None
+    hub_config._config_path = None
+    print(f"Set {key} in {config_path}")
+    return 0
+
+
 def _package_dxt(out_path: Path) -> int:
     from research_hub import __version__
     from research_hub.dxt import build_dxt
@@ -985,6 +1042,7 @@ def _paper_attach_pdfs(
     limit: int,
     apply: bool,
     rate_limit: float,
+    include_publisher_link: bool = False,
 ) -> int:
     cfg = get_config()
     from research_hub.manifest import Manifest, new_entry
@@ -1005,11 +1063,16 @@ def _paper_attach_pdfs(
     items = list_zotero_collection_items(zot, cluster.zotero_collection_key)
     if limit > 0:
         items = items[:limit]
-    plans = plan_attach_for_items(items, unpaywall_email=getattr(cfg, "unpaywall_email", ""))
+    plans = plan_attach_for_items(
+        items,
+        unpaywall_email=getattr(cfg, "unpaywall_email", ""),
+        include_publisher_link=include_publisher_link,
+    )
 
-    print("item_key\tsource\tpdf_url\ttitle")
+    print("item_key\tsource\turl\ttitle")
     for plan in plans:
-        print(f"{plan.item_key}\t{plan.source or '-'}\t{plan.pdf_url or '-'}\t{plan.title}")
+        chosen_url = plan.pdf_url or plan.publisher_url or "-"
+        print(f"{plan.item_key}\t{plan.source or '-'}\t{chosen_url}\t{plan.title}")
     if not apply:
         print("")
         print("Preview only. Re-run with --apply to attach PDFs.")
@@ -1022,7 +1085,7 @@ def _paper_attach_pdfs(
     title_by_key = {item.get("key", ""): str(item.get("data", {}).get("title", "") or "") for item in items}
     doi_by_key = {item.get("key", ""): str(item.get("data", {}).get("DOI", "") or "") for item in items}
     for item_key, status in results.items():
-        if status != "ok":
+        if not status.startswith("ok"):
             continue
         ok_count += 1
         manifest.append(
@@ -1181,6 +1244,7 @@ def _paper_command(args) -> int:
             limit=args.limit,
             apply=args.apply,
             rate_limit=args.rate_limit,
+            include_publisher_link=getattr(args, "include_publisher_link", False),
         )
     return 2
 
@@ -2762,6 +2826,7 @@ def _auto(
     show: bool = True,
     batch_label: str | None = None,
     with_pdfs: bool = False,
+    with_summary: bool = False,
 ) -> int:
     from research_hub.auto import auto_pipeline
 
@@ -2796,6 +2861,8 @@ def _auto(
         }
         if with_pdfs:
             auto_kwargs["with_pdfs"] = True
+        if with_summary:
+            auto_kwargs["with_summary"] = True
         report = auto_pipeline(**auto_kwargs)
     finally:
         if batch_label is not None:
@@ -2968,6 +3035,14 @@ def build_parser() -> argparse.ArgumentParser:
         "encrypt-secrets",
         help="Encrypt plaintext sensitive values in config.json",
     )
+    config_set = config_sub.add_parser("set", help="Set a config field")
+    config_set.add_argument("key")
+    config_set.add_argument("value")
+    config_set.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow setting a key not in the allowlist (use for new fields)",
+    )
 
     examples_parser = subparsers.add_parser(
         "examples",
@@ -3104,6 +3179,16 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--with-crystals", action="store_true",
                              help="Also generate crystals via detected LLM CLI (claude/codex/gemini on PATH)")
     auto_parser.add_argument(
+        "--with-summary",
+        action="store_true",
+        help="Run `summarize --apply` after ingest to fill per-paper Key Findings / Methodology / Relevance",
+    )
+    auto_parser.add_argument(
+        "--full-auto",
+        action="store_true",
+        help="Enable --with-pdfs --with-summary --with-crystals (do_nlm stays default ON)",
+    )
+    auto_parser.add_argument(
         "--no-cluster-overview", action="store_true",
         help="Skip the v0.71.0 LLM-driven cluster overview auto-fill",
     )
@@ -3145,7 +3230,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument(
         "--with-pdfs",
         action="store_true",
-        help="Attach open-access PDFs from arXiv/Unpaywall after ingest",
+        help="Attach open-access PDFs from arXiv/OpenAlex/Unpaywall/Crossref after ingest",
     )
 
     plan_parser = subparsers.add_parser(
@@ -4249,12 +4334,17 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_existing.add_argument("--rate-limit", type=float, default=2.0)
     attach_pdfs_p = paper_sub.add_parser(
         "attach-pdfs",
-        help="Find OA PDFs (Unpaywall + arXiv) and attach to Zotero items",
+        help="Find OA PDFs (arXiv + OpenAlex + Unpaywall + Crossref) and attach to Zotero items",
     )
     attach_pdfs_p.add_argument("--cluster", required=True)
     attach_pdfs_p.add_argument("--limit", type=int, default=0)
     attach_pdfs_p.add_argument("--apply", action="store_true")
     attach_pdfs_p.add_argument("--rate-limit", type=float, default=2.0)
+    attach_pdfs_p.add_argument(
+        "--include-publisher-link",
+        action="store_true",
+        help="When no PDF found, attach a linked publisher-page bookmark (clickable from Zotero)",
+    )
 
     discover_parser = subparsers.add_parser(
         "discover",
@@ -4408,6 +4498,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "config":
         if args.config_command == "encrypt-secrets":
             return _config_encrypt_secrets()
+        if args.config_command == "set":
+            return _config_set(args.key, args.value, force=getattr(args, "force", False))
         parser.error("config requires a subcommand")
         return 2
     if args.command == "examples":
@@ -4504,6 +4596,10 @@ def main(argv: list[str] | None = None) -> int:
         print()
         return 0
     if args.command == "auto":
+        if args.full_auto:
+            args.with_pdfs = True
+            args.with_summary = True
+            args.with_crystals = True
         return _auto(
             topic=args.topic,
             cluster_slug=args.cluster,
@@ -4523,6 +4619,7 @@ def main(argv: list[str] | None = None) -> int:
             show=args.show,
             batch_label=args.batch_label,
             with_pdfs=args.with_pdfs,
+            with_summary=args.with_summary,
         )
     if args.command == "ingest":
         run_kwargs = {

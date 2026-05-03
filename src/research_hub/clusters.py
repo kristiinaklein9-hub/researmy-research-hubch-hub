@@ -23,7 +23,12 @@ class CollisionError(ValueError):
 
 
 def _try_sync_zotero_collection_name(key: str, vault_name: str) -> None:
-    """Best-effort: PATCH Zotero collection name to match the vault name."""
+    """Best-effort: PATCH Zotero collection name to match the vault name.
+
+    On failure, logs AND prints to stderr so CLI users actually see the
+    drift warning (logger.warning by itself is silent in default CLI use).
+    """
+    import sys as _sys
     try:
         from research_hub.zotero.client import ZoteroDualClient, get_client
 
@@ -34,7 +39,9 @@ def _try_sync_zotero_collection_name(key: str, vault_name: str) -> None:
         coll = zot.collection(key)
         current_version = coll.get("version") or coll.get("data", {}).get("version")
         if not current_version:
-            logger.warning("could not read version for Zotero coll %s; skip name sync", key)
+            msg = f"WARN: could not read version for Zotero coll {key}; skip name sync"
+            logger.warning(msg)
+            print(msg, file=_sys.stderr)
             return
         if coll.get("data", {}).get("name") == vault_name:
             logger.info("Zotero coll %s already matches vault name %r", key, vault_name)
@@ -42,7 +49,12 @@ def _try_sync_zotero_collection_name(key: str, vault_name: str) -> None:
         zot.update_collection({"key": key, "version": current_version, "name": vault_name})
         logger.info("synced Zotero coll %s name to %r", key, vault_name)
     except Exception as exc:
-        logger.warning("failed to sync Zotero coll %s name: %s", key, exc)
+        msg = (
+            f"WARN: failed to sync Zotero coll {key} name to {vault_name!r}: {exc}\n"
+            f"  Vault left at OLD name. Re-run: python -m research_hub clusters sync-names --apply"
+        )
+        logger.warning(msg)
+        print(msg, file=_sys.stderr)
 
 
 @dataclass
@@ -347,14 +359,19 @@ class ClusterRegistry:
         return cluster
 
     def rename(self, slug: str, new_name: str, *, sync_zotero: bool = True) -> Cluster:
-        """Rename a cluster display name without changing its slug."""
+        """Rename a cluster display name without changing its slug.
+
+        Order: Zotero PATCH first (best-effort, prints stderr warning on
+        failure), THEN vault save. If both succeed, no drift; if Zotero
+        fails, vault stays at the OLD name and the warning tells the user.
+        """
         cluster = self.clusters.get(slug)
         if cluster is None:
             raise ValueError(f"Cluster not found: {slug}")
-        cluster.name = new_name
-        self.save()
         if sync_zotero and cluster.zotero_collection_key:
             _try_sync_zotero_collection_name(cluster.zotero_collection_key, new_name)
+        cluster.name = new_name
+        self.save()
         self._refresh_graph_if_possible()
         return cluster
 

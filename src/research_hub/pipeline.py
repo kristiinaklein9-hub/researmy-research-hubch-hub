@@ -5,8 +5,11 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 import traceback
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from research_hub.clusters import ClusterRegistry
@@ -27,7 +30,7 @@ logger = logging.getLogger(__name__)
 ZOTERO_BATCH_SIZE = 50
 
 
-def _compose_hub_tags(pp: dict, cluster_slug: str | None) -> list[str]:
+def _compose_hub_tags(pp: dict, cluster_slug: str | None, batch_label: str = "") -> list[str]:
     """Compose research-hub namespace tags from a paper dict + cluster slug.
 
     Always includes 'research-hub'. Adds 'cluster/<slug>', 'type/<doc_type>',
@@ -48,6 +51,8 @@ def _compose_hub_tags(pp: dict, cluster_slug: str | None) -> list[str]:
     backend = pp.get("source") or pp.get("found_in")
     if backend:
         hub_tags.append(f"src/{backend}")
+    if batch_label:
+        hub_tags.append(f"batch:{batch_label}")
     existing = pp.get("tags") or []
     return list(dict.fromkeys(existing + hub_tags))
 
@@ -56,6 +61,26 @@ def _slugify(text: str) -> str:
     from research_hub.clusters import slugify
 
     return slugify(text)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_today_yyyymmdd() -> str:
+    return _utc_now().strftime("%Y%m%d")
+
+
+def _utc_now_yyyymmdd_hhmmss() -> str:
+    return _utc_now().strftime("%Y%m%d-%H%M%S")
+
+
+def resolve_batch_label(query: str | None, batch_label: str | None) -> str:
+    if batch_label is not None:
+        return str(batch_label).strip()
+    if query:
+        return f"{_utc_today_yyyymmdd()}-{_slugify(query)[:30]}".strip("-")
+    return f"manual-{_utc_now_yyyymmdd_hhmmss()}"
 
 
 def _build_note_html(pp: dict) -> str:
@@ -234,6 +259,151 @@ def _flush_batch(
         zr.append({"title": paper["title"], "status": "FAILED", "key": ""})
 
 
+def _collection_field(collection: dict, field: str) -> str:
+    if not isinstance(collection, dict):
+        return ""
+    data = collection.get("data", {})
+    if isinstance(data, dict) and data.get(field):
+        return str(data.get(field) or "")
+    return str(collection.get(field, "") or "")
+
+
+def _list_subcollections(zot, *, cluster_coll: str) -> list[dict]:
+    web = getattr(zot, "web", None) or zot
+    collections_sub = getattr(web, "collections_sub", None)
+    if callable(collections_sub):
+        try:
+            return list(collections_sub(cluster_coll) or [])
+        except Exception:
+            pass
+
+    collections = getattr(web, "collections", None)
+    if not callable(collections):
+        return []
+    try:
+        all_collections = collections() or []
+    except Exception:
+        return []
+    return [
+        coll
+        for coll in all_collections
+        if _collection_field(coll, "parentCollection") == cluster_coll
+    ]
+
+
+def _extract_created_collection_key(result) -> str:
+    successful = (result or {}).get("successful", {}) if isinstance(result, dict) else {}
+    first = next(iter(successful.values()), None) if successful else None
+    return (first or {}).get("key") or (first or {}).get("data", {}).get("key") or ""
+
+
+def _next_batch_label(zot, *, cluster_coll: str, batch_label: str) -> str:
+    existing_names = {
+        _collection_field(collection, "name")
+        for collection in _list_subcollections(zot, cluster_coll=cluster_coll)
+    }
+    if batch_label not in existing_names:
+        return batch_label
+    suffix = 2
+    while f"{batch_label}-{suffix}" in existing_names:
+        suffix += 1
+    return f"{batch_label}-{suffix}"
+
+
+def _ensure_batch_subcollection(
+    zot,
+    *,
+    cluster_coll: str,
+    batch_label: str,
+    log: Callable[[str], None],
+) -> str:
+    if not cluster_coll or not batch_label:
+        return ""
+
+    for collection in _list_subcollections(zot, cluster_coll=cluster_coll):
+        if _collection_field(collection, "name") == batch_label:
+            return _collection_field(collection, "key")
+
+    try:
+        # get_client() returns raw pyzotero.Zotero (which has
+        # create_collections(payload_list)), but ZoteroDualClient wraps it
+        # as create_collection(name, parent_key=...). Probe for both.
+        if hasattr(zot, "create_collections"):
+            result = zot.create_collections(
+                [{"name": batch_label, "parentCollection": cluster_coll}]
+            )
+        elif hasattr(zot, "create_collection"):
+            result = zot.create_collection(batch_label, parent_key=cluster_coll)
+        else:
+            log(f"[warn] zot has no create_collection(s) method")
+            return ""
+        key = _extract_created_collection_key(result)
+        if key:
+            return key
+        log(f"[warn] batch sub-collection create returned no key for {batch_label!r}: {result}")
+    except Exception as exc:
+        log(f"[warn] could not create batch sub-collection {batch_label!r}: {exc}")
+    return ""
+
+
+def write_papers_to_zotero(
+    zot,
+    papers: list[dict],
+    cluster_slug: str | None,
+    cluster_coll: str | None,
+    batch_coll: str | None = None,
+    batch_label: str = "",
+    *,
+    zotero_batch_size: int = ZOTERO_BATCH_SIZE,
+    log: Callable[[str], None] = print,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Build Zotero item templates and flush them in batches."""
+    zr: list[dict] = []
+    papers_for_notes: list[dict] = []
+    errors: list[dict] = []
+    batch_templates: list[dict] = []
+    batch_papers: list[dict] = []
+    target_collection = (cluster_coll or "").strip()
+
+    for pp in papers:
+        template = zot.item_template("journalArticle")
+        template["title"] = pp["title"]
+        template["creators"] = pp["authors"]
+        template["date"] = pp["year"]
+        template["DOI"] = pp["doi"]
+        template["url"] = pp.get("url", "")
+        template["publicationTitle"] = pp.get("journal", "")
+        template["volume"] = pp.get("volume", "")
+        template["issue"] = pp.get("issue", "")
+        template["pages"] = pp.get("pages", "")
+        template["abstractNote"] = pp["abstract"]
+        template["tags"] = [
+            {"tag": tag}
+            for tag in _compose_hub_tags(pp, cluster_slug, batch_label=batch_label)
+        ]
+        collections = [target_collection] if target_collection else []
+        if batch_coll and batch_coll not in collections:
+            collections.append(batch_coll)
+        template["collections"] = collections
+        if len(collections) == 1:
+            log(f"  Routing to collection: {collections[0]} (cluster={cluster_slug or 'none'})")
+        else:
+            route = ", ".join(collections) if collections else "<none>"
+            log(f"  Routing to collection(s): {route} (cluster={cluster_slug or 'none'})")
+        batch_templates.append(template)
+        batch_papers.append(pp)
+        if len(batch_templates) >= zotero_batch_size:
+            _flush_batch(zot, batch_templates, batch_papers, zr, errors, log, papers_for_notes)
+            batch_templates = []
+            batch_papers = []
+            time.sleep(1)
+
+    if batch_templates:
+        _flush_batch(zot, batch_templates, batch_papers, zr, errors, log, papers_for_notes)
+
+    return zr, papers_for_notes, errors
+
+
 def append_cluster_query_to_existing(
     note_path: Path,
     query: str,
@@ -405,6 +575,7 @@ def run_pipeline(
     fit_check_threshold: int = 3,
     no_fit_check_auto_labels: bool = False,
     zotero_batch_size: int = ZOTERO_BATCH_SIZE,
+    batch_label: str | None = None,
 ) -> int:
     del no_fit_check_auto_labels
     cfg = get_config()
@@ -439,6 +610,12 @@ def run_pipeline(
     if query is None and cluster_slug is not None:
         if cluster_obj is not None and cluster_obj.first_query:
             query = cluster_obj.first_query
+    requested_batch_label = batch_label
+    if requested_batch_label is None:
+        env_batch_label = str(os.environ.get("RESEARCH_HUB_BATCH_LABEL", "") or "").strip()
+        requested_batch_label = env_batch_label or None
+    resolved_batch_label = resolve_batch_label(query, requested_batch_label)
+    explicit_batch_label = requested_batch_label is not None
     manifest = Manifest(cfg.research_hub_dir / "manifest.jsonl")
     dedup_path = cfg.research_hub_dir / "dedup_index.json"
     fit_rejected_by_doi, fit_rejected_by_title = _load_fit_check_rejections(cfg, cluster_slug)
@@ -535,33 +712,63 @@ def run_pipeline(
                             action="new",
                             doi=paper.get("doi", ""),
                             title=paper.get("title", ""),
+                            batch_label=resolved_batch_label,
                         )
                     )
             p(f"DRY RUN: would process {len(papers)} papers. Config OK. Exiting.")
             return 0
 
+        cluster_coll = cluster_obj.zotero_collection_key if cluster_obj else None
+        batch_coll = ""
+        zotero_batch_label = ""
         if no_zotero:
             zot = None
             dedup = _load_or_build_dedup(cfg, None, dry_run=False)
-            p("RESEARCH_HUB_NO_ZOTERO=1 — skipping Zotero, using Obsidian-only mode")
+            p("RESEARCH_HUB_NO_ZOTERO=1 - skipping Zotero, using Obsidian-only mode")
+            if cluster_slug:
+                print(
+                    "\n".join(
+                        [
+                            "=" * 60,
+                            "WARNING: Zotero writes DISABLED (RESEARCH_HUB_NO_ZOTERO=1)",
+                            f"This run will write Obsidian notes only. Cluster '{cluster_slug}'",
+                            "Zotero collection will NOT receive these papers. Unset the",
+                            "env var to re-enable Zotero writes.",
+                            "=" * 60,
+                        ]
+                    ),
+                    file=sys.stderr,
+                )
         else:
             zot = get_client()
             dedup = _load_or_build_dedup(cfg, zot, dry_run=False)
             p("Zotero client ready")
+            if cluster_slug and cluster_coll:
+                if not explicit_batch_label:
+                    resolved_batch_label = _next_batch_label(
+                        zot,
+                        cluster_coll=cluster_coll,
+                        batch_label=resolved_batch_label,
+                    )
+                batch_coll = _ensure_batch_subcollection(
+                    zot,
+                    cluster_coll=cluster_coll,
+                    batch_label=resolved_batch_label,
+                    log=p,
+                )
+                zotero_batch_label = resolved_batch_label
 
-        zr = []
-        obr = []
-        dr = []
-        errors = []
-        papers_for_notes = []
-        batch_templates: list[dict] = []
-        batch_papers: list[dict] = []
+        zr: list[dict] = []
+        obr: list[dict] = []
+        dr: list[dict] = []
+        errors: list[dict] = []
+        papers_for_notes: list[dict] = []
+        pending_zotero_papers: list[dict] = []
+        target_collection_key = cluster_coll or collection_key
 
         for i, pp in enumerate(papers):
             p(f"\n--- Paper {i+1}: {pp['title'][:60]}...")
             query_text = _query_for_paper(pp, query)
-            cluster_obj = clusters.get(cluster_slug) if cluster_slug else None
-            cluster_coll = cluster_obj.zotero_collection_key if cluster_obj else None
             if pp.get("year_drift_warning"):
                 p(
                     f"  [warn] year-drift: {pp['slug']} "
@@ -582,6 +789,7 @@ def run_pipeline(
                             doi=pp.get("doi", ""),
                             title=pp.get("title", ""),
                             error="below fit-check threshold",
+                            batch_label=resolved_batch_label,
                         )
                     )
                     zr.append({"title": pp["title"], "status": "SKIPPED_FIT_CHECK", "key": ""})
@@ -620,6 +828,7 @@ def run_pipeline(
                                 title=pp["title"],
                                 zotero_key=obsidian_hit.zotero_key or "",
                                 obsidian_path=obsidian_hit.obsidian_path,
+                                batch_label=resolved_batch_label,
                             )
                         )
                         p("  SKIPPED dup in Obsidian")
@@ -645,7 +854,13 @@ def run_pipeline(
                                     for tag in existing_item.get("data", {}).get("tags", [])
                                     if "tag" in tag
                                 }
-                                hub_tags = set(_compose_hub_tags(pp, cluster_slug))
+                                hub_tags = set(
+                                    _compose_hub_tags(
+                                        pp,
+                                        cluster_slug,
+                                        batch_label=zotero_batch_label,
+                                    )
+                                )
                                 new_tags = hub_tags - existing_tags
                                 if new_tags:
                                     existing_data = existing_item["data"]
@@ -671,6 +886,7 @@ def run_pipeline(
                                 doi=pp["doi"],
                                 title=pp["title"],
                                 zotero_key=zotero_hit.zotero_key or "",
+                                batch_label=resolved_batch_label,
                             )
                         )
                         p("  SKIPPED dup in Zotero")
@@ -707,33 +923,20 @@ def run_pipeline(
                 time.sleep(0.1)
                 continue
 
-            t = zot.item_template("journalArticle")
-            t["title"] = pp["title"]
-            t["creators"] = pp["authors"]
-            t["date"] = pp["year"]
-            t["DOI"] = pp["doi"]
-            t["url"] = pp.get("url", "")
-            t["publicationTitle"] = pp.get("journal", "")
-            t["volume"] = pp.get("volume", "")
-            t["issue"] = pp.get("issue", "")
-            t["pages"] = pp.get("pages", "")
-            t["abstractNote"] = pp["abstract"]
-            t["tags"] = [{"tag": x} for x in _compose_hub_tags(pp, cluster_slug)]
-            t["collections"] = [cluster_coll or collection_key]
-            p(
-                f"  Routing to collection: {cluster_coll or collection_key} "
-                f"(cluster={cluster_slug or 'none'})"
-            )
-            batch_templates.append(t)
-            batch_papers.append(pp)
-            if len(batch_templates) >= zotero_batch_size:
-                _flush_batch(zot, batch_templates, batch_papers, zr, errors, p, papers_for_notes)
-                batch_templates = []
-                batch_papers = []
-                time.sleep(1)
+            pending_zotero_papers.append(pp)
 
-        if batch_templates:
-            _flush_batch(zot, batch_templates, batch_papers, zr, errors, p, papers_for_notes)
+        if not no_zotero and pending_zotero_papers:
+            zr, papers_for_notes, zotero_errors = write_papers_to_zotero(
+                zot,
+                pending_zotero_papers,
+                cluster_slug,
+                target_collection_key,
+                batch_coll=batch_coll or None,
+                batch_label=zotero_batch_label,
+                zotero_batch_size=zotero_batch_size,
+                log=p,
+            )
+            errors.extend(zotero_errors)
 
         p("\n=== DOI VALIDATION ===")
         verify_cache = VerifyCache(cfg.research_hub_dir / "verify_cache.json") if verify else None
@@ -832,6 +1035,7 @@ def run_pipeline(
                         title=pp["title"],
                         zotero_key=zotero_key,
                         obsidian_path=str(file_path),
+                        batch_label=resolved_batch_label,
                     )
                 )
             except Exception as exc:
@@ -847,6 +1051,7 @@ def run_pipeline(
                         zotero_key=zotero_key,
                         obsidian_path=str(file_path),
                         error=str(exc),
+                        batch_label=resolved_batch_label,
                     )
                 )
                 errors.append(
@@ -929,6 +1134,8 @@ def run_pipeline(
 
     if cluster_obj is not None:
         _refresh_cluster_base(cfg, cluster_obj)
+    if no_zotero and cluster_slug and not dry_run:
+        print(f"[no-zotero] wrote {oc} obsidian notes; 0 zotero items", file=sys.stderr)
     return 0
 
 

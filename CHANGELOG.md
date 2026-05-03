@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.74.0 (2026-05-02)
+
+Workflow drift prevention + per-batch sub-collection. Driven by audit
+of Wenyu's vault: 1148 Obsidian notes vs ~125 in cluster Zotero
+collections. Three holes patched, plus a new sub-collection axis so
+each ingest batch is discoverable in Zotero.
+
+### Added
+- `import-folder --with-zotero` flag opts into the Zotero write path.
+  Default behavior unchanged (Obsidian-only) but now requires
+  confirmation prompt unless `--yes` is also passed.
+- `import-folder --batch-label` and `auto`/`ingest --batch-label` for
+  explicit batch naming. Default auto-derives `<YYYYMMDD>-<query-slug>`
+  or `manual-<YYYYMMDD-HHMMSS>`.
+- Per-batch Zotero sub-collection: each ingest creates (or reuses)
+  `<cluster_collection>/<batch_label>` and items get
+  `collections=[parent, child]` plus a `batch:<label>` tag.
+- `clusters audit` CLI: run drift + collision + test-pattern checks,
+  exits 1 on any issue.
+- 4 new doctor checks: `cluster/zotero_drift`, `cluster/test_pattern`,
+  `cluster/collection_collision`, `manifest/orphan_cluster`.
+- Manifest entry gains `batch_label` field (back-compat: empty default).
+
+### Fixed
+- Silent `RESEARCH_HUB_NO_ZOTERO=1` bypass: now prints stderr banner at
+  pipeline entry and a one-line summary at exit.
+- `zotero_collection_key` collision was undetected. New doctor check
+  catches it; today flags the `WNV9SWVA` collision between
+  `llm-agents-software-engineering` and `llm-evaluation-harness`.
+
+### Tests
+- `tests/test_v074_drift_prevention.py` (9 tests)
+- `tests/test_v074_batch_collection.py` (7 tests)
+- pytest target: 2057+ collected
+
 ## v0.70.1 (2026-04-27)
 
 UX fix for two recurring NotebookLM session pain points: silent

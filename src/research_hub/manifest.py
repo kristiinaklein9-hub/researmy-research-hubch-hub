@@ -21,6 +21,7 @@ class ManifestEntry:
     zotero_key: str = ""
     obsidian_path: str = ""
     error: str = ""
+    batch_label: str = ""
 
 
 class Manifest:

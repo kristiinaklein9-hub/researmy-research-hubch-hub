@@ -208,6 +208,74 @@ def _clusters_show(slug: str) -> int:
     return 0
 
 
+def _clusters_audit(cluster_slug: str | None = None) -> int:
+    from research_hub.doctor import (
+        check_cluster_collection_collision,
+        check_cluster_test_pattern,
+        check_cluster_zotero_drift,
+        check_manifest_orphan_cluster,
+    )
+    from research_hub.vault.sync import compute_sync_status
+
+    cfg = get_config()
+    registry = ClusterRegistry(cfg.clusters_file)
+    clusters = registry.list()
+    if cluster_slug is not None:
+        cluster = registry.get(cluster_slug)
+        if cluster is None:
+            raise ValueError(f"Cluster not found: {cluster_slug}")
+        clusters = [cluster]
+
+    drift_results = check_cluster_zotero_drift(cfg)
+    test_result = check_cluster_test_pattern(cfg)
+    collision_result = check_cluster_collection_collision(cfg)
+    orphan_result = check_manifest_orphan_cluster(cfg)
+
+    drifted = {
+        line.strip().split(":", 1)[0]
+        for result in drift_results
+        for line in result.details.splitlines()
+        if line.strip()
+    }
+    test_slugs = {line.strip() for line in test_result.details.splitlines() if line.strip()}
+    collision_slugs: set[str] = set()
+    for line in collision_result.details.splitlines():
+        if "[" not in line or "]" not in line:
+            continue
+        inside = line.split("[", 1)[1].rsplit("]", 1)[0]
+        collision_slugs.update(slug.strip() for slug in inside.split(",") if slug.strip())
+
+    drift_available = not any(result.status == "INFO" for result in drift_results)
+    zot = _load_zotero_if_configured() if drift_available else None
+    bad = False
+    print(f"{'cluster':40} {'obsidian':>8} {'zotero':>8} {'in_both':>8} {'drift':>8} {'test?':>6} {'collision?':>11}")
+    for cluster in clusters:
+        if drift_available and zot is not None:
+            status = compute_sync_status(cluster, zot, cfg.raw)
+            drift = status.obsidian_count - status.in_both
+            obsidian_cell = str(status.obsidian_count)
+            zotero_cell = str(status.zotero_count)
+            in_both_cell = str(status.in_both)
+            drift_cell = f"!{drift}" if cluster.slug in drifted else str(drift)
+        else:
+            obsidian_cell = "n/a"
+            zotero_cell = "n/a"
+            in_both_cell = "n/a"
+            drift_cell = "n/a"
+        test_mark = "!" if cluster.slug in test_slugs else "-"
+        collision_mark = "!" if cluster.slug in collision_slugs else "-"
+        print(f"{cluster.slug:40} {obsidian_cell:>8} {zotero_cell:>8} {in_both_cell:>8} {drift_cell:>8} {test_mark:>6} {collision_mark:>11}")
+        bad = bad or cluster.slug in drifted or test_mark == "!" or collision_mark == "!"
+
+    if orphan_result.status != "OK":
+        print()
+        print(f"[{orphan_result.status}] {orphan_result.name}: {orphan_result.message}")
+        if orphan_result.details:
+            print(orphan_result.details)
+
+    return 1 if bad else 0
+
+
 def _clusters_new(query: str, name: str | None, slug: str | None) -> int:
     cfg = get_config()
     registry = ClusterRegistry(cfg.clusters_file)
@@ -765,6 +833,9 @@ def _import_folder_command(args) -> int:
         use_graphify=args.use_graphify,
         graphify_graph=Path(args.graphify_graph) if args.graphify_graph else None,
         dry_run=args.dry_run,
+        with_zotero=args.with_zotero,
+        yes=args.yes,
+        batch_label=args.batch_label,
     )
     print(f"\nImport summary ({'DRY RUN' if args.dry_run else 'WRITTEN'}):")
     print(f"  imported:  {report.imported_count}")
@@ -2292,6 +2363,7 @@ def _auto(
     append: bool = False,
     force: bool = False,
     show: bool = True,
+    batch_label: str | None = None,
 ) -> int:
     from research_hub.auto import auto_pipeline
 
@@ -2304,22 +2376,32 @@ def _auto(
             print("       Re-run with --append (add more) or --force (overwrite).")
             return 2
 
-    report = auto_pipeline(
-        topic,
-        cluster_slug=cluster_slug,
-        cluster_name=cluster_name,
-        max_papers=max_papers,
-        field=field,
-        do_nlm=do_nlm,
-        do_crystals=do_crystals,
-        do_cluster_overview=do_cluster_overview,
-        do_fit_check=do_fit_check,
-        fit_check_threshold=fit_check_threshold,
-        zotero_batch_size=zotero_batch_size,
-        llm_cli=llm_cli,
-        dry_run=dry_run,
-        print_progress=True,
-    )
+    previous_batch_label = os.environ.get("RESEARCH_HUB_BATCH_LABEL")
+    if batch_label is not None:
+        os.environ["RESEARCH_HUB_BATCH_LABEL"] = batch_label
+    try:
+        report = auto_pipeline(
+            topic,
+            cluster_slug=cluster_slug,
+            cluster_name=cluster_name,
+            max_papers=max_papers,
+            field=field,
+            do_nlm=do_nlm,
+            do_crystals=do_crystals,
+            do_cluster_overview=do_cluster_overview,
+            do_fit_check=do_fit_check,
+            fit_check_threshold=fit_check_threshold,
+            zotero_batch_size=zotero_batch_size,
+            llm_cli=llm_cli,
+            dry_run=dry_run,
+            print_progress=True,
+        )
+    finally:
+        if batch_label is not None:
+            if previous_batch_label is None:
+                os.environ.pop("RESEARCH_HUB_BATCH_LABEL", None)
+            else:
+                os.environ["RESEARCH_HUB_BATCH_LABEL"] = previous_batch_label
     if not report.ok:
         print(f"  [ERR] {report.error}")
         return 1
@@ -2649,6 +2731,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Bypass non-empty cluster guard",
     )
+    auto_parser.add_argument(
+        "--batch-label",
+        default=None,
+        help="Optional explicit batch label for the ingest sub-collection",
+    )
 
     plan_parser = subparsers.add_parser(
         "plan",
@@ -2686,6 +2773,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=3,
         help="Minimum score (0-5) to keep a paper when --fit-check is on",
     )
+    ingest_parser.add_argument(
+        "--batch-label",
+        default=None,
+        help="Optional explicit batch label for the ingest sub-collection",
+    )
 
     import_folder_parser = subparsers.add_parser(
         "import-folder",
@@ -2722,6 +2814,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Show what would be imported without writing notes",
+    )
+    import_folder_parser.add_argument(
+        "--with-zotero",
+        action="store_true",
+        default=False,
+        help="Also write imported files into the cluster Zotero collection",
+    )
+    import_folder_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the Obsidian-only confirmation prompt",
+    )
+    import_folder_parser.add_argument(
+        "--batch-label",
+        default=None,
+        help="Optional label for the manifest and Zotero batch sub-collection",
     )
 
     for parser_with_verify in (run_parser, ingest_parser):
@@ -2827,6 +2935,15 @@ def build_parser() -> argparse.ArgumentParser:
     clusters_subparsers.add_parser(
         "scaffold-missing",
         help="Find clusters with no hub/<slug>/ scaffold and create it. Idempotent.",
+    )
+    audit_parser = clusters_subparsers.add_parser(
+        "audit",
+        help="Run drift + collision + test-pattern checks (subset of doctor)",
+    )
+    audit_parser.add_argument(
+        "--cluster",
+        default=None,
+        help="Audit only this cluster slug (default: all)",
     )
 
     # v0.67: Phase 2 of the Codex skills brief - shell entry point for the
@@ -3731,6 +3848,7 @@ def main(argv: list[str] | None = None) -> int:
             fit_check=getattr(args, "fit_check", False),
             fit_check_threshold=getattr(args, "fit_check_threshold", 3),
             no_fit_check_auto_labels=getattr(args, "no_fit_check_auto_labels", False),
+            batch_label=getattr(args, "batch_label", None),
         )
         if rc == 0 and getattr(args, "fit_check", False) and not getattr(args, "no_fit_check_auto_labels", False):
             from research_hub.paper import apply_fit_check_to_labels
@@ -3910,6 +4028,7 @@ def main(argv: list[str] | None = None) -> int:
             append=args.append,
             force=args.force,
             show=args.show,
+            batch_label=args.batch_label,
         )
     if args.command == "ingest":
         rc = run_pipeline(
@@ -3921,6 +4040,7 @@ def main(argv: list[str] | None = None) -> int:
             fit_check=args.fit_check,
             fit_check_threshold=args.fit_check_threshold,
             no_fit_check_auto_labels=args.no_fit_check_auto_labels,
+            batch_label=args.batch_label,
         )
         if rc == 0 and args.fit_check and not args.no_fit_check_auto_labels:
             from research_hub.paper import apply_fit_check_to_labels
@@ -4065,6 +4185,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         if args.clusters_command == "scaffold-missing":
             return _clusters_scaffold_missing()
+        if args.clusters_command == "audit":
+            return _clusters_audit(args.cluster)
     if args.command == "topic":
         from research_hub.topic import (
             SubtopicProposal,

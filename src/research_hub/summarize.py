@@ -106,10 +106,16 @@ class _PerPaperOutcome:
 # -- prompt building ----------------------------------------------------
 
 
-def _read_cluster_papers_with_abstracts(cfg, cluster_slug: str) -> list[dict]:
+def _read_cluster_papers_with_abstracts(
+    cfg,
+    cluster_slug: str,
+    *,
+    paper_keys: list[str] | None = None,
+) -> list[dict]:
     """Walk raw/<slug>/*.md, return list of dicts with slug + frontmatter
     fields + abstract text. Reuses the same exclusion rules as crystal."""
     papers: list[dict] = []
+    allowed_keys = {str(key).strip() for key in (paper_keys or []) if str(key).strip()}
     raw_dir = Path(cfg.raw) / cluster_slug
     if not raw_dir.exists():
         return []
@@ -131,13 +137,16 @@ def _read_cluster_papers_with_abstracts(cfg, cluster_slug: str) -> list[dict]:
                 continue
             key, _, value = line.partition(":")
             fm[key.strip()] = value.strip().strip('"').strip("'")
+        zotero_key = fm.get("zotero-key", "")
+        if allowed_keys and zotero_key not in allowed_keys:
+            continue
         abstract = _extract_section(text, "Abstract")
         papers.append({
             "slug": note_path.stem,
             "title": fm.get("title", note_path.stem),
             "doi": fm.get("doi", ""),
             "year": fm.get("year", ""),
-            "zotero_key": fm.get("zotero-key", ""),
+            "zotero_key": zotero_key,
             "abstract": abstract,
             "path": note_path,
         })
@@ -159,10 +168,17 @@ def _extract_section(md_text: str, header: str) -> str:
     return body
 
 
-def build_summarize_prompt(cfg, cluster_slug: str) -> str:
+def build_summarize_prompt(
+    cfg,
+    cluster_slug: str,
+    *,
+    paper_keys: list[str] | None = None,
+) -> str:
     """Build the LLM prompt requesting per-paper summaries as JSON."""
-    papers = _read_cluster_papers_with_abstracts(cfg, cluster_slug)
+    papers = _read_cluster_papers_with_abstracts(cfg, cluster_slug, paper_keys=paper_keys)
     if not papers:
+        if paper_keys:
+            raise ValueError(f"no papers found in cluster '{cluster_slug}' for the requested paper keys")
         raise ValueError(f"no papers found in cluster '{cluster_slug}'")
 
     lines = [
@@ -431,6 +447,7 @@ def summarize_cluster(
     apply: bool = False,
     write_zotero: bool = True,
     write_obsidian: bool = True,
+    paper_keys: list[str] | None = None,
 ) -> SummaryReport:
     """End-to-end: emit prompt → invoke LLM → parse → optionally apply.
 
@@ -448,7 +465,7 @@ def summarize_cluster(
     report = SummaryReport(cluster_slug=cluster_slug)
 
     try:
-        prompt = build_summarize_prompt(cfg, cluster_slug)
+        prompt = build_summarize_prompt(cfg, cluster_slug, paper_keys=paper_keys)
     except ValueError as exc:
         report.ok = False
         report.error = str(exc)

@@ -1063,7 +1063,18 @@ def _paper_enrich_existing(
         print("Preview only. Re-run with --apply to write metadata back to Zotero.")
         return 0
 
-    results = apply_enrichment(zot, plans, rate_limit_rps=rate_limit)
+    try:
+        results = apply_enrichment(
+            zot,
+            plans,
+            rate_limit_rps=rate_limit,
+            cfg=cfg,
+            cluster_slug=cluster_slug,
+        )
+    except TypeError as exc:
+        if "unexpected keyword" not in str(exc):
+            raise
+        results = apply_enrichment(zot, plans, rate_limit_rps=rate_limit)
     manifest = Manifest(cfg.research_hub_dir / "manifest.jsonl")
     batch_label = _manifest_batch_label("enrich")
     ok_count = 0
@@ -1094,6 +1105,8 @@ def _paper_attach_pdfs(
     apply: bool,
     rate_limit: float,
     include_publisher_link: bool = False,
+    keep_url_fallback: bool = False,
+    max_pdf_size_mb: int = 25,
 ) -> int:
     cfg = get_config()
     from research_hub.manifest import Manifest, new_entry
@@ -1129,7 +1142,13 @@ def _paper_attach_pdfs(
         print("Preview only. Re-run with --apply to attach PDFs.")
         return 0
 
-    results = attach_pdfs(zot, plans, rate_limit_rps=rate_limit)
+    results = attach_pdfs(
+        zot,
+        plans,
+        rate_limit_rps=rate_limit,
+        keep_url_fallback=keep_url_fallback,
+        max_pdf_size_mb=max_pdf_size_mb,
+    )
     manifest = Manifest(cfg.research_hub_dir / "manifest.jsonl")
     batch_label = _manifest_batch_label("pdf-attach")
     ok_count = 0
@@ -1152,6 +1171,116 @@ def _paper_attach_pdfs(
         )
     print(f"Attached PDFs to {ok_count}/{len(plans)} item(s).")
     return 0
+
+
+def _summary_block_has_todo(md_path: Path) -> bool:
+    try:
+        text = md_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    match = re.search(r"^##\s+Summary\s*\n(.*?)(?=^##\s|\Z)", text, re.MULTILINE | re.DOTALL)
+    if not match:
+        return False
+    summary_block = match.group(1)
+    return "[TODO]" in summary_block or "[TODO:" in summary_block
+
+
+def _paper_upgrade_pdfs(
+    cluster_slug: str,
+    *,
+    apply: bool,
+    limit: int,
+) -> int:
+    cfg = get_config()
+    from research_hub.zotero.client import get_client
+    from research_hub.zotero.pdf_attach import upgrade_pdfs_in_cluster
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    cluster = registry.get(cluster_slug)
+    if cluster is None:
+        print(f"Cluster not found: {cluster_slug}", file=sys.stderr)
+        return 2
+    if not cluster.zotero_collection_key:
+        print(f"{cluster_slug} has no Zotero collection binding", file=sys.stderr)
+        return 2
+
+    zot = get_client()
+    upgrade_pdfs_in_cluster(
+        zot,
+        cluster.zotero_collection_key,
+        apply=apply,
+        limit=limit,
+    )
+    return 0
+
+
+def _paper_resummarize(
+    cluster_slug: str,
+    *,
+    apply: bool,
+    llm_cli: str | None,
+) -> int:
+    from research_hub import summarize as summarize_mod
+
+    cfg = get_config()
+    registry = ClusterRegistry(cfg.clusters_file)
+    cluster = registry.get(cluster_slug)
+    if cluster is None:
+        print(f"Cluster not found: {cluster_slug}", file=sys.stderr)
+        return 2
+
+    cluster_dir = Path(cfg.raw) / (cluster.obsidian_subfolder or cluster.slug)
+    if not cluster_dir.exists():
+        print(f"Cluster note directory not found: {cluster_dir}", file=sys.stderr)
+        return 2
+
+    paper_keys: list[str] = []
+    for note_path in sorted(cluster_dir.glob("*.md")):
+        if note_path.name in {"00_overview.md", "index.md"}:
+            continue
+        if not _summary_block_has_todo(note_path):
+            continue
+        zotero_key = _read_zotero_key_from_frontmatter(note_path)
+        if zotero_key:
+            paper_keys.append(zotero_key)
+
+    if not paper_keys:
+        print("No papers with [TODO] summary blocks found.")
+        return 0
+
+    report = summarize_mod.summarize_cluster(
+        cfg,
+        cluster_slug,
+        llm_cli=llm_cli,
+        apply=apply,
+        paper_keys=paper_keys,
+    )
+    if not report.ok:
+        print(f"resummarize failed: {report.error}", file=sys.stderr)
+        return 1
+    if report.prompt_path:
+        print(f"no LLM CLI on PATH; prompt saved to {report.prompt_path}")
+        print("pipe it through your LLM (claude/codex/gemini) and re-run with --apply")
+        return 0
+    print(f"cli used: {report.cli_used}")
+    if not apply:
+        print(f"(dry-run on {len(paper_keys)} paper(s); pass --apply to write to Obsidian + Zotero)")
+        return 0
+    apply_result = report.apply_result
+    if apply_result is None:
+        print("no apply result returned")
+        return 1
+    print(
+        f"applied: {len(apply_result.applied)}  "
+        f"skipped: {len(apply_result.skipped)}  "
+        f"errors: {len(apply_result.errors)}"
+    )
+    print(f"obsidian writes: {apply_result.obsidian_writes}, zotero writes: {apply_result.zotero_writes}")
+    for skip in apply_result.skipped:
+        print(f"  SKIP {skip}")
+    for err in apply_result.errors:
+        print(f"  ERROR {err}", file=sys.stderr)
+    return 0 if not apply_result.errors else 1
 
 
 def _zotero_gc(*, apply: bool, yes: bool, no_test_pattern: bool, age_days: int) -> int:
@@ -1296,6 +1425,20 @@ def _paper_command(args) -> int:
             apply=args.apply,
             rate_limit=args.rate_limit,
             include_publisher_link=getattr(args, "include_publisher_link", False),
+            keep_url_fallback=getattr(args, "keep_url_fallback", False),
+            max_pdf_size_mb=getattr(args, "max_pdf_size_mb", 25),
+        )
+    if args.paper_command == "upgrade-pdfs":
+        return _paper_upgrade_pdfs(
+            args.cluster,
+            apply=args.apply,
+            limit=args.limit,
+        )
+    if args.paper_command == "resummarize":
+        return _paper_resummarize(
+            args.cluster,
+            apply=args.apply,
+            llm_cli=args.llm_cli,
         )
     return 2
 
@@ -4396,17 +4539,43 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_existing.add_argument("--rate-limit", type=float, default=2.0)
     attach_pdfs_p = paper_sub.add_parser(
         "attach-pdfs",
-        help="Find OA PDFs (arXiv + OpenAlex + Unpaywall + Crossref) and attach to Zotero items",
+        help="Find OA PDFs and attach them to Zotero as local imported_file items",
     )
     attach_pdfs_p.add_argument("--cluster", required=True)
     attach_pdfs_p.add_argument("--limit", type=int, default=0)
     attach_pdfs_p.add_argument("--apply", action="store_true")
     attach_pdfs_p.add_argument("--rate-limit", type=float, default=2.0)
     attach_pdfs_p.add_argument(
+        "--keep-url-fallback",
+        action="store_true",
+        help="When PDF download fails, fall back to an imported_url link-only attachment",
+    )
+    attach_pdfs_p.add_argument(
+        "--max-pdf-size",
+        type=int,
+        dest="max_pdf_size_mb",
+        default=25,
+        help="Reject PDF downloads larger than this many megabytes (default: 25)",
+    )
+    attach_pdfs_p.add_argument(
         "--include-publisher-link",
         action="store_true",
         help="When no PDF found, attach a linked publisher-page bookmark (clickable from Zotero)",
     )
+    upgrade_pdfs_p = paper_sub.add_parser(
+        "upgrade-pdfs",
+        help="Convert imported_url PDF attachments to imported_file by downloading and re-uploading them",
+    )
+    upgrade_pdfs_p.add_argument("--cluster", required=True)
+    upgrade_pdfs_p.add_argument("--limit", type=int, default=0, help="0 = no limit")
+    upgrade_pdfs_p.add_argument("--apply", action="store_true")
+    resummarize_p = paper_sub.add_parser(
+        "resummarize",
+        help="Re-run summarize only for notes whose Summary block still contains [TODO]",
+    )
+    resummarize_p.add_argument("--cluster", required=True)
+    resummarize_p.add_argument("--apply", action="store_true")
+    resummarize_p.add_argument("--llm-cli", default=None)
 
     discover_parser = subparsers.add_parser(
         "discover",

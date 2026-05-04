@@ -829,14 +829,28 @@ def _to_papers_input(candidates: list[dict], cluster_slug: str | None) -> list[d
         # with only research-hub + cluster/<slug> tags (2/4 namespaces).
         backend_source = candidate.get("source") or candidate.get("found_in") or ""
 
-        # v0.68.4: when the backend returned a real abstract, seed the note
-        # fields with it instead of TODO skeletons. Reviewers can still edit,
-        # but they have actual content to start from.
-        abstract_text = candidate.get("abstract") or ""
-        has_real_abstract = bool(abstract_text.strip()) and abstract_text.strip().lower() not in {"(no abstract)", "no abstract"}
+        # v0.68.4/v0.80.0: seed note content from a real abstract when the
+        # backend returned one, and recover missing abstracts during ingest
+        # so new notes do not land with permanent TODO-only summaries.
+        abstract_text = str(candidate.get("abstract") or "").strip()
+        abstract_final = abstract_text
+        if abstract_final.lower() in {"(no abstract)", "no abstract"}:
+            abstract_final = ""
+        if not abstract_final and doi:
+            try:
+                from research_hub.search.abstract_recovery import recover_abstract
+
+                recovered = recover_abstract(doi, timeout=10)
+                if recovered.text:
+                    abstract_final = recovered.text
+                    if not candidate.get("abstract_source"):
+                        candidate["abstract_source"] = recovered.source
+            except Exception:
+                pass
+        has_real_abstract = bool(abstract_final)
 
         if has_real_abstract:
-            summary_text = abstract_text[:500]
+            summary_text = abstract_final[:500]
             key_findings = ["[review and extract from Abstract section above]"]
             methodology_text = "[review abstract; refine after reading PDF]"
         else:
@@ -850,7 +864,7 @@ def _to_papers_input(candidates: list[dict], cluster_slug: str | None) -> list[d
             "authors": _authors_to_creators(names),
             "year": candidate.get("year") or 0,
             "metadata_year": candidate.get("metadata_year"),
-            "abstract": abstract_text or "(no abstract)",
+            "abstract": abstract_final or "(no abstract)",
             "abstract_source": candidate.get("abstract_source") or "",
             "journal": _smart_journal_fallback(candidate),
             "slug": slug,

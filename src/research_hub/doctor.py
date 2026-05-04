@@ -566,6 +566,61 @@ def check_cluster_pdf_coverage(cfg) -> CheckResult:
     )
 
 
+def check_cluster_summary_thin(cfg) -> CheckResult:
+    """INFO when more than 30% of a cluster's papers still have TODO summaries."""
+    from research_hub.clusters import ClusterRegistry
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    flagged: list[str] = []
+    for cluster in registry.list():
+        raw_dir = Path(cfg.raw) / (cluster.obsidian_subfolder or cluster.slug)
+        if not raw_dir.exists():
+            continue
+        notes = [
+            note
+            for note in sorted(raw_dir.glob("*.md"))
+            if note.name not in {"00_overview.md", "index.md"}
+        ]
+        if not notes:
+            continue
+        thin = 0
+        for note_path in notes:
+            try:
+                text = note_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            match = re.search(
+                r"^##\s+Summary\s*\n(.*?)(?=^##\s|\Z)",
+                text,
+                re.MULTILINE | re.DOTALL,
+            )
+            if not match:
+                continue
+            summary_block = match.group(1)
+            if "[TODO]" in summary_block or "[abstract too thin" in summary_block:
+                thin += 1
+        pct = (thin / len(notes)) * 100
+        if pct > 30:
+            flagged.append(f"{cluster.slug}: {thin}/{len(notes)} ({pct:.0f}%) thin summaries")
+
+    if flagged:
+        return CheckResult(
+            "cluster/summary_thin",
+            "INFO",
+            f"{len(flagged)} cluster(s) over 30% thin-summary threshold",
+            remedy=(
+                "Run: python -m research_hub paper enrich-existing --cluster <slug> --apply\n"
+                "  or: python -m research_hub paper resummarize --cluster <slug> --apply"
+            ),
+            details="\n  ".join(flagged[:10]),
+        )
+    return CheckResult(
+        "cluster/summary_thin",
+        "OK",
+        "All clusters are at or below the 30% thin-summary threshold",
+    )
+
+
 def check_cluster_zotero_trashed(cfg) -> CheckResult:
     """WARN when a vault cluster's bound Zotero collection is in the trash."""
     from research_hub.clusters import ClusterRegistry
@@ -1159,6 +1214,7 @@ def run_doctor(*, strict: bool = False) -> list[CheckResult]:
             check_cluster_test_pattern,
             check_cluster_collection_collision,
             check_cluster_pdf_coverage,
+            check_cluster_summary_thin,
             check_cluster_zotero_trashed,
             check_manifest_orphan_cluster,
         ):

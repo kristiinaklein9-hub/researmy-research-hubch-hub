@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.80.0 (2026-05-04)
+
+Clickable PDFs (imported_file) + abstract recovery + chained re-summarize.
+
+### Added
+- `paper attach-pdfs` now uses `linkMode="imported_file"` by default:
+  downloads PDF bytes and uploads them through
+  `pyzotero.upload_attachments`, so Zotero opens the PDF locally.
+- `paper attach-pdfs --keep-url-fallback` falls back to the older
+  `imported_url` link-only behavior when download fails.
+- `paper attach-pdfs --max-pdf-size` rejects oversized downloads
+  (default: 25 MB).
+- `paper upgrade-pdfs --cluster <slug> [--apply]` converts legacy
+  `imported_url` PDF attachments to `imported_file`.
+- `discover._to_papers_input` now runs `recover_abstract()` during
+  ingest when the backend returned an empty abstract.
+- `abstract_recovery` now falls through to Semantic Scholar
+  (`/graph/v1/paper/DOI:<doi>`) and uses `tldr.text` when `abstract`
+  is empty.
+- `paper resummarize --cluster <slug> [--apply]` re-runs summarize
+  only for notes whose `## Summary` block still contains `[TODO]`.
+- `paper enrich-existing --apply` now chains a targeted re-summarize
+  when a missing abstract is recovered for an existing paper.
+- doctor `cluster/summary_thin` reports INFO when more than 30% of a
+  cluster's notes still have thin `[TODO]` summaries.
+- 16 new tests in `tests/test_v080_*.py`.
+
+Tests: 2107 -> ~2123.
+
 ## v0.79.0 (2026-05-03)
 
 Metadata quality + Zotero trash safety.

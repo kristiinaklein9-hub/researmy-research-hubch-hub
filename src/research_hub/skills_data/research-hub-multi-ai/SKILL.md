@@ -1,27 +1,39 @@
 ---
 name: research-hub-multi-ai
-description: Multi-AI orchestration for research-hub workflows. Use when the user wants Claude, Codex CLI, Gemini CLI, or another shell-capable assistant to share research-hub work such as planning, ingesting, crystal generation, Chinese/English summaries, or long-running literature workflows.
+description: Router skill that writes `.coord/multi_ai_plan.md` when a single round of work will need two or more delegates (Codex + Gemini, multiple parallel Codex sessions, or a sequence of mixed handoffs). For a single delegate, use `codex-delegate` or `gemini-delegate` directly — do not invoke this skill. The router decides task splitting, dependency ordering, and reconciliation; the leaves execute.
 ---
 
-# research-hub Multi-AI Orchestration
+# research-hub Multi-AI Router
 
-research-hub can be driven by any AI that can run shell commands, call MCP tools, or call REST endpoints. Use this skill to decide when the primary assistant should work directly and when to delegate long or language-specific work to Codex CLI or Gemini CLI. The underlying workspace may connect Zotero, Obsidian, and NotebookLM, or any useful two-tool subset.
+This skill is the **router** in a router/leaves architecture. The leaves are `codex-delegate` and `gemini-delegate`. The router's only job is to write a coordination plan; the leaves read their assigned task brief from that plan and execute.
 
-## Prerequisite check (do this first)
+## When to Invoke
 
-Every command this skill emits goes through the `research-hub` CLI
-(`research-hub auto`, `research-hub plan`, `research-hub ask`, etc.).
-Before producing a delegation plan, verify the CLI exists:
+Invoke this skill **only** when a single round of work will need two or more delegates. Examples:
+
+- Codex writes the test scaffolding **and** Gemini drafts the zh-TW companion doc — same round, both delegates.
+- Three parallel Codex runs against independent subtrees of the same repo, with a final Claude reconciliation step.
+- A sequence of mixed handoffs: Codex generates data, Gemini summarises in zh-TW, Codex writes a plot script.
+
+If only one delegate is needed this round, **use the leaf skill directly**. Do not produce a router plan for a one-task delegation — it adds ceremony with no benefit.
+
+## When Not to Invoke
+
+- Single delegate this round (just Codex, just Gemini): use the leaf skill.
+- Single-LLM `research-hub auto` runs that pass `--llm-cli codex` or `--llm-cli gemini`: the flag is a research-hub feature, not a router decision. See "Single-LLM research-hub routing" below for reference.
+- Pure-Claude planning, review, or judgment work: keep it in Claude.
+
+## Prerequisite check
+
+The router emits commands that go through the `research-hub` CLI in many cases. Before producing a plan, verify the CLI exists:
 
 ```bash
 research-hub --version
 ```
 
-If that command is **not found**, the user installed only the Claude
-Code marketplace plugin. Stop and tell them:
+If `research-hub` is **not found**, the user installed only the Claude Code marketplace plugin. Stop and tell them:
 
-> This skill orchestrates `research-hub` CLI commands across multiple
-> AIs, but the CLI itself isn't installed. Please run:
+> This skill orchestrates `research-hub` CLI commands across multiple AIs, but the CLI itself isn't installed. Please run:
 >
 > ```bash
 > pip install research-hub-pipeline
@@ -30,36 +42,62 @@ Code marketplace plugin. Stop and tell them:
 >
 > Then re-run your request.
 
-Do **not** produce a plan that calls `research-hub ...` if the CLI is
-missing — the user can't execute it.
+Do **not** produce a plan that calls `research-hub ...` if the CLI is missing — the user can't execute it. Plans that only call `codex-delegate` / `gemini-delegate` (no research-hub CLI) are fine without it.
 
-**Stage-agnostic, character-driven routing.** This skill is NOT bound to a specific research stage (discover / ingest / design / write / submit). The decision to delegate is driven by **task character** — token-heavy code, long-context reading, CJK prose, mechanical bulk edits — not by which stage of the research pipeline you happen to be in. A 200-page systematic-review summary in Stage 1 routes to Gemini for the same reason a zh-TW cover letter in Stage 8 does: long CJK prose that pays off Gemini's strength.
+## Output artifact: `.coord/multi_ai_plan.md`
 
-## Roles
+The router's only output is `.coord/multi_ai_plan.md` at the workspace root. Every plan has YAML frontmatter and a per-task brief block.
 
-| AI | Best role | Use when |
-|---|---|---|
-| Primary assistant | planning, review, domain judgment, user-facing explanation | ambiguous tasks, quality control, final synthesis |
-| Codex CLI | Python/backend execution, tests, mechanical bulk work, crystal generation | long local processing or code-heavy workflows |
-| Gemini CLI | long-context drafting and CJK output | Traditional Chinese summaries, bilingual briefs, long prose drafts |
+Schema:
 
-## Decision Rules
+```yaml
+---
+plan_id: <short-slug>             # e.g. paper-corpus-2026-05
+created_utc: 2026-05-09T12:34:56Z
+goal: <one paragraph>
+success_criteria:
+  - <observable check 1>
+  - <observable check 2>
+tasks:
+  - id: t1
+    agent: codex                  # codex | gemini | claude
+    brief_path: .ai/codex_task_t1.md
+    depends_on: []
+    success_criteria:
+      - <verification command or assertion>
+  - id: t2
+    agent: gemini
+    brief_path: .ai/gemini_task_t2.md
+    depends_on: [t1]
+    success_criteria:
+      - <verification>
+risks:
+  - <known risk>
+---
+```
 
-- Start with `research-hub plan "intent"` for broad research requests.
-- Use `research-hub auto "topic" --with-crystals --llm-cli codex` for long mechanical crystal generation when Codex is available.
-- Use `research-hub auto "topic" --with-crystals --llm-cli gemini` when the user explicitly wants Chinese/Japanese/Korean output.
-- Use `research-hub auto "topic" --no-nlm` for first-run validation before NotebookLM automation is trusted.
-- Use cached crystals or `research-hub ask <cluster> "question"` before spending tokens on a fresh synthesis.
+A ready-to-paste template lives in `references/multi_ai_plan_template.md`.
 
-## Commands
+The router writes the plan **and** writes each per-task brief at the path declared in `brief_path`. Leaves read the brief and execute.
+
+## Hand-off contract
+
+The plan is the source of truth. After the router writes it:
+
+1. Each leaf is invoked with the brief path as input. Leaves do not read the plan — they read their own brief.
+2. Claude (or another reconciler) reads `result.json` from each leaf, compares against `success_criteria` in the plan, and decides accept / re-run / fall back.
+3. Plans are append-mostly: if a re-run is needed, append a new task with a fresh id rather than mutating an existing one.
+
+## Single-LLM research-hub routing (reference only)
+
+The `research-hub auto` command takes a `--llm-cli` flag to pick which CLI handles long mechanical work like crystal generation. This is a research-hub feature, not router logic. Use it directly without invoking this skill:
 
 ```bash
-research-hub plan "TOPIC"
-research-hub auto "TOPIC" --with-crystals
 research-hub auto "TOPIC" --with-crystals --llm-cli codex
 research-hub auto "TOPIC" --with-crystals --llm-cli gemini
-research-hub ask <cluster> "question"
 ```
+
+Pick `codex` for token-heavy mechanical generation; pick `gemini` for long-context reading or CJK output. If you also need a second delegate in the same round (e.g. translate the resulting brief to zh-TW with Gemini), then this becomes a multi-AI plan and the router applies.
 
 Check available CLIs:
 
@@ -69,7 +107,8 @@ python -c "from research_hub.auto import detect_llm_cli; print(detect_llm_cli())
 
 ## Guardrails
 
-- Do not delegate before the workflow is clear.
-- Do not fabricate citations or metadata.
-- Do not assume Gemini is Chinese-only; it can be used in English, but its strongest reason to choose it over Codex is language-heavy or long-context prose.
+- Do not produce a plan with a single task — that is a misuse; use the leaf skill directly.
+- Do not fabricate citations or metadata in either the plan or the per-task briefs.
+- Do not assume Gemini is Chinese-only; route by task character (long context, CJK prose, second-opinion review), not by language alone.
+- Do not overwrite `.coord/multi_ai_plan.md` of a different plan_id — append a new file `.coord/multi_ai_plan_<plan_id>.md` if the workspace already has an active plan.
 - Do not overwrite vault notes or delete clusters without explicit user approval.

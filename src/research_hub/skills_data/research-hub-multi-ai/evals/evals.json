@@ -2,16 +2,24 @@
   "skill": "research-hub-multi-ai",
   "evals": [
     {
+      "prompt": "I need Codex to write the test scaffolding for src/util.py and Gemini to draft the zh-TW companion for docs/util.md, both this round.",
+      "expected_behavior": "Recognize this is a multi-delegate round (>=2 delegates): write `.coord/multi_ai_plan.md` with a task for codex (test scaffolding) and a task for gemini (zh-TW translation), each pointing to its own brief file. Do NOT execute either task in this skill — the leaves do that."
+    },
+    {
       "prompt": "Delegate this 200-line refactor to Codex.",
-      "expected_behavior": "Recognize this is a heavy code task: write a brief at `.ai/codex_task_*.md`, then `codex exec --full-auto -C <repo> ...` in background; review diff before committing."
+      "expected_behavior": "Recognize this is a single-delegate task: do NOT invoke this skill. Route to `codex-delegate` directly — write a `.ai/codex_task_*.md` brief and launch the wrapper. Producing a router plan for one task is misuse."
     },
     {
       "prompt": "Generate a Traditional Chinese summary of this 8000-word paper.",
-      "expected_behavior": "Recognize this is a CJK long-form task: defer to Gemini CLI via the gemini-delegate pattern; preserve technical terms; review for hallucination before posting."
+      "expected_behavior": "Recognize this is a single-delegate CJK task: do NOT invoke this skill. Route to `gemini-delegate` directly. The router only applies when this same round will also need a second delegate."
+    },
+    {
+      "prompt": "Run `research-hub auto \"agent-based modeling\" --with-crystals --llm-cli codex`.",
+      "expected_behavior": "Recognize this is a single-LLM research-hub CLI run: the `--llm-cli` flag is a research-hub feature, not a router decision. Do NOT produce a multi-AI plan. Just run the command (after verifying the CLI is installed)."
     },
     {
       "prompt": "Should you write this 30-line bug fix yourself or delegate?",
-      "expected_behavior": "Decide locally: <50 LOC + needs project context = Claude direct, no delegation. Reply with one sentence on why."
+      "expected_behavior": "Decide locally: <50 LOC + needs project context = Claude direct, no delegation. Do not invoke this skill. Reply with one sentence on why."
     }
   ]
 }

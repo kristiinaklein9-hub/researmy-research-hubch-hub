@@ -72,15 +72,16 @@ Single message in this exact structure:
 **Stage**: <current_stage>  ·  **Last updated**: <last_updated>
 
 **Datasets** (<count>):
-- `<id>`: <description>
+- `<name|id>`: <purpose|description; "(no description)" if both absent>
 - ...
 
 **Experiments** (<count>, by status):
 - <status>: <id> — <hypothesis or method, one line; "(no hypothesis)" if both absent>
 - ...
 
-**Main entrypoints**:
-- `<path>` — <one-line purpose>
+**Entrypoints**:
+- `<path>` — <one-line purpose>  # if list form (`main_entrypoints`)
+- `<key>: <path>`                # if object form (`entrypoints` map)
 - ...
 
 **Recent decisions** (<count>):

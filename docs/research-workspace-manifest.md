@@ -73,39 +73,75 @@ first. Cross-skill files (run_log, decisions, open_questions) are append-only.
 
 Top-level orientation. Every `.research/` folder must have this file.
 
+The schema is **permissive**: writers may emit additional descriptive
+fields beyond those listed here, and readers must treat unknown fields
+as informational rather than erroring. Two field-naming conventions are
+both accepted (the second is what `research-context-compressor` v0.6+
+emits in practice; the first is the original 2025 spec, kept for
+compatibility with older repos).
+
 ```yaml
 project_name: "ABM-CAT flood adaptation coupling"
 research_area: "civil & environmental engineering / hydrology"
 research_question: |
   Does coupling agent-based behavioral adaptation with the CAT
   hydrodynamic model meaningfully change projected flood impact?
-current_stage: "second-revision rebuttal"          # discovery | exploration | rebuttal | submission
-primary_tools:
+current_stage: "second-revision rebuttal"
+last_updated: "2026-04-25"
+
+# Optional: free-form description of what this repo IS
+project_kind: "applied-modelling"          # applied-modelling | umbrella-catalog | survey | etc.
+description: |
+  Coupled ABM + hydrodynamic model for flood-impact projection under
+  behavioral adaptation. Modelling work for JOH 2026 revision.
+
+# Tools / runtime: prefer `tools` (current) or `primary_tools` (legacy alias)
+tools:
   - python
   - mesa
   - cat
-key_repositories:
-  - "https://github.com/yang-group/abm-cat"
-data_sources:
-  - id: "harvey-2017"
-    description: "Hurricane Harvey flood depth grids (FEMA)"
-    location: "data/harvey/"
-  - id: "acs-2022"
-    description: "ACS 5-year demographic data, Houston census tracts"
-    location: "data/acs/"
-model_components:
-  - "ABM (mesa)"
-  - "CAT hydrodynamic engine"
-  - "coupling layer (Python)"
-main_entrypoints:
-  - "scripts/run_baseline.py"
-  - "scripts/run_coupled.py"
-  - "scripts/build_figures.py"
+# primary_tools: [python, mesa, cat]      # legacy alias, still accepted
+
+# Repos: prefer `canonical_repos[]` (current, with structure) or
+# `key_repositories[]` (legacy, just URL list)
+canonical_repos:
+  - id: abm-cat
+    url: "https://github.com/yang-group/abm-cat"
+    owns: "ABM + CAT coupling layer"
+# key_repositories: ["https://github.com/yang-group/abm-cat"]   # legacy alias
+
+# Datasets: prefer `datasets[]` (current, with `name/path/schema/purpose`)
+# or `data_sources[]` (legacy, with `id/description/location`)
+datasets:
+  - name: "harvey-2017"
+    path: "data/harvey/"
+    schema: "FEMA depth grids, GeoTIFF, 30 m → downsampled to 90 m"
+    purpose: "calibration target for ABM baseline run"
+  - name: "acs-2022"
+    path: "data/acs/"
+    schema: "ACS 5-year demographic, Houston census tracts (CSV)"
+    purpose: "agent attribute distribution"
+# data_sources: ...                        # legacy alias
+
+# Entrypoints: prefer `entrypoints` (current, object) or
+# `main_entrypoints` (legacy, list)
+entrypoints:
+  baseline_run: "scripts/run_baseline.py"
+  coupled_run: "scripts/run_coupled.py"
+  build_figures: "scripts/build_figures.py"
+# main_entrypoints: [scripts/run_baseline.py, ...]   # legacy alias
+
+# Outputs the user cares about
 important_outputs:
   - "outputs/figures/Fig3_coupled_vs_baseline.png"
   - "outputs/tables/Table1_calibration.csv"
+
+# Optional fields
+model_components: ["ABM (mesa)", "CAT hydrodynamic engine", "coupling layer (Python)"]
 paper_or_deliverable: "JOH 2026 second revision"
-last_updated: "2026-04-25"
+recent_activity:                            # `git log --oneline -10` output, optional
+  - "abc1234 Refactor CAT coupling layer"
+  - "def5678 Add Harvey calibration robustness check"
 ```
 
 **Required fields**: `project_name`, `research_area`, `research_question`,
@@ -114,6 +150,16 @@ last_updated: "2026-04-25"
 **Optional fields**: everything else. Empty list `[]` means "not applicable
 yet". `current_stage` is free-form but conventionally one of
 `discovery / exploration / experiments / writing / rebuttal / submission`.
+
+**Field aliases**: writers may emit either current or legacy spelling
+(both rows below are valid; readers accept either):
+
+| Current (preferred) | Legacy alias | Notes |
+|---|---|---|
+| `tools` | `primary_tools` | flat list of tool names |
+| `canonical_repos[]` | `key_repositories[]` | current adds structured `id/url/owns` per row |
+| `datasets[]` | `data_sources[]` | current uses `name/path/schema/purpose`; legacy uses `id/description/location` |
+| `entrypoints` (object map) | `main_entrypoints` (list) | current map allows symbolic keys (`baseline_run: scripts/...`) |
 
 ## Schema: `.research/experiment_matrix.yml`
 
@@ -158,18 +204,21 @@ should treat any unknown value as informational rather than erroring.
 
 ## Schema: `.research/data_dictionary.yml`
 
-Single source of truth for datasets the project uses.
+Single source of truth for datasets the project uses. Two row shapes
+are accepted (per-dataset). The current `research-context-compressor`
+v0.6+ writer emits the **structured** form; the **descriptive** form
+is the original 2025 spec, kept for compatibility with older repos.
 
 ```yaml
 datasets:
-  - id: "harvey-2017"
-    description: "Hurricane Harvey flood depth grids"
-    source: "FEMA flood maps + Harvey post-event survey"
-    format: "GeoTIFF"
-    units: "meters above local datum"
-    location: "data/harvey/"
-    license: "public domain"
-    notes: "30 m resolution; downsampled to 90 m for ABM grid"
+  # Structured form (current writer output)
+  - name: "harvey-2017"
+    path: "data/harvey/"
+    rows: "FEMA depth grid, ~12k cells after 90 m downsample"
+    schema: "GeoTIFF, meters above local datum"
+    purpose: "calibration target for ABM baseline run"
+
+  # Descriptive form (legacy 2025 spec, still accepted)
   - id: "acs-2022"
     description: "American Community Survey 5-year"
     source: "US Census Bureau"
@@ -177,7 +226,24 @@ datasets:
     units: "various; see column descriptions"
     location: "data/acs/"
     license: "public domain"
+    notes: "Houston census tracts only"
 ```
+
+**Field aliases** (a row may use either set; mixing across rows is
+also fine):
+
+| Structured (current) | Descriptive (legacy) | Notes |
+|---|---|---|
+| `name` | `id` | dataset identifier |
+| `path` | `location` | filesystem path or URL |
+| `schema` | combine `format` + `units` + `notes` | concise machine-readable shape |
+| `purpose` | `description` | why the project uses it |
+| `rows` | — | optional row-count or unit-count summary |
+| — | `source`, `license` | provenance metadata, descriptive form only |
+
+Readers (e.g. `research-project-orienter`) must render either shape,
+falling back to a `(no description)` placeholder if neither
+`purpose` nor `description` is set.
 
 ## Schema: `.research/run_log.md`
 

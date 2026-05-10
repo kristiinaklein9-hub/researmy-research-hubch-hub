@@ -64,31 +64,7 @@ empty (see "What NOT to do"). Skim, do not deep-read.
 
 **An empty manifest field is better than an invented one.**
 
-### Example: humanities project with minimal scaffold
-
-A literature-review project with just `README.md` + `notes/` + a few
-draft markdown files will produce a manifest like:
-
-```yaml
-project_name: "late-ming-print-culture"
-research_area: "history of book publishing"
-research_question: ""             # left empty — README didn't state one
-current_stage: "discovery"
-primary_tools: []                 # no code project
-key_repositories: []
-data_sources: []                  # no data/ directory, intentional
-model_components: []
-main_entrypoints: []               # no scripts/ either
-important_outputs:                 # populated from notes/ + drafts/
-  - "notes/01-survey.md"
-  - "notes/02-method.md"
-  - "drafts/intro-v1.md"
-paper_or_deliverable: ""
-last_updated: "2026-04-26"
-```
-
-Empty fields are honest signals to the next AI session that this is
-a non-code project. They are not failures.
+For a worked humanities-project example with minimal scaffold (README + notes/ only, no code, no data/), see `references/example-humanities-project.md`. It illustrates the "empty fields are honest" rule.
 
 ## Outputs you must produce
 
@@ -155,3 +131,7 @@ After writing the files, print a 5-line summary:
   `.research/open_questions.md` instead.
 - Don't overclaim: if the project has no clear research question yet, leave
   `research_question` empty and add a question to `open_questions.md`.
+
+## See also
+
+- `references/example-humanities-project.md` — worked example for a non-code research project (minimal scaffold)

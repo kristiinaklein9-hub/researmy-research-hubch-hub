@@ -52,73 +52,11 @@ In priority order:
 
 Write to `<project-root>/.paper/`:
 
-- `claims.yml` — every paper-level claim, with evidence pointers + status.
-- `figures.yml` — every figure inventory, with key numbers + supported
-  claims.
-- `revision_history.yml` — append-only log of revision rounds (when a
-  claim or figure changed, in which round, why). See
-  `references/revision_history_schema.md` for the schema and the
-  append-vs-overwrite rules.
+- `claims.yml` — every paper-level claim, with evidence pointers + status. Schema: `references/yaml-schemas.md`.
+- `figures.yml` — every figure inventory, with key numbers + supported claims. Schema: `references/yaml-schemas.md`.
+- `revision_history.yml` — append-only log of revision rounds. Schema + append-vs-overwrite rules: `references/revision_history_schema.md`.
 
-Do **not** touch `journal_format.md`, `reviewer_comments.md`, or
-`style_overrides.md` — those belong to `academic-writing-skills`.
-
-### `.paper/claims.yml` structure
-
-```yaml
-claims:
-  - id: C1
-    text: "Coupled ABM-CAT reduces flood-impact RMSE by 22%."
-    evidence_artifacts:
-      - "outputs/E2/calibration.csv"
-      - "outputs/E2/figure3.png"
-    figure_or_table: ["Fig3"]
-    status: "draft"          # draft | supported | rejected
-    risk: "Reviewer R2 may push back on calibration window."
-    sentence_in_manuscript: "...we observe a 22% reduction in RMSE..."
-```
-
-Required per claim: `id`, `text`, `status`. Numbering: `C1, C2, ...`
-contiguous; if you regenerate, preserve human-assigned IDs.
-
-### `.paper/figures.yml` structure
-
-```yaml
-figures:
-  - id: "Fig1"
-    file: "outputs/figures/Fig1_study_area.png"
-    panels: ["a) site map", "b) gauge locations"]
-    key_numbers: ["12 gauges", "1985-2024 record length"]
-    supports_claims: []
-    caption_in_manuscript: "Figure 1. Study area..."
-```
-
-Required per figure: `id`, `file`, `supports_claims` (may be `[]`).
-
-### `.paper/revision_history.yml` structure
-
-```yaml
-revisions:
-  - round: 1
-    date: "2026-04-15"
-    trigger: "Initial draft v1"
-    changed_claims: []          # all claims new
-    changed_figures: []
-    summary: "First complete draft."
-  - round: 2
-    date: "2026-05-02"
-    trigger: "Reviewer 2 round 1: doubt on calibration window"
-    changed_claims: ["C1", "C4"]
-    changed_figures: ["Fig3"]
-    summary: "Tightened calibration window claim, added robustness check (Fig S3), softened C4 claim wording."
-```
-
-Required per revision: `round`, `date`, `trigger`, `summary`.
-`changed_claims` and `changed_figures` may be `[]` for fresh drafts.
-
-**Append, do not overwrite.** Each new revision round appends a new
-list entry. Past rounds stay verbatim — they're the audit trail. The
-full schema is in `references/revision_history_schema.md`.
+Do **not** touch `journal_format.md`, `reviewer_comments.md`, or `style_overrides.md` — those belong to `academic-writing-skills`.
 
 ## Token-saving behavior
 
@@ -152,3 +90,8 @@ full schema is in `references/revision_history_schema.md`.
 - Don't write to `.research/` — that's the workspace layer, not the
   paper layer.
 - Don't extract claims from cited works — only from THIS paper.
+
+## See also
+
+- `references/yaml-schemas.md` — `.paper/claims.yml` and `.paper/figures.yml` schemas
+- `references/revision_history_schema.md` — `.paper/revision_history.yml` schema + append-only audit-trail rules

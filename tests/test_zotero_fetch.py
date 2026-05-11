@@ -79,6 +79,64 @@ def test_tags_to_wiki_links_empty_for_unknown():
     assert tags_to_wiki_links(["unmapped topic"]) == []
 
 
+def test_make_raw_md_includes_aliases_and_display_title():
+    """v0.83.0: paper notes get aliases + display_title frontmatter so
+    Obsidian graph view renders 'Donkers 2025 — ...' instead of dash slug.
+    """
+    item_data = {
+        "key": "ABCD1234",
+        "title": "Understanding Online Polarization",
+        "authors": ["Donkers, Anna", "Smith, Bob", "Lee, Cara"],
+        "year": "2025",
+        "journal": "Some Journal",
+        "doi": "10.1/example",
+        "abstract": "",
+        "tags": [],
+    }
+    md = make_raw_md(item_data, [], [], topic_cluster="test-cluster")
+
+    assert 'aliases: ["Donkers 2025", "Donkers et al. 2025"]' in md
+    assert 'display_title: "Donkers 2025 — Understanding Online Polarization"' in md
+
+
+def test_make_raw_md_single_author_no_et_al():
+    item_data = {
+        "key": "ABCD",
+        "title": "Solo Study",
+        "authors": ["Donkers, Anna"],
+        "year": "2025",
+        "journal": "",
+        "doi": "",
+        "abstract": "",
+        "tags": [],
+    }
+    md = make_raw_md(item_data, [], [], topic_cluster="x")
+
+    assert 'aliases: ["Donkers 2025"]' in md
+    assert "et al." not in md.split("---\n", 2)[1]  # not in frontmatter
+    assert 'display_title: "Donkers 2025 — Solo Study"' in md
+
+
+def test_make_raw_md_placeholder_author_falls_back_to_empty_aliases():
+    """When Zotero ingestion has placeholder authors like '(See arXiv ...)',
+    aliases is empty and display_title is also empty (avoid garbage display).
+    """
+    item_data = {
+        "key": "ABCD",
+        "title": "(See arXiv 2505.07087)",
+        "authors": ["(See arXiv 2505.07087)"],
+        "year": "2025",
+        "journal": "",
+        "doi": "",
+        "abstract": "",
+        "tags": [],
+    }
+    md = make_raw_md(item_data, [], [], topic_cluster="x")
+
+    assert "aliases: []" in md
+    assert 'display_title: ""' in md
+
+
 def test_tags_to_wiki_links_never_emits_wikilink_brackets():
     """Regression test for the 7 GB graph-pollution bug (2026-05-11).
 

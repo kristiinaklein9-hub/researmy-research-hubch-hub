@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.83.0 (2026-05-11)
+
+Forward-only fix for Obsidian graph display.
+
+### Added
+- Paper notes now get `aliases:` and `display_title:` frontmatter fields
+  computed from `authors[0]` lastname + `year` + `title`. Examples:
+  - `aliases: ["Donkers 2025", "Donkers et al. 2025"]` (multi-author)
+  - `aliases: ["Donkers 2025"]` (single author)
+  - `display_title: "Donkers 2025 — Understanding Online Polarization"`
+- Graph view rationale: the storage filename
+  (`donkers2025-understanding-online-polarization-through-human-agent-intera`)
+  is dash-slugged for URL-safety, but the Obsidian graph node label renders
+  the dash slug — visually noisy. Front Matter Title plugin (or Obsidian
+  1.5+ inline title) reads `display_title:` and renders the human-readable
+  version. Filename stays unchanged (no wikilink breakage).
+- 3 new unit tests in `test_zotero_fetch.py`:
+  `test_make_raw_md_includes_aliases_and_display_title`,
+  `test_make_raw_md_single_author_no_et_al`,
+  `test_make_raw_md_placeholder_author_falls_back_to_empty_aliases`.
+
+### Migration
+- Existing vault papers (pre-v0.83.0) need a one-shot backfill to add
+  these fields. The companion script `vault-backfill-aliases.py` (lives
+  in `~/.claude/scripts/`, not packaged here) walks the vault and injects
+  the fields based on existing frontmatter `authors:` / `year:` / `title:`.
+  Idempotent (re-run = 0 changes); `.bak` backups; `--dry-run` preview.
+
+### Why now
+2026-05-11 graph-hygiene audit: after killing the mega-hub wikilink pollution
+(v0.82.0), the graph still rendered dash-heavy filenames as node labels.
+Community standard (Andy Matuschak, Bryan Jenks, Nick Milo, Front Matter
+Title plugin docs): keep storage filename URL-safe, render display via
+frontmatter. This commit implements the source-side convention; vault-side
+backfill handles existing 1237 paper notes.
+
 ## v0.82.0 (2026-05-11)
 
 Graph-hygiene fix surfaced during a vault audit.

@@ -189,6 +189,29 @@ def make_raw_md(
     if item_data.get("pdf_path"):
         pdf_path_line = f'zotero-pdf-path: "{item_data["pdf_path"]}"\n'
 
+    # v0.83.0: Compute human-readable graph display fields.
+    # Obsidian's storage filename uses dash-slug (URL-safe). Graph view shows
+    # `display_title` (via Front Matter Title plugin) or first `aliases` entry
+    # (via Obsidian 1.5+ inline title). This avoids the visually-noisy dash-slug
+    # node labels users complained about (2026-05-11 graph hygiene audit).
+    aliases_list: list[str] = []
+    display_title_val = ""
+    if authors:
+        first_author = authors[0] or ""
+        # "Lamond, Jessica" -> "Lamond"; "Lamond" -> "Lamond"; "(See arXiv...)" -> ""
+        first_last = first_author.split(',')[0].strip()
+        if first_last and not first_last.startswith('('):
+            year_label = str(year) if year else 'n.d.'
+            short = f"{first_last} {year_label}"
+            aliases_list.append(short)
+            if len(authors) > 1:
+                aliases_list.append(f"{first_last} et al. {year_label}")
+            if title and not title.startswith('(See '):
+                display_title_val = f"{first_last} {year_label} — {title}"
+            else:
+                display_title_val = short
+    aliases_yaml = '[' + ', '.join(f'"{a}"' for a in aliases_list) + ']' if aliases_list else '[]'
+
     wiki_links = tags_to_wiki_links(tags)
 
     notes_section = ""
@@ -212,6 +235,8 @@ def make_raw_md(
 
     content = f"""---
 title: "{title}"
+aliases: {aliases_yaml}
+display_title: "{display_title_val}"
 authors: "{author_str}"
 year: {year if year else 'null'}
 journal: "{journal}"

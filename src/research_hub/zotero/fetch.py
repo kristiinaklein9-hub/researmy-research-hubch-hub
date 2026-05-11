@@ -96,44 +96,57 @@ def extract_item_data(item):
         'tags': tags,
     }
 
+# Concept tags emitted in the "Related Concepts" section of paper bodies.
+# v0.82.0: Changed from [[Wikilink]] to #tag syntax.
+# Prior values like "[[LLM-Agents]]" pointed at non-existent .md files, producing
+# unresolved-link "mega-hub stars" in the Obsidian graph view (one hub had 115+ radial
+# connections from this alone). Tags are the right primitive for cross-paper concept
+# categorization; wikilinks are for explicit named cross-references to real notes.
+# See: https://github.com/WenyuChiou/research-hub/issues (graph hygiene write-up).
 TAG_WIKI_MAP = {
-    'pmt': '[[Protection-Motivation-Theory]]',
-    'protection motivation': '[[Protection-Motivation-Theory]]',
-    'abm': '[[Agent-Based-Modeling]]',
-    'agent-based': '[[Agent-Based-Modeling]]',
-    'agent based': '[[Agent-Based-Modeling]]',
-    'llm': '[[LLM-Agents]]',
-    'large language model': '[[LLM-Agents]]',
-    'generative agent': '[[Generative-Agents]]',
-    'memory': '[[Memory-Systems]]',
-    'retrieval': '[[Memory-Systems]]',
-    'flood risk': '[[Flood-Risk]]',
-    'flood': '[[Flood-Risk]]',
-    'risk perception': '[[Risk-Perception]]',
-    'social vulnerability': '[[Social-Vulnerability]]',
-    'social capital': '[[Social-Capital]]',
-    'social network': '[[Social-Networks]]',
-    'bounded rationality': '[[Bounded-Rationality]]',
-    'active inference': '[[Active-Inference]]',
-    'reinforcement learning': '[[Reinforcement-Learning]]',
-    'socio-hydrology': '[[Socio-Hydrology]]',
-    'sociohydrology': '[[Socio-Hydrology]]',
-    'governance': '[[Governance]]',
-    'multi-agent': '[[Multi-Agent-Systems]]',
-    'multiagent': '[[Multi-Agent-Systems]]',
-    'trust': '[[Trust-in-Risk-Management]]',
-    'relocation': '[[Relocation-Decisions]]',
-    'insurance': '[[Flood-Insurance]]',
-    'place attachment': '[[Place-Attachment]]',
-    'sem': '[[Structural-Equation-Modeling]]',
-    'structural equation': '[[Structural-Equation-Modeling]]',
-    'reflection': '[[Reflection-Metacognition]]',
-    'metacognition': '[[Reflection-Metacognition]]',
-    'adaptation': '[[Flood-Adaptation]]',
-    'natural language': '[[Natural-Language-Processing]]',
+    'pmt': '#protection-motivation-theory',
+    'protection motivation': '#protection-motivation-theory',
+    'abm': '#agent-based-modeling',
+    'agent-based': '#agent-based-modeling',
+    'agent based': '#agent-based-modeling',
+    'llm': '#llm-agents',
+    'large language model': '#llm-agents',
+    'generative agent': '#generative-agents',
+    'memory': '#memory-systems',
+    'retrieval': '#memory-systems',
+    'flood risk': '#flood-risk',
+    'flood': '#flood-risk',
+    'risk perception': '#risk-perception',
+    'social vulnerability': '#social-vulnerability',
+    'social capital': '#social-capital',
+    'social network': '#social-networks',
+    'bounded rationality': '#bounded-rationality',
+    'active inference': '#active-inference',
+    'reinforcement learning': '#reinforcement-learning',
+    'socio-hydrology': '#socio-hydrology',
+    'sociohydrology': '#socio-hydrology',
+    'governance': '#governance',
+    'multi-agent': '#multi-agent-systems',
+    'multiagent': '#multi-agent-systems',
+    'trust': '#trust-in-risk-management',
+    'relocation': '#relocation-decisions',
+    'insurance': '#flood-insurance',
+    'place attachment': '#place-attachment',
+    'sem': '#structural-equation-modeling',
+    'structural equation': '#structural-equation-modeling',
+    'reflection': '#reflection-metacognition',
+    'metacognition': '#reflection-metacognition',
+    'adaptation': '#flood-adaptation',
+    'natural language': '#natural-language-processing',
 }
 
+
 def tags_to_wiki_links(tags):
+    """Return sorted unique concept tags matching the Zotero tag keywords.
+
+    Despite the legacy name (kept for backward import compat), this returns
+    `#tag` strings, not `[[Wikilink]]` strings since v0.82.0.
+    """
     links = set()
     for tag in tags:
         tag_lower = tag.lower()

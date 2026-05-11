@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.82.0 (2026-05-11)
+
+Graph-hygiene fix surfaced during a vault audit.
+
+### Fixed
+- `TAG_WIKI_MAP` in `zotero/fetch.py` was emitting `[[Wikilink]]` strings for
+  23 concept categories. None of those wikilink targets had corresponding
+  `.md` files in the vault, so Obsidian's graph view rendered each target as
+  an unresolved "mega-hub star" — one such star (`[[LLM-Agents]]`) had 115
+  radial connections, another (`[[Memory-Systems]]`) had 61. Visually, the
+  graph looked dominated by 2 giant grey blobs that were just side-effects
+  of automatic concept tagging.
+  Fix: every TAG_WIKI_MAP value changed from `[[Wikilink]]` to `#tag` syntax.
+  Tags are the right Obsidian primitive for cross-paper concept categorization;
+  wikilinks are for explicit named references to real notes.
+- Added regression test `test_tags_to_wiki_links_never_emits_wikilink_brackets`
+  to prevent the anti-pattern from being reintroduced. Existing tests updated
+  to assert the new `#tag` format.
+- The legacy function name `tags_to_wiki_links` is preserved for import
+  back-compat but now returns tags. Docstring updated to flag the misnomer.
+
+### Migration
+- Existing vaults with the old `[[Wikilink]]` references need a one-shot
+  vault-wide migration. The script `vault-migrate-wikilink-to-tag.py`
+  (gitignored, lives in `~/.claude/scripts/`) handles all 24 patterns with
+  `.bak` backups, `--dry-run` preview, and idempotency guarantees.
+  In the canonical vault (Lehigh CEE PhD), the script touched 157 files /
+  247 replacements with zero data loss.
+
 ## v0.81.0 (2026-05-04)
 
 Two small bugs surfaced by the v0.80 end-to-end audit.

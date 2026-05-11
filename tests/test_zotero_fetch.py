@@ -66,14 +66,37 @@ def test_extract_item_data_basic_fields():
 
 
 def test_tags_to_wiki_links_maps_known_terms():
+    """v0.82.0: returns #tag syntax, not [[Wikilink]]. Old wikilink target
+    files never existed → produced mega-hub stars in Obsidian graph view.
+    """
     links = tags_to_wiki_links(["PMT", "flood risk"])
 
-    assert "[[Protection-Motivation-Theory]]" in links
-    assert "[[Flood-Risk]]" in links
+    assert "#protection-motivation-theory" in links
+    assert "#flood-risk" in links
 
 
 def test_tags_to_wiki_links_empty_for_unknown():
     assert tags_to_wiki_links(["unmapped topic"]) == []
+
+
+def test_tags_to_wiki_links_never_emits_wikilink_brackets():
+    """Regression test for the 7 GB graph-pollution bug (2026-05-11).
+
+    Prior to v0.82.0, every paper with an 'llm' tag got `[[LLM-Agents]]`
+    injected — an unresolved wikilink — creating a 115-edge mega-star hub
+    in Obsidian's graph view. Ensure no value in TAG_WIKI_MAP regresses.
+    """
+    sample_tags = [
+        "llm", "memory", "abm", "flood", "social capital", "metacognition",
+        "multi-agent", "place attachment", "natural language",
+    ]
+    links = tags_to_wiki_links(sample_tags)
+    assert links, "expected at least one concept tag"
+    for link in links:
+        assert "[[" not in link and "]]" not in link, (
+            f"v0.82.0 regression: TAG_WIKI_MAP must emit #tag not [[Wikilink]]; got {link!r}"
+        )
+        assert link.startswith("#"), f"expected #tag prefix, got {link!r}"
 
 
 def test_make_raw_md_contains_yaml_frontmatter():

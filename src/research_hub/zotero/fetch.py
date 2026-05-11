@@ -6,14 +6,31 @@ from datetime import datetime, timezone
 
 import requests
 
-def safe_filename(author, year, title):
+def make_paper_slug(author, year, title) -> str:
+    """Compute canonical paper slug (without .md extension).
+
+    Single source of truth for the slug formula. Used by both:
+    - `safe_filename()` to derive note filenames
+    - Cross-reference wikilink generation in `pipeline.py`, `discover.py`,
+      `operations.py` (formerly used divergent `slugify(title)[:60]` formulas
+      that produced long-format slugs not matching actual filenames, causing
+      1,199 broken `[[wikilink]]` phantom mega-hubs in user vaults — see
+      v0.84.0 changelog for incident details).
+
+    Formula: `{author_last}{year}-{4-keyword-stopword-filtered-short-title}`
+    """
     author_last = re.sub(r'[^\w]', '', author.split(',')[0].split()[-1]).lower() if author else 'unknown'
     year_str = str(year) if year else 'nd'
     words = re.sub(r'[^\w\s]', '', title.lower()).split()
     stop = {'a','an','the','of','in','on','at','to','for','with','and','or','by','from','as','its','is','are','this','that'}
     key_words = [w for w in words if w not in stop][:4]
     short = '-'.join(key_words) if key_words else 'untitled'
-    return f"{author_last}{year_str}-{short}.md"
+    return f"{author_last}{year_str}-{short}"
+
+
+def safe_filename(author, year, title):
+    """Compute the .md filename for a paper note. Delegates to make_paper_slug."""
+    return f"{make_paper_slug(author, year, title)}.md"
 
 def get_all_items(base, collection_key):
     items = []

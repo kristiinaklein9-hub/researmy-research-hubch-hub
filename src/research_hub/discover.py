@@ -810,7 +810,10 @@ def _to_papers_input(candidates: list[dict], cluster_slug: str | None) -> list[d
         )
         title = candidate.get("title") or ""
         first_author = names[0].split()[-1].lower() if names else "unknown"
-        slug = f"{first_author}{candidate.get('year') or ''}-{slugify(title)[:60]}"
+        # v0.84.0: use canonical make_paper_slug (matches safe_filename) instead
+        # of divergent slugify(title)[:60] format that caused broken wikilinks.
+        from research_hub.zotero.fetch import make_paper_slug
+        slug = make_paper_slug(first_author, candidate.get('year') or '', title)
         doi = candidate.get("doi") or ""
         arxiv_id = str(candidate.get("arxiv_id") or "")
         if not doi and arxiv_id:

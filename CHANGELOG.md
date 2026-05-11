@@ -1,5 +1,69 @@
 # Changelog
 
+## v0.84.0 (2026-05-11)
+
+Unify paper-slug formula + add safety net to prevent broken cross-ref wikilinks.
+
+### Background
+During the 2026-05-11 graph hygiene audit, we discovered **1,199 broken
+`[[author-year-slug]]` wikilinks** (112 unique phantom targets) in user vaults.
+Each broken target rendered as a phantom mega-hub in Obsidian's graph view,
+with ~19 inbound radial lines = 112 small grey star clusters polluting the
+visual.
+
+### Root cause
+The codebase had **two divergent slug formulas** running in parallel:
+
+1. **`safe_filename(author, year, title)`** (zotero/fetch.py:9) — 4-keyword
+   stopword-filtered short slug → drove actual `.md` filenames.
+2. **`slugify(title)[:60]` / `re.sub(...)[:60]`** at three other call sites
+   (`pipeline.py:111`, `discover.py:813`, `operations.py:264`) — 60-char raw
+   truncated slug → drove cross-ref wikilink targets in older pipeline versions.
+
+When papers were renamed/migrated/deleted in past cleanups, the long-slug
+wikilink targets in OTHER papers' `## Related Papers in This Cluster` sections
+became broken. Today's `link_updater` writes correct short-slug wikilinks,
+but it doesn't actively repair the historical broken ones, and had no safety
+check to refuse writing broken slugs in the first place.
+
+### Fixed
+- **Unified slug formula**: extracted `make_paper_slug(author, year, title)`
+  helper in `zotero/fetch.py` as the single source of truth. `safe_filename()`
+  now delegates to it (returns `{slug}.md`).
+- **Three call sites refactored** to use `make_paper_slug` instead of
+  divergent slugify formulas: `pipeline.py:_auto_generate_missing_fields`,
+  `discover.py:_to_papers_input`, `operations.py` (crossref→entry conversion).
+- **`link_updater.add_wikilinks_to_note` safety net**: new optional
+  `existing_stems: set[str] | None` parameter. When provided, broken slugs
+  (not in the existing files set) are silently filtered out before writing.
+  Backward compatible — `None` keeps legacy behavior.
+- **`update_cluster_links` always passes the set**, computed once from
+  `all_notes`, to enforce the safety net on every regen.
+
+### Added
+- 4 new tests:
+  - `test_add_wikilinks_filters_nonexistent_slugs` (link_updater) — assert
+    broken slugs filtered out when set provided
+  - `test_add_wikilinks_without_existing_stems_writes_all` (link_updater) —
+    backward-compat: None preserves legacy
+  - `test_make_paper_slug_matches_safe_filename` (zotero) — assert filename
+    equals `slug + ".md"` for 3 representative inputs; assert no stopwords
+    or > 80 char output
+
+### Migration
+- Existing vaults with the 1,199 broken wikilinks need a one-shot cleanup.
+  The companion script `~/.claude/scripts/vault-prune-broken-related-links.py`
+  (gitignored, lives outside this repo) scans paper bodies and removes
+  bullets pointing at non-existent files. Includes `.bak` backups,
+  `--dry-run` preview, and idempotency. Verified on a 7-cluster vault:
+  ~1,199 bullets removed, ~89 sections fully cleaned, ~217 files edited,
+  zero data loss outside the broken-link bullets.
+
+### Not done in this version (deferred)
+- Regenerating "Related Papers in This Cluster" sections post-cleanup with
+  the corrected slug formula. Recommend manually running
+  `update_cluster_links()` per cluster once user confirms graph is clean.
+
 ## v0.83.0 (2026-05-11)
 
 Forward-only fix for Obsidian graph display.

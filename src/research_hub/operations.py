@@ -260,9 +260,10 @@ def add_paper(
     pages = str(cr_data.get("page", "") or "")
 
     last_name = authors[0].get("lastName", "unknown") if authors else "unknown"
-    last_clean = re.sub(r"[^a-zA-Z]", "", last_name).lower() or "unknown"
-    title_slug = re.sub(r"[^a-z0-9]+", "-", paper.title.lower()).strip("-")[:60]
-    slug = f"{last_clean}{paper.year}-{title_slug}"
+    # v0.84.0: use canonical make_paper_slug (matches safe_filename) instead of
+    # raw re.sub(...)[:60] long format that caused broken cross-ref wikilinks.
+    from research_hub.zotero.fetch import make_paper_slug
+    slug = make_paper_slug(last_name, paper.year, paper.title)
     abstract = paper.abstract or ""
     paper_arxiv_id = str(getattr(paper, "arxiv_id", "") or "")
     derived_doi = f"10.48550/arxiv.{paper_arxiv_id}" if paper_arxiv_id else ""

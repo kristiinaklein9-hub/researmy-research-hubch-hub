@@ -108,7 +108,11 @@ def _auto_generate_missing_fields(pp: dict, cluster_slug: str | None) -> None:
             first_author = authors[0].split(",")[0].strip().split(" ")[-1]
         year = str(pp.get("year", ""))
         title = pp.get("title", "")
-        generated = f"{_slugify(first_author)}{year}-{_slugify(title)[:60]}".strip("-")
+        # v0.84.0: use canonical make_paper_slug (matches safe_filename) instead
+        # of long divergent slugify(title)[:60] format. Prevents broken cross-ref
+        # wikilinks when papers are renamed/migrated.
+        from research_hub.zotero.fetch import make_paper_slug
+        generated = make_paper_slug(first_author, year, title)
         pp["slug"] = generated or f"paper-{year}".strip("-")
 
     if "sub_category" not in pp or not pp.get("sub_category"):

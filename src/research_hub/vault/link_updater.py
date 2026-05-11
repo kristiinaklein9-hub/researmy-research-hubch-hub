@@ -91,10 +91,28 @@ def find_related_in_cluster(
     return [item[1] for item in related]
 
 
-def add_wikilinks_to_note(note_path: Path, related_slugs: list[str]) -> bool:
-    """Create or replace the related-papers section idempotently."""
+def add_wikilinks_to_note(
+    note_path: Path,
+    related_slugs: list[str],
+    existing_stems: set[str] | None = None,
+) -> bool:
+    """Create or replace the related-papers section idempotently.
+
+    v0.84.0: When ``existing_stems`` is provided, filter ``related_slugs`` to
+    only include slugs that correspond to actual files in the vault. This
+    prevents broken `[[wikilink]]` phantom mega-hubs in the Obsidian graph
+    view (root cause of the 2026-05-11 graph hygiene audit — 1,199 broken
+    cross-refs were found from historical slug-formula divergence between
+    `safe_filename()` and `slugify(title)[:60]`).
+
+    When ``existing_stems`` is None, behavior is unchanged for backward
+    compat. Callers that have a NoteMeta list should always pass
+    ``{note.path.stem for note in all_notes}`` to enforce the safety net.
+    """
     if not note_path.exists():
         return False
+    if existing_stems is not None:
+        related_slugs = [slug for slug in related_slugs if slug in existing_stems]
     text = note_path.read_text(encoding="utf-8", errors="ignore")
     unique_slugs = list(dict.fromkeys(slug for slug in related_slugs if slug))
     new_section = RELATED_SECTION_HEADER + "\n" + "\n".join(
@@ -127,8 +145,12 @@ def update_cluster_links(
         if meta and meta.topic_cluster == cluster_slug:
             all_notes.append(meta)
 
+    # v0.84.0: pass existing_stems as safety net to prevent broken wikilinks.
+    existing_stems = {note.path.stem for note in all_notes} | {new_meta.slug}
     related = find_related_in_cluster(new_meta, all_notes)
-    forward = 1 if add_wikilinks_to_note(new_note_path, [note.slug for note in related]) else 0
+    forward = 1 if add_wikilinks_to_note(
+        new_note_path, [note.slug for note in related], existing_stems
+    ) else 0
     backward = 0
 
     if bidirectional:
@@ -142,7 +164,7 @@ def update_cluster_links(
                 new_slugs = existing_slugs + [new_meta.slug]
             else:
                 new_slugs = [new_meta.slug]
-            if add_wikilinks_to_note(other.path, new_slugs):
+            if add_wikilinks_to_note(other.path, new_slugs, existing_stems):
                 backward += 1
 
     return {"forward": forward, "backward": backward, "scanned": len(all_notes)}

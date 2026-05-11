@@ -2,6 +2,7 @@
 
 from research_hub.zotero.fetch import (
     extract_item_data,
+    make_paper_slug,
     make_raw_md,
     safe_filename,
     tags_to_wiki_links,
@@ -12,6 +13,37 @@ def test_safe_filename_basic():
     result = safe_filename("Smith, John", "2024", "A study of flood risk perception")
 
     assert result == "smith2024-study-flood-risk-perception.md"
+
+
+def test_make_paper_slug_matches_safe_filename():
+    """v0.84.0 regression test: the slug formula must be unified.
+
+    Before v0.84.0, three call sites (pipeline.py:111, discover.py:813,
+    operations.py:264) used divergent `slugify(title)[:60]` formulas that
+    produced long slugs not matching `safe_filename()`'s 4-keyword short
+    format. This caused 1,199 broken cross-ref wikilinks in user vaults
+    (2026-05-11 graph hygiene audit). All paper-slug computation must
+    now use `make_paper_slug`, which `safe_filename` also calls.
+    """
+    inputs = [
+        ("Smith, John", "2024", "A study of flood risk perception"),
+        ("Donkers, Anna", "2025", "Understanding Online Polarization"),
+        ("Gupta, Rahul", "2025",
+         "The role of social learning and collective norm formation in agents"),
+    ]
+    for author, year, title in inputs:
+        slug = make_paper_slug(author, year, title)
+        filename = safe_filename(author, year, title)
+        # filename = slug + ".md", always
+        assert filename == f"{slug}.md", (
+            f"slug formula divergence: make_paper_slug={slug!r}, safe_filename={filename!r}"
+        )
+        # slug must not contain stopwords (the/of/and/in/...)
+        assert "-the-" not in f"-{slug}-"
+        assert "-of-" not in f"-{slug}-"
+        assert "-and-" not in f"-{slug}-"
+        # slug must not exceed ~60 chars (4 keywords typical)
+        assert len(slug) <= 80, f"slug too long: {len(slug)} chars in {slug!r}"
 
 
 def test_safe_filename_handles_missing_year_and_author():

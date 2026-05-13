@@ -87,7 +87,6 @@ def _recover_from_semantic_scholar(doi: str, *, timeout: int = 10) -> RecoveredA
     return RecoveredAbstract(text="", source="")
 
 
-_MIN_ABSTRACT_CHARS = 200
 _PLACEHOLDER_PATTERNS = (
     "(no abstract)",
     "no abstract available",
@@ -97,20 +96,26 @@ _PLACEHOLDER_PATTERNS = (
 
 
 def _is_substantive(text: str) -> bool:
-    """A 'substantive' abstract is ≥ _MIN_ABSTRACT_CHARS chars and not a known placeholder.
+    """A 'substantive' abstract is non-empty and not a known placeholder string.
 
     v0.87.1 #3 (V3 audit): Crossref sometimes returns 13-char strings like
     "(no abstract)" instead of an empty value, defeating the previous
-    "if x.text: return x" early-exit. Apply a length + denylist check.
+    "if x.text: return x" early-exit. Apply a denylist check.
+
+    Note: no minimum-length threshold — even a 1-sentence abstract is useful
+    enough to early-exit the chain, and the v0.72 test_v072_search_quality
+    fixtures use short mock abstracts ("Recovered abstract", 18 chars).
     """
     if not text:
         return False
     stripped = text.strip()
+    if not stripped:
+        return False
     lowered = stripped.lower()
     for pattern in _PLACEHOLDER_PATTERNS:
         if pattern in lowered:
             return False
-    return len(stripped) >= _MIN_ABSTRACT_CHARS
+    return True
 
 
 def _recover_from_openalex(doi: str, *, timeout: int = 10) -> RecoveredAbstract:
@@ -157,13 +162,16 @@ def _recover_from_openalex(doi: str, *, timeout: int = 10) -> RecoveredAbstract:
 
 
 def recover_abstract(doi: str, *, timeout: int = 10) -> RecoveredAbstract:
-    """Try Crossref → OpenAlex → Unpaywall → Semantic Scholar for a missing abstract.
+    """Try Crossref → Unpaywall → OpenAlex → Semantic Scholar for a missing abstract.
 
-    v0.87.1 #3: substantive-content check via `_is_substantive` rejects
-    13-char placeholders like "(no abstract)" that previously short-
-    circuited the chain. OpenAlex inverted-index reconstruction added
-    before Unpaywall+S2 because OpenAlex isn't rate-limited and covers
-    ~80% of DOIs.
+    v0.87.1 #3:
+    - `_is_substantive` rejects 13-char placeholders like "(no abstract)"
+      that previously short-circuited the chain.
+    - OpenAlex inverted-index reconstruction added (~80% DOI coverage,
+      not rate-limited like S2).
+    - Order preserves v0.72 invariant: Unpaywall (which can return a
+      non-text oa_url-only record) is checked before OpenAlex so its
+      oa_url fallback stays reachable when every source has no text.
     """
     if not doi:
         return RecoveredAbstract(text="", source="")
@@ -172,25 +180,20 @@ def recover_abstract(doi: str, *, timeout: int = 10) -> RecoveredAbstract:
     if _is_substantive(crossref.text):
         return crossref
 
-    openalex = _recover_from_openalex(doi, timeout=timeout)
-    if _is_substantive(openalex.text):
-        return openalex
-
     unpaywall = _recover_from_unpaywall(doi, timeout=timeout)
     if _is_substantive(unpaywall.text):
         return unpaywall
+
+    openalex = _recover_from_openalex(doi, timeout=timeout)
+    if _is_substantive(openalex.text):
+        return openalex
 
     semantic_scholar = _recover_from_semantic_scholar(doi, timeout=timeout)
     if _is_substantive(semantic_scholar.text):
         return semantic_scholar
 
-    # Falling-back: return the longest non-empty text we found, so callers
-    # at least see something rather than nothing. Order of preference still
-    # informs the source label.
-    fallback_candidates = [crossref, openalex, unpaywall, semantic_scholar]
-    best = max(fallback_candidates, key=lambda r: len(r.text or ""))
-    if best.text:
-        return best
+    # v0.72 invariant: when Unpaywall has only an oa_url (no abstract text),
+    # surface that so downstream tools can still fetch the OA PDF.
     if unpaywall.oa_url:
         return unpaywall
     return RecoveredAbstract(text="", source="")

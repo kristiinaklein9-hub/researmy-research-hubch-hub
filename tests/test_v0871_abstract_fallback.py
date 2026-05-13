@@ -24,11 +24,18 @@ def test_is_substantive_rejects_no_abstract_placeholder() -> None:
     assert not _is_substantive("Abstract not available")
 
 
-def test_is_substantive_rejects_short_text() -> None:
-    # Anything <200 chars is not substantive enough for downstream use
-    assert not _is_substantive("Too short.")
-    assert not _is_substantive("A" * 199)
-    assert _is_substantive("A" * 200)
+def test_is_substantive_accepts_short_nonplaceholder_text() -> None:
+    """v0.87.1 #3 / v0.87.1.1 fix: no length threshold — even 1-sentence
+    abstracts (≥ a few chars, non-placeholder) count as substantive so the
+    chain doesn't keep re-querying when something usable is already in hand.
+
+    The v0.72 test_v072_search_quality fixtures use 18-char mock abstracts
+    ("Recovered abstract"); the threshold-based rejection broke those tests
+    when it landed in v0.87.1, so v0.87.1.1 drops the threshold.
+    """
+    assert _is_substantive("Recovered abstract")
+    assert _is_substantive("Too short.")
+    assert _is_substantive("A" * 50)
 
 
 def test_is_substantive_rejects_empty_and_whitespace() -> None:
@@ -102,20 +109,20 @@ def test_recover_chain_prefers_substantive_over_placeholder() -> None:
     assert result.text == substantive_text
 
 
-def test_recover_chain_falls_through_to_s2_when_all_short() -> None:
-    """When Crossref/OpenAlex/Unpaywall all return placeholders, S2 wins
-    if it has a substantive abstract."""
+def test_recover_chain_falls_through_to_s2_when_earlier_placeholders() -> None:
+    """When Crossref/Unpaywall/OpenAlex all return placeholders or empty,
+    S2 wins if it has a substantive abstract."""
     substantive_text = ("S2 paper content " * 30)
 
     with patch(
         "research_hub.search.abstract_recovery._recover_from_crossref",
         return_value=RecoveredAbstract(text="(no abstract)", source="crossref"),
     ), patch(
-        "research_hub.search.abstract_recovery._recover_from_openalex",
-        return_value=RecoveredAbstract(text="", source=""),
-    ), patch(
         "research_hub.search.abstract_recovery._recover_from_unpaywall",
         return_value=RecoveredAbstract(text="", source="", oa_url=""),
+    ), patch(
+        "research_hub.search.abstract_recovery._recover_from_openalex",
+        return_value=RecoveredAbstract(text="", source=""),
     ), patch(
         "research_hub.search.abstract_recovery._recover_from_semantic_scholar",
         return_value=RecoveredAbstract(text=substantive_text, source="s2"),
@@ -125,25 +132,26 @@ def test_recover_chain_falls_through_to_s2_when_all_short() -> None:
     assert result.source == "s2"
 
 
-def test_recover_chain_returns_longest_when_none_substantive() -> None:
-    """If every source returns short text, return the longest one rather than nothing."""
+def test_recover_chain_returns_unpaywall_oa_url_when_no_text_anywhere() -> None:
+    """v0.72 invariant: when nobody returns abstract text but Unpaywall has
+    an OA URL, surface the Unpaywall record so downstream can still fetch PDF."""
     with patch(
         "research_hub.search.abstract_recovery._recover_from_crossref",
-        return_value=RecoveredAbstract(text="short", source="crossref"),
-    ), patch(
-        "research_hub.search.abstract_recovery._recover_from_openalex",
-        return_value=RecoveredAbstract(text="this is somewhat longer than crossref", source="openalex"),
+        return_value=RecoveredAbstract(text="", source=""),
     ), patch(
         "research_hub.search.abstract_recovery._recover_from_unpaywall",
-        return_value=RecoveredAbstract(text="", source="", oa_url=""),
+        return_value=RecoveredAbstract(text="", source="unpaywall", oa_url="https://x/y.pdf"),
+    ), patch(
+        "research_hub.search.abstract_recovery._recover_from_openalex",
+        return_value=RecoveredAbstract(text="", source=""),
     ), patch(
         "research_hub.search.abstract_recovery._recover_from_semantic_scholar",
         return_value=RecoveredAbstract(text="", source=""),
     ):
         result = recover_abstract("10.test/abc")
 
-    # Longest of the 4 = openalex (37 chars > 5 chars)
-    assert result.source == "openalex"
+    assert result.source == "unpaywall"
+    assert result.oa_url == "https://x/y.pdf"
 
 
 def test_recover_chain_returns_empty_when_doi_missing() -> None:

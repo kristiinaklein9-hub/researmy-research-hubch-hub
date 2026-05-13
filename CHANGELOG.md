@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.88.5 (2026-05-13) — broader MOC keyword heuristic
+
+Field-discovered in live re-ingest of a new `ml-flood-forecasting`
+cluster (stage A smoke test): the new cluster overview had no
+`## Related MOCs` section because `derive_moc_links` only matched
+literal `"water"` substring. A cluster about flood forecasting,
+hydrology, rainfall, etc. would never auto-route to the
+Water-Resources MOC, leaving it isolated in graph view.
+
+### Fix (`vault/hub_overview.py`)
+
+`derive_moc_links` now recognises a broader water/hydrology keyword
+set: `water`, `flood`, `hydro`, `rainfall`, `river`, `drainage`,
+`drought`, `sociohydrology`, `stormwater`, `reservoir`. Also expands
+the LLM-Agents heuristic to include the standalone `agent` keyword,
+so multi-agent / generative-agent clusters route correctly.
+
+Effect on the live vault (no manual edit): re-running
+`vault rebuild-overviews --force` now adds:
+
+- `ml-flood-forecasting/00_overview.md` — `## Related MOCs` →
+  `[[Water-Resources]]`
+- `hub/_moc/Water-Resources.md` — Clusters list now includes
+  `ml-flood-forecasting`
+
+### Tests (`tests/test_moc.py`)
+
+- `test_moc_links_v0885_broader_water_keywords` (flood / hydrology /
+  rainfall / drought / stormwater / reservoir / `urban drainage`
+  query text)
+- `test_moc_links_v0885_agent_keyword_for_llm_agents` (`multi-agent`
+  slug, `generative agent persona` query text)
+
+All existing MOC-link tests still pass.
+
 ## v0.88.4 (2026-05-13) — retype body cleanup + frontmatter list dedupe
 
 Closes the two code-level bugs surfaced by the v0.88.3 vault audit

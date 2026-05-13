@@ -420,9 +420,17 @@ def derive_moc_links(
         _append_unique(links, str(name).strip())
     text_parts = [cluster_slug, *(cluster_queries or [])]
     haystack = " ".join(str(part) for part in text_parts if part).lower()
-    if "llm" in haystack or "large language model" in haystack:
+    if "llm" in haystack or "large language model" in haystack or "agent" in haystack:
         _append_unique(links, "LLM-Agents")
-    if "water" in haystack:
+    # v0.88.5: broaden water-resources heuristic so flood / hydrology /
+    # drainage / river / drought / rainfall clusters also link to the
+    # Water-Resources MOC. Without this, a "ml-flood-forecasting" cluster
+    # got no MOC links and ended up isolated in the graph view.
+    water_keywords = (
+        "water", "flood", "hydro", "rainfall", "river", "drainage",
+        "drought", "sociohydrology", "stormwater", "reservoir",
+    )
+    if any(kw in haystack for kw in water_keywords):
         _append_unique(links, "Water-Resources")
     return links
 

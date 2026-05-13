@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.88.4 (2026-05-13) — retype body cleanup + frontmatter list dedupe
+
+Closes the two code-level bugs surfaced by the v0.88.3 vault audit
+(handled there by manual `.md` cleanup; this release prevents the
+issues from recurring on future retype / enrich-existing runs).
+
+### Fix #1 — `paper retype` now cleans body, not just frontmatter
+
+`retype_paper` previously rewrote frontmatter `zotero-key` but left
+two stale lines in the note body:
+
+- `**Citation:** <old venue>` — still showed the source itemType's
+  publication name (e.g. `arXiv` after a journalArticle→
+  conferencePaper retype, or `Open MIND` after journalArticle→
+  dataset).
+- `*Source: Zotero key \`OLDKEY\`*` footer — still pointed at the
+  trashed item's key.
+
+New helper `_rewrite_paper_body_after_retype` recomputes the
+Citation line from the new item template's venue field
+(`proceedingsTitle` for conferencePaper, `publicationTitle` for
+journalArticle, etc.) plus volume/issue/pages, and rewrites the
+footer to the new Zotero key. For datasets it emits `Dataset
+(Zenodo)` / `Dataset (Figshare)` / `Dataset` based on DOI prefix.
+
+### Fix #2 — frontmatter list fields dedupe on write
+
+`_render_field` now dedupes list values (order-preserving) before
+writing them to disk. The exact bug surfaced on arnold2026 +
+goldshtein2025: 5 queries appended 3 times by repeated
+enrich-existing runs → 15-line `cluster_queries:` block. With the
+dedupe, the same upstream call produces 5 lines.
+
+Defensive at the boundary — applies to `cluster_queries`, `tags`,
+`collections`, `aliases`, any list-valued frontmatter field. Most
+real-world lists are already unique, so this is a no-op for them.
+
+### Tests
+
+`tests/test_v0884_polish.py` (9 new):
+
+- `test_retype_body_cleanup_replaces_citation_and_footer_for_conferencePaper`
+- `test_retype_body_cleanup_dataset_uses_zenodo_marker`
+- `test_retype_body_cleanup_dataset_figshare_marker`
+- `test_retype_body_cleanup_dataset_generic_marker_when_no_doi`
+- `test_retype_body_cleanup_skips_if_no_citation_line`
+- `test_render_field_dedupes_string_list_order_preserving`
+- `test_render_field_keeps_empty_list_as_inline_marker`
+- `test_render_field_dedupes_repeated_query_blocks`
+- `test_retype_apply_also_cleans_body_footer`
+
+All existing retype / frontmatter / paper-relabel tests still pass.
+
 ## v0.88.3 (2026-05-13) — TL;DR mobile readability fix + stale-artifact refresh
 
 A field-discovered v0.88 #6 polish bug: the brief mirror's `## TL;DR`

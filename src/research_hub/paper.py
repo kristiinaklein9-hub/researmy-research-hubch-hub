@@ -746,7 +746,22 @@ def _render_field(key: str, value: object) -> list[str]:
     if isinstance(value, list):
         if not value:
             return [f"{key}: []"]
-        return [f"{key}:"] + [f"  - {item}" for item in value]
+        # v0.88.4 #2: dedupe list values (order-preserving) before writing to
+        # disk. Upstream enrich-existing / paper-relabel flows can accumulate
+        # duplicates in cluster_queries / tags / collections / aliases when
+        # they re-run on an already-tagged note; we want the rendered
+        # frontmatter to stay clean regardless. Stringify per-item so
+        # heterogeneous lists (mostly strings, occasional dict) still dedupe
+        # by stringified identity.
+        seen: set[str] = set()
+        deduped: list[object] = []
+        for item in value:
+            sig = str(item)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            deduped.append(item)
+        return [f"{key}:"] + [f"  - {item}" for item in deduped]
     if value is None:
         return [f"{key}: "]
     if isinstance(value, bool):
@@ -1014,8 +1029,83 @@ def retype_paper(
     except Exception as exc:
         report["errors"].append(f"rewrite frontmatter {note_path}: {exc}")
 
+    # v0.88.4 #1: also clean stale body lines (Citation + Zotero key
+    # footer) so the note doesn't display contradictory info after retype.
+    try:
+        _rewrite_paper_body_after_retype(
+            note_path,
+            new_zotero_key=new_key,
+            old_zotero_key=zotero_key,
+            new_item_data=new_data,
+            target_type=target_type,
+            target_venue_field=target_venue_field,
+        )
+    except Exception as exc:
+        report["errors"].append(f"rewrite body {note_path}: {exc}")
+
     _rebuild_dedup_index(cfg)
     return report
+
+
+def _rewrite_paper_body_after_retype(
+    note_path: Path,
+    *,
+    new_zotero_key: str,
+    old_zotero_key: str,
+    new_item_data: dict,
+    target_type: str,
+    target_venue_field: str,
+) -> None:
+    """v0.88.4 #1: rewrite ``**Citation:**`` line and ``Source: Zotero key``
+    footer after a retype so they no longer display the previous itemType's
+    venue / old Zotero key.
+
+    Skips silently if either token isn't present in the note body (older
+    notes that never had a Citation line written).
+    """
+    import re as _re
+
+    text = note_path.read_text(encoding="utf-8")
+
+    # Compute new Citation venue from the target template's venue field.
+    venue = ""
+    if target_venue_field:
+        venue = str(new_item_data.get(target_venue_field, "") or "").strip()
+    elif target_type == "dataset":
+        doi = str(new_item_data.get("DOI", "") or "").strip().lower()
+        if doi.startswith("10.5281/zenodo."):
+            venue = "Dataset (Zenodo)"
+        elif doi.startswith("10.6084/m9.figshare."):
+            venue = "Dataset (Figshare)"
+        else:
+            venue = "Dataset"
+
+    volume = str(new_item_data.get("volume", "") or "").strip()
+    issue = str(new_item_data.get("issue", "") or "").strip()
+    pages = str(new_item_data.get("pages", "") or "").strip()
+    citation_line = venue
+    if volume:
+        citation_line += f", {volume}"
+    if issue:
+        citation_line += f"({issue})"
+    if pages:
+        citation_line += f", {pages}"
+    new_citation = f"**Citation:** {citation_line}"
+
+    # Replace the first `**Citation:**` line only (it's always in the
+    # paper note's preamble block, never inside an abstract or quote).
+    text = _re.sub(r"\*\*Citation:\*\*[^\n]*", new_citation, text, count=1)
+
+    # Replace the `Source: Zotero key \`OLDKEY\`` footer so external readers
+    # who scan the bottom-of-note attribution see the canonical key.
+    if old_zotero_key:
+        text = _re.sub(
+            rf"(Source: Zotero key `){_re.escape(old_zotero_key)}(`)",
+            rf"\g<1>{new_zotero_key}\g<2>",
+            text,
+        )
+
+    note_path.write_text(text, encoding="utf-8")
 
 
 def _maybe_get_zotero_client(zotero_keys: list[str], report: dict):

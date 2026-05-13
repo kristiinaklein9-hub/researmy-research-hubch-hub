@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.88.7 (2026-05-13) — NLM cookie auto-refresh (stop "auth keeps expiring")
+
+User-reported pain: every few days `notebooklm bundle/upload/download`
+fails with ``Authentication expired or invalid. Redirected to:
+https://accounts.google.com/...`` even though the user did
+``notebooklm login`` not long before. Diagnostic showed local cookies
+in ``.research_hub/nlm_sessions/state.json`` had expiration **399 days
+in the future** — clearly not local expiry. The state.json mtime was
+"last login time", never updated across operations.
+
+Root cause: Google session has two cookie layers. The long-lived
+``SID/HSID/SSID/NID`` cookies are stable (1+ year), but the
+**short-lived rotators** (``SIDCC`` / ``__Secure-1PSIDCC`` /
+``__Secure-3PSIDCC`` / ``SIDTS`` / ``OSID`` plus the CSRF
+``SNlM0e``) refresh on every request. research-hub's sync facade
+loaded the storage snapshot at construction and never wrote the
+rotated jar back, so cross-process restarts re-loaded an
+increasingly-stale snapshot. Concurrently using NotebookLM in a
+normal Chrome browser pushed Google to invalidate the captured
+session faster.
+
+### Fix
+
+`research_hub/notebooklm/client.py::NotebookLMClient`:
+
+- `close()` now calls notebooklm-py 0.4.1's
+  ``save_cookies_to_storage(cookie_jar, storage_path)`` before
+  tearing down the upstream `__aexit__`. Upstream's helper takes an
+  OS-level file lock so concurrent CLI runs serialize cleanly.
+- New opt-in `refresh_and_save()` method: runs upstream
+  `refresh_auth()` to fetch a fresh CSRF + session id, then persists
+  the jar. Useful for long-running flows (bulk upload 30+ sources)
+  where the user wants the rotated jar on disk before the next leg.
+- All save-state errors are swallowed best-effort — a failed cookie
+  flush MUST NOT poison the actual upload/download that succeeded.
+
+### Tests (`tests/test_v0887_nlm_state_refresh.py`, 4 new)
+
+- `test_close_persists_rotated_cookies_to_state_json` — close()
+  triggers exactly one save with the original state_file path
+- `test_close_save_state_is_best_effort_on_failure` — a raising
+  save_cookies_to_storage must NOT propagate
+- `test_refresh_and_save_calls_both_refresh_and_save` — opt-in API
+  drives both refresh_auth() and save
+- `test_save_state_skipped_when_no_storage_path` — env-var-auth path
+  (storage_path=None) gracefully no-ops
+
+### User-facing effect
+
+After v0.88.7:
+- A single `notebooklm login` should remain valid much longer because
+  every research-hub session writes the rotated cookies back.
+- Using NotebookLM in your regular Chrome no longer monotonically
+  rots the saved state — research-hub gets a chance to capture the
+  rotation on its own next run.
+
+If the auth still expires, the failure mode is unchanged: re-run
+`research-hub notebooklm login`.
+
 ## v0.88.6 (2026-05-13) — `auto --with-summary` now fills KF/Methodology/Relevance too
 
 Field-discovered in live re-ingest of `ml-flood-forecasting` (stage A

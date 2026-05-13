@@ -431,12 +431,73 @@ class NotebookLMClient:
             self._run(_go())
             return out_path.read_text(encoding="utf-8")
 
+    async def _save_state(self) -> None:
+        """v0.88.7: persist rotated Google cookies back to state.json.
+
+        Google rotates short-lived auth tokens (SIDCC / SIDTS / OSID /
+        CSRF) during each session. Without this, the local state.json
+        captured at ``notebooklm login`` time stays frozen — subsequent
+        research-hub runs load increasingly-stale cookies, and Google
+        eventually rejects them with "Authentication expired or
+        invalid" (which presents to the user as "the login keeps
+        getting wiped"). Calling notebooklm-py's
+        ``save_cookies_to_storage`` after each successful client
+        lifetime persists the freshly-rotated jar, with the upstream
+        helper's OS-level file lock to keep concurrent CLI runs safe.
+
+        Best-effort: state-save failure must never poison the
+        operation that actually succeeded.
+        """
+        try:
+            from notebooklm.auth import save_cookies_to_storage
+        except Exception:
+            return
+        auth = getattr(self._client, "auth", None)
+        if auth is None:
+            return
+        cookie_jar = getattr(auth, "cookie_jar", None)
+        storage_path = getattr(auth, "storage_path", None)
+        if cookie_jar is None or not storage_path:
+            return
+        try:
+            from pathlib import Path as _Path
+            save_cookies_to_storage(cookie_jar, _Path(str(storage_path)))
+        except Exception:
+            pass
+
+    def refresh_and_save(self) -> None:
+        """v0.88.7: force a token refresh + state.json write mid-session.
+
+        Optional opportunistic hook for long-running flows (e.g. bulk
+        upload of 30+ sources) where you want the cookie jar persisted
+        before the next leg, not only at close().
+        """
+        async def _go():
+            refresh = getattr(self._client, "refresh_auth", None)
+            if refresh is not None:
+                try:
+                    await self._maybe_await(refresh())
+                except Exception:
+                    pass
+            await self._save_state()
+
+        try:
+            self._run(_go())
+        except Exception:
+            pass
+
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
 
         async def _go():
+            # v0.88.7: persist rotated cookies BEFORE __aexit__ tears
+            # down the underlying httpx client / patchright context.
+            try:
+                await self._save_state()
+            except Exception:
+                pass
             exit_method = getattr(self._client, "__aexit__", None)
             if exit_method is not None:
                 await self._maybe_await(exit_method(None, None, None))

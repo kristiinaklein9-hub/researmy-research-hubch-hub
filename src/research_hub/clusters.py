@@ -125,6 +125,7 @@ class Cluster:
     notebooklm_notebook: str = ""
     notebooklm_notebook_url: str = ""
     notebooklm_notebook_id: str = ""
+    moc_links: list[str] = field(default_factory=list)
     created_at: str = ""
     first_query: str = ""
     description: str = ""

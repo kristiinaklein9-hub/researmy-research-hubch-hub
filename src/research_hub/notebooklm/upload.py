@@ -63,6 +63,7 @@ class DownloadReport:
     artifact_path: Path
     char_count: int
     titles: list[str] = field(default_factory=list)
+    brief_md_path: Path | None = None
 
 
 def _load_nlm_cache(cache_path: Path) -> dict:
@@ -366,13 +367,29 @@ def download_briefing_for_cluster(
     if artifact.titles:
         header += "Saved briefings: " + "; ".join(artifact.titles) + "\n"
     out_path.write_text(header + "\n" + artifact.text + "\n", encoding="utf-8")
+    from research_hub.notebooklm.download import (
+        mirror_brief_and_populate_overview,
+        source_dois_for_cluster,
+    )
+
+    source_doi_list = source_dois_for_cluster(cfg.root, safe_slug)
+    brief_md_path = mirror_brief_and_populate_overview(
+        cluster=cluster,
+        vault_root=cfg.root,
+        artifact=artifact,
+        archive_path=out_path,
+        generated_at=now,
+        source_doi_list=source_doi_list,
+    )
 
     cluster_cache.setdefault("artifacts", {})
     cluster_cache["artifacts"]["brief"] = {
         "path": str(out_path),
+        "md_path": str(brief_md_path),
         "downloaded_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "char_count": len(artifact.text),
         "titles": artifact.titles,
+        "source_doi_list": source_doi_list,
     }
     _save_nlm_cache(cache_path, cache)
     _log_jsonl(log_path, {"kind": "download_ok", "artifact_path": str(out_path)})
@@ -383,6 +400,7 @@ def download_briefing_for_cluster(
         artifact_path=out_path,
         char_count=len(artifact.text),
         titles=artifact.titles,
+        brief_md_path=brief_md_path,
     )
 
 

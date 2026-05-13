@@ -18,6 +18,7 @@ from research_hub.dedup import DedupHit, DedupIndex, build_from_obsidian, build_
 from research_hub.manifest import Manifest, new_entry
 from research_hub.utils.doi import extract_arxiv_id
 from research_hub.verify import VerificationResult, VerifyCache, verify_arxiv, verify_doi, verify_paper
+from research_hub.vault.hub_overview import derive_moc_links, ensure_moc, populate_overview
 from research_hub.vault.link_updater import update_cluster_links
 from research_hub.zotero.client import add_note, check_duplicate, get_client
 from research_hub.zotero.fetch import make_raw_md
@@ -1267,6 +1268,14 @@ def run_pipeline(
         if errors:
             errors_log = _write_error_log(cfg.logs, errors)
             p(f"Errors logged: {errors_log}")
+        if cluster_obj is not None:
+            try:
+                hub_result = _sync_hub_overview(cfg, cluster_obj)
+                if hub_result["moc_links"]:
+                    p("MOCs: " + ", ".join(hub_result["moc_links"]))
+                p(f"Hub overview: {hub_result['overview_path']}")
+            except Exception as exc:
+                p(f"  [warn] hub overview population failed: {exc}")
         p(f"JSON: {out_path}\n=== DONE ===")
 
     if cluster_obj is not None:
@@ -1274,6 +1283,23 @@ def run_pipeline(
     if no_zotero and cluster_slug and not dry_run:
         print(f"[no-zotero] wrote {oc} obsidian notes; 0 zotero items", file=sys.stderr)
     return 0
+
+
+def _sync_hub_overview(cfg, cluster) -> dict[str, object]:
+    cluster_queries = [str(getattr(cluster, "first_query", "") or "")]
+    moc_links = derive_moc_links(
+        cluster.slug,
+        cluster_queries=cluster_queries,
+        moc_links=list(getattr(cluster, "moc_links", []) or []),
+    )
+    for name in moc_links:
+        ensure_moc(Path(cfg.root), name)
+    overview_path = populate_overview(
+        cluster_slug=cluster.slug,
+        vault_root=Path(cfg.root),
+        moc_links=moc_links,
+    )
+    return {"overview_path": overview_path, "moc_links": moc_links}
 
 
 def _refresh_cluster_base(cfg, cluster) -> None:

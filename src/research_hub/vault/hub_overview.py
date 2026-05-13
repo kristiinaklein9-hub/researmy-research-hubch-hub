@@ -136,6 +136,172 @@ def ensure_moc(vault_root: Path, name: str, *, description: str = "") -> Path:
     return path
 
 
+HOME_FILENAME = "_HOME.md"
+_HOME_SECTION_RE = re.compile(
+    r"(##[ \t]+)(Clusters|Reading queue|Recent NotebookLM briefs|Dashboard)([ \t]*\n)(.*?)(?=^##[ \t]|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def populate_home(cfg) -> Path:
+    """v0.88 #7: write/refresh `<vault>/_HOME.md` as the canonical
+    Obsidian landing page.
+
+    Generated sections (replaced on each call, idempotent):
+    - ## Clusters
+    - ## Reading queue (top 5 unread, year DESC)
+    - ## Recent NotebookLM briefs (latest 3 brief mirrors)
+    - ## Dashboard (file:// link to .research_hub/dashboard.html)
+
+    Frontmatter is written ONCE; if the file exists, frontmatter is
+    preserved verbatim. User-added sections (anything not in the
+    generated-headings list above) are preserved.
+    """
+    from research_hub.clusters import ClusterRegistry
+
+    vault_root = Path(cfg.root)
+    home_path = vault_root / HOME_FILENAME
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    clusters = list(registry.list())
+
+    cluster_lines: list[str] = []
+    for cluster in clusters:
+        slug = (cluster.slug or "").strip()
+        if not slug:
+            continue
+        name = (cluster.name or slug).strip()
+        paper_count = _count_papers(vault_root, slug)
+        cluster_queries = [str(getattr(cluster, "first_query", "") or "")]
+        moc_links = derive_moc_links(slug, cluster_queries=cluster_queries)
+        moc_tail = ""
+        if moc_links:
+            moc_wikilinks = " / ".join(f"[[{m}]]" for m in moc_links)
+            moc_tail = f" — {moc_wikilinks}"
+        cluster_lines.append(
+            f"- [[{slug}/00_overview|{name}]] ({paper_count} papers){moc_tail}"
+        )
+    clusters_body = "\n".join(cluster_lines) if cluster_lines else "(no clusters yet)"
+
+    reading_queue_body = _render_home_reading_queue(vault_root, clusters, limit=5)
+    briefs_body = _render_home_recent_briefs(vault_root, clusters, limit=3)
+    dashboard_path = vault_root / ".research_hub" / "dashboard.html"
+    dashboard_body = (
+        f"- [Dashboard HTML]({dashboard_path.as_uri()}) (desktop only — open with `research-hub dashboard --open`)\n"
+        f"- [Markdown summary](.research_hub/dashboard-summary.md) (Obsidian-internal, mobile-friendly)"
+    )
+
+    sections = {
+        "Clusters": clusters_body,
+        "Reading queue": reading_queue_body,
+        "Recent NotebookLM briefs": briefs_body,
+        "Dashboard": dashboard_body,
+    }
+
+    if home_path.exists():
+        text = home_path.read_text(encoding="utf-8")
+        new_text = _refresh_home_sections(text, sections)
+    else:
+        new_text = _build_home_from_scratch(sections)
+
+    home_path.write_text(new_text, encoding="utf-8")
+    return home_path
+
+
+def _count_papers(vault_root: Path, cluster_slug: str) -> int:
+    raw = vault_root / "raw" / cluster_slug
+    if not raw.exists():
+        return 0
+    return sum(
+        1 for p in raw.glob("*.md")
+        if p.name not in {"00_overview.md", "index.md"}
+    )
+
+
+def _render_home_reading_queue(vault_root: Path, clusters, limit: int) -> str:
+    candidates: list[tuple[int, str, str, str]] = []  # (-year, slug, stem, title-or-stem)
+    for cluster in clusters:
+        slug = (cluster.slug or "").strip()
+        if not slug:
+            continue
+        raw = vault_root / "raw" / slug
+        if not raw.exists():
+            continue
+        for note_path in raw.glob("*.md"):
+            if note_path.name in {"00_overview.md", "index.md"}:
+                continue
+            meta = _read_frontmatter(note_path)
+            status = str(meta.get("status", "") or "").strip().lower()
+            if status != "unread":
+                continue
+            year = _year_value(meta.get("year"))
+            stem = note_path.stem
+            title = str(meta.get("title", "") or stem)
+            candidates.append((-year, slug, stem, title))
+    if not candidates:
+        return "(no unread papers — all clusters caught up)"
+    candidates.sort()
+    lines = []
+    for _, slug, stem, title in candidates[:limit]:
+        title_trim = title.strip()
+        if len(title_trim) > 80:
+            title_trim = title_trim[:77].rstrip() + "..."
+        lines.append(f"- [[{stem}|{title_trim}]] ({slug})")
+    return "\n".join(lines)
+
+
+def _render_home_recent_briefs(vault_root: Path, clusters, limit: int) -> str:
+    found: list[tuple[str, str, Path]] = []  # (timestamp-from-name, slug, path)
+    for cluster in clusters:
+        slug = (cluster.slug or "").strip()
+        if not slug:
+            continue
+        brief = latest_brief_md(vault_root, slug)
+        if brief is None:
+            continue
+        # filename pattern: notebooklm-brief-<UTC-timestamp>.md
+        ts = brief.stem.removeprefix("notebooklm-brief-")
+        found.append((ts, slug, brief))
+    if not found:
+        return "(no NotebookLM briefs downloaded yet)"
+    found.sort(reverse=True)
+    lines = []
+    for ts, slug, brief in found[:limit]:
+        lines.append(f"- [[{brief.stem}]] ({slug} — generated {ts[:8]})")
+    return "\n".join(lines)
+
+
+def _refresh_home_sections(text: str, sections: dict[str, str]) -> str:
+    """Idempotently replace the 4 generated sections in an existing _HOME.md."""
+    def replace(match: re.Match[str]) -> str:
+        heading_name = match.group(2)
+        new_body = sections.get(heading_name)
+        if new_body is None:
+            return match.group(0)
+        return f"{match.group(1)}{heading_name}{match.group(3)}\n{new_body}\n\n"
+
+    new_text = _HOME_SECTION_RE.sub(replace, text)
+    # Normalize trailing newlines so subsequent passes don't drift.
+    return new_text.rstrip("\n") + "\n"
+
+
+def _build_home_from_scratch(sections: dict[str, str]) -> str:
+    body_parts = ["# Research Hub", ""]
+    for heading in ("Clusters", "Reading queue", "Recent NotebookLM briefs", "Dashboard"):
+        body_parts.append(f"## {heading}")
+        body_parts.append("")
+        body_parts.append(sections[heading])
+        body_parts.append("")
+    return (
+        "---\n"
+        "type: home\n"
+        'aliases: ["Home", "🏠"]\n'
+        "---\n\n"
+        + "\n".join(body_parts).rstrip()
+        + "\n"
+    )
+
+
 _MOC_CLUSTERS_HEADING = "Clusters tagged with this MOC"
 # v0.88 #4: `[ \t]*\n` (not `\s*\n`) so the regex doesn't eat blank lines AFTER
 # the heading. With `\s*\n`, each populate_moc() run would consume one more
@@ -313,6 +479,11 @@ def populate_all_overviews(
     try:
         populate_all_mocs(cfg)
     except Exception:  # noqa: BLE001 — same defensive posture as the per-cluster loop
+        pass
+    # v0.88 #7: refresh vault-root _HOME.md as the canonical landing page.
+    try:
+        populate_home(cfg)
+    except Exception:  # noqa: BLE001
         pass
     return written
 

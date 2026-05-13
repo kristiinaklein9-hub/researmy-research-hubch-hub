@@ -75,9 +75,9 @@ def test_doctor_all_green(tmp_path, monkeypatch, capsys):
         json.dumps({"doi_to_hits": {"a": [{}], "b": [{}]}, "title_to_hits": {"t": [{}]}}),
         encoding="utf-8",
     )
-    session_dir = root / ".research_hub" / "nlm_sessions" / "default"
-    session_dir.mkdir(parents=True)
-    (session_dir / "state.json").write_text("{}", encoding="utf-8")
+    session_root = root / ".research_hub" / "nlm_sessions"
+    session_root.mkdir(parents=True)
+    (session_root / "state.json").write_text('{"cookies": []}', encoding="utf-8")
 
     monkeypatch.setattr("requests.head", lambda *args, **kwargs: SimpleNamespace(status_code=200))
     monkeypatch.setattr(

@@ -1177,16 +1177,16 @@ def run_doctor(*, strict: bool = False) -> list[CheckResult]:
 
     if cfg is not None:
         try:
-            session_dir = cfg.research_hub_dir / "nlm_sessions" / "default"
-            if session_dir.exists() and any(session_dir.iterdir()):
-                results.append(CheckResult("nlm_session", "OK", str(session_dir)))
+            session_file = cfg.research_hub_dir / "nlm_sessions" / "state.json"
+            if session_file.exists() and session_file.stat().st_size > 0:
+                results.append(CheckResult("nlm_session", "OK", str(session_file)))
             else:
                 results.append(
                     CheckResult(
                         "nlm_session",
                         "WARN",
                         "No saved session",
-                        remedy="Run: research-hub notebooklm login --cdp",
+                        remedy="Run: research-hub notebooklm login",
                     )
                 )
         except Exception:

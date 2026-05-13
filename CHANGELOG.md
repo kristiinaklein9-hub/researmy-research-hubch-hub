@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.86.3 (2026-05-13)
+
+CI hotfix wave 2 — three pre-existing failures surfaced by v0.86.2.
+Before v0.86.2 these were masked because pytest crashed at collection
+time on the deleted `cdp_launcher` module and never reached them.
+
+1. **`__init__.py` version drift** — `src/research_hub/__init__.py`
+   said `0.81.0` while `pyproject.toml` said `0.86.2` (drift since
+   v0.81, 5+ releases unnoticed). Bumped to `0.86.3` and pinned the
+   sync expectation in this entry.
+
+2. **`skills_data/literature-triage-matrix/SKILL.md` mirror drift** —
+   `skills/<name>/SKILL.md` (canonical source) got an
+   agentskills.io portability update in commit `b7f6420`, but the
+   packaged mirror `src/research_hub/skills_data/<name>/SKILL.md`
+   was not regenerated. Re-mirrored.
+
+3. **`skills_data/zotero-library-curator/SKILL.md` mirror drift** —
+   same root cause as #2. Re-mirrored.
+
+Full local suite: 2061 passed, 23 skipped, 0 failed (4m37s).
+
 ## v0.86.2 (2026-05-13)
 
 CI hotfix: tests across 8 files referenced the deleted

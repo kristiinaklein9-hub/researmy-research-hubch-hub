@@ -31,6 +31,25 @@ class ClusterBaseInputs:
     obsidian_subfolder: str = ""
 
 
+def _reading_queue_view(cluster_slug: str) -> dict[str, Any]:
+    """v0.88 #9 (V4 audit): default landing view for the user's daily
+    reading workflow. Filter: status == "unread"; order by year DESC then
+    ingested_at DESC so newest unread papers surface first."""
+    return {
+        "type": "table",
+        "name": "Reading queue",
+        "filters": {
+            "and": [
+                f'topic_cluster == "{cluster_slug}"',
+                'status == "unread"',
+                'file.ext == "md"',
+            ],
+        },
+        "order": ["year", "ingested_at", "file.name", "title"],
+        "groupBy": {"property": "year", "direction": "DESC"},
+    }
+
+
 def _papers_view(cluster_slug: str) -> dict[str, Any]:
     return {
         "type": "table",
@@ -100,6 +119,10 @@ def build_cluster_base(inputs: ClusterBaseInputs) -> str:
             "paper_count": 'count(file.where(topic_cluster == "' + inputs.cluster_slug + '"))',
         },
         "views": [
+            # v0.88 #9: Reading queue is the default landing tab — most
+            # useful slice for daily reading. Papers (year-grouped index)
+            # follows.
+            _reading_queue_view(inputs.cluster_slug),
             _papers_view(inputs.cluster_slug),
             _crystals_view(inputs.cluster_slug),
             _open_questions_view(inputs.cluster_slug),

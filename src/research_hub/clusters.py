@@ -140,6 +140,8 @@ class Cluster:
     created_at: str = ""
     first_query: str = ""
     description: str = ""
+    status: str = "active"
+    archived_at: str = ""
 
 
 def _load_notebooklm_shards(value: object) -> list[NotebookShard]:
@@ -202,6 +204,12 @@ def slugify(text: str) -> str:
     parts = [part for part in normalized.split("-") if part and part not in stopwords]
     slug = "-".join(parts[:6])
     return slug or "unnamed-cluster"
+
+
+def _utc_now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class ClusterRegistry:
@@ -432,6 +440,28 @@ class ClusterRegistry:
         if sync_zotero and cluster.zotero_collection_key:
             _try_sync_zotero_collection_name(cluster.zotero_collection_key, new_name)
         cluster.name = new_name
+        self.save()
+        self._refresh_graph_if_possible()
+        return cluster
+
+    def archive(self, slug: str) -> Cluster:
+        """Mark a cluster inactive without deleting its notes or Zotero binding."""
+        cluster = self.clusters.get(slug)
+        if cluster is None:
+            raise ValueError(f"Cluster not found: {slug}")
+        cluster.status = "archived"
+        cluster.archived_at = _utc_now()
+        self.save()
+        self._refresh_graph_if_possible()
+        return cluster
+
+    def unarchive(self, slug: str) -> Cluster:
+        """Restore an archived cluster to active ingest/search workflows."""
+        cluster = self.clusters.get(slug)
+        if cluster is None:
+            raise ValueError(f"Cluster not found: {slug}")
+        cluster.status = "active"
+        cluster.archived_at = ""
         self.save()
         self._refresh_graph_if_possible()
         return cluster

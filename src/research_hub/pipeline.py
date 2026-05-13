@@ -677,6 +677,7 @@ def run_pipeline(
     zotero_batch_size: int = ZOTERO_BATCH_SIZE,
     batch_label: str | None = None,
     with_pdfs: bool = False,
+    allow_archived_cluster: bool = False,
 ) -> int:
     del no_fit_check_auto_labels
     cfg = get_config()
@@ -684,6 +685,18 @@ def run_pipeline(
     no_zotero = os.environ.get("RESEARCH_HUB_NO_ZOTERO", "").lower() in ("1", "true", "yes")
     clusters = ClusterRegistry(cfg.clusters_file)
     cluster_obj = clusters.get(cluster_slug) if cluster_slug else None
+    if cluster_slug is not None and cluster_obj is None:
+        raise ValueError("Cluster not found - use 'research-hub clusters new' first")
+    if (
+        cluster_obj is not None
+        and getattr(cluster_obj, "status", "active") == "archived"
+        and not allow_archived_cluster
+    ):
+        print(
+            f"Cluster '{cluster_obj.slug}' is archived; skipping ingest. "
+            "Pass an explicit --cluster value to override."
+        )
+        return 0
     collection_key = (
         cluster_obj.zotero_collection_key
         if cluster_obj and cluster_obj.zotero_collection_key
@@ -707,8 +720,6 @@ def run_pipeline(
         if collection_key is not None
         else "<unconfigured>"
     )
-    if cluster_slug is not None and clusters.get(cluster_slug) is None:
-        raise ValueError("Cluster not found - use 'research-hub clusters new' first")
     if query is None and cluster_slug is not None:
         if cluster_obj is not None and cluster_obj.first_query:
             query = cluster_obj.first_query

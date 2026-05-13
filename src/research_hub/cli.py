@@ -220,6 +220,26 @@ def _dedup(args) -> int:
         print(f"Index rebuilt: {len(index.doi_to_hits)} DOIs, {len(index.title_to_hits)} titles")
         return 0
 
+    if args.dedup_command == "compact":
+        has_zotero_hits = any(
+            hit.source == "zotero" and hit.zotero_key
+            for mapping in (index.doi_to_hits, index.title_to_hits)
+            for hits in mapping.values()
+            for hit in hits
+        )
+        zot = None
+        if has_zotero_hits:
+            from research_hub.zotero.client import get_client
+
+            zot = get_client()
+        compacted, report = index.compact(cfg.raw, zot, dry_run=not args.apply)
+        if args.apply:
+            compacted.save(path)
+        verb = "Would remove" if not args.apply else "Removed"
+        print(f"{verb} {len(report.removed_zotero_keys)} stale Zotero hit(s)")
+        print(f"Index compacted: {report.after_doi_keys} DOIs, {report.after_title_keys} titles")
+        return 0
+
     return 1
 
 
@@ -409,6 +429,20 @@ def _clusters_rename(slug: str, name: str, *, sync_zotero: bool = True) -> int:
         print(f"renamed Zotero collection {cluster.zotero_collection_key} to {name!r}")
     except Exception as exc:
         print(f"WARNING: Zotero rename failed: {exc}", file=sys.stderr)
+    return 0
+
+
+def _clusters_archive(slug: str) -> int:
+    registry = ClusterRegistry(get_config().clusters_file)
+    cluster = registry.archive(slug)
+    print(f"archived: {cluster.slug}")
+    return 0
+
+
+def _clusters_unarchive(slug: str) -> int:
+    registry = ClusterRegistry(get_config().clusters_file)
+    cluster = registry.unarchive(slug)
+    print(f"unarchived: {cluster.slug}")
     return 0
 
 
@@ -1023,6 +1057,17 @@ def _paper_summarize_pending(args) -> int:
     return 0 if not counts.get("error", 0) else 1
 
 
+def _parse_bulk_slugs(slugs_arg: str | None, slugs_file: str | None) -> list[str]:
+    values: list[str] = []
+    if slugs_arg:
+        values.extend(slug.strip() for slug in slugs_arg.split(","))
+    if slugs_file:
+        text = Path(slugs_file).read_text(encoding="utf-8")
+        for line in text.splitlines():
+            values.extend(part.strip() for part in line.split(","))
+    return [slug for slug in values if slug]
+
+
 def _cmd_memory(args, cfg) -> int:
     from research_hub.memory import (
         apply_memory,
@@ -1598,6 +1643,68 @@ def _paper_command(args) -> int:
             return 2
         print(f"restored: {result['restored']}")
         print(f"path: {result['path']}")
+        return 0
+    if args.paper_command == "bulk-relabel":
+        from research_hub.paper import bulk_relabel
+
+        cfg = get_config()
+        result = bulk_relabel(
+            cfg,
+            args.from_label,
+            args.to_label,
+            cluster_slug=args.cluster,
+            dry_run=not args.apply,
+        )
+        action = "would relabel" if not args.apply else "relabeled"
+        print(f"{action} {len(result['changed'])} paper(s)")
+        for change in result["changed"]:
+            print(f"  - {change['slug']} ({change['cluster']})")
+        if result.get("zotero_errors"):
+            for error in result["zotero_errors"]:
+                print(f"  Zotero warning: {error['error']}", file=sys.stderr)
+        return 0
+    if args.paper_command == "bulk-move":
+        from research_hub.paper import bulk_move
+
+        cfg = get_config()
+        slugs = _parse_bulk_slugs(args.slugs, args.slugs_file)
+        try:
+            result = bulk_move(
+                cfg,
+                slugs,
+                args.to_cluster,
+                dry_run=not args.apply,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        action = "would move" if not args.apply else "moved"
+        print(f"{action} {len(result['would_move']) if not args.apply else len(result['moved'])} paper(s)")
+        if result["missing"]:
+            print(f"missing: {', '.join(result['missing'])}")
+        for skipped in result["skipped"]:
+            print(f"skipped: {skipped['slug']} ({skipped['reason']})")
+        if result.get("zotero_errors"):
+            for error in result["zotero_errors"]:
+                print(f"  Zotero warning: {error['error']}", file=sys.stderr)
+        return 0 if not result["missing"] else 1
+    if args.paper_command == "bulk-delete":
+        from research_hub.paper import bulk_delete_by_tag
+
+        cfg = get_config()
+        result = bulk_delete_by_tag(
+            cfg,
+            args.by_tag,
+            dry_run=not args.apply,
+        )
+        action = "would delete" if not args.apply else "deleted"
+        count = len(result["would_delete"]) if not args.apply else len(result["deleted"])
+        print(f"{action} {count} paper(s) tagged {args.by_tag!r}")
+        for candidate in result["would_delete"]:
+            print(f"  - {candidate['slug']} ({candidate['cluster']})")
+        if result.get("zotero_errors"):
+            for error in result["zotero_errors"]:
+                print(f"  Zotero warning: {error['error']}", file=sys.stderr)
         return 0
     if args.paper_command == "enrich-existing":
         return _paper_enrich_existing(
@@ -3923,6 +4030,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Only rescan Obsidian (skip Zotero - useful when API is down)",
     )
+    compact_parser = dedup_subparsers.add_parser(
+        "compact",
+        help="Drop stale Obsidian paths and Zotero 404 hits from the dedup index",
+    )
+    compact_group = compact_parser.add_mutually_exclusive_group()
+    compact_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
+    compact_group.add_argument("--apply", dest="apply", action="store_true", help="Write the compacted index")
+    compact_parser.set_defaults(apply=False)
 
     clusters_parser = subparsers.add_parser("clusters", help="Manage topic clusters")
     clusters_subparsers = clusters_parser.add_subparsers(dest="clusters_command", required=True)
@@ -3967,6 +4082,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not sync the Zotero collection name",
     )
+    archive_parser = clusters_subparsers.add_parser("archive", help="Mark a cluster archived")
+    archive_parser.add_argument("slug")
+    unarchive_parser = clusters_subparsers.add_parser("unarchive", help="Mark a cluster active")
+    unarchive_parser.add_argument("slug")
     delete_parser = clusters_subparsers.add_parser("delete", help="Delete a cluster")
     delete_parser.add_argument("slug")
     delete_parser.add_argument("--dry-run", action="store_true")
@@ -5058,6 +5177,29 @@ def build_parser() -> argparse.ArgumentParser:
     unarch_p = paper_sub.add_parser("unarchive", help="Restore an archived paper back to active cluster")
     unarch_p.add_argument("--cluster", required=True)
     unarch_p.add_argument("--slug", required=True)
+    bulk_relabel_p = paper_sub.add_parser("bulk-relabel", help="Replace a label across paper notes")
+    bulk_relabel_p.add_argument("--from", dest="from_label", required=True)
+    bulk_relabel_p.add_argument("--to", dest="to_label", required=True)
+    bulk_relabel_p.add_argument("--cluster", default=None)
+    bulk_relabel_group = bulk_relabel_p.add_mutually_exclusive_group()
+    bulk_relabel_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
+    bulk_relabel_group.add_argument("--apply", dest="apply", action="store_true", help="Write notes and Zotero tags")
+    bulk_relabel_p.set_defaults(apply=False)
+    bulk_move_p = paper_sub.add_parser("bulk-move", help="Move selected papers to another cluster")
+    slug_group = bulk_move_p.add_mutually_exclusive_group(required=True)
+    slug_group.add_argument("--slugs", default=None, help="Comma-separated paper slugs")
+    slug_group.add_argument("--slugs-file", default=None, help="File with one slug per line or comma-separated slugs")
+    bulk_move_p.add_argument("--to-cluster", required=True)
+    bulk_move_group = bulk_move_p.add_mutually_exclusive_group()
+    bulk_move_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
+    bulk_move_group.add_argument("--apply", dest="apply", action="store_true", help="Move files and update Zotero")
+    bulk_move_p.set_defaults(apply=False)
+    bulk_delete_p = paper_sub.add_parser("bulk-delete", help="Delete papers whose frontmatter tags include a tag")
+    bulk_delete_p.add_argument("--by-tag", required=True)
+    bulk_delete_group = bulk_delete_p.add_mutually_exclusive_group()
+    bulk_delete_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
+    bulk_delete_group.add_argument("--apply", dest="apply", action="store_true", help="Delete notes and move Zotero items to trash")
+    bulk_delete_p.set_defaults(apply=False)
     enrich_existing = paper_sub.add_parser(
         "enrich-existing",
         help="Re-fetch DOI metadata to fill empty Zotero/Obsidian fields",
@@ -5198,6 +5340,7 @@ def main(argv: list[str] | None = None) -> int:
             "fit_check_threshold": getattr(args, "fit_check_threshold", 3),
             "no_fit_check_auto_labels": getattr(args, "no_fit_check_auto_labels", False),
             "batch_label": getattr(args, "batch_label", None),
+            "allow_archived_cluster": bool(getattr(args, "cluster", None)),
         }
         if getattr(args, "with_pdfs", False):
             run_kwargs["with_pdfs"] = True
@@ -5401,6 +5544,7 @@ def main(argv: list[str] | None = None) -> int:
             "fit_check_threshold": args.fit_check_threshold,
             "no_fit_check_auto_labels": args.no_fit_check_auto_labels,
             "batch_label": args.batch_label,
+            "allow_archived_cluster": bool(args.cluster),
         }
         if args.with_pdfs:
             run_kwargs["with_pdfs"] = True
@@ -5498,6 +5642,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.clusters_command == "rename":
             return _clusters_rename(args.slug, args.name, sync_zotero=not args.no_sync_zotero)
+        if args.clusters_command == "archive":
+            return _clusters_archive(args.slug)
+        if args.clusters_command == "unarchive":
+            return _clusters_unarchive(args.slug)
         if args.clusters_command == "delete":
             from research_hub.clusters import cascade_delete_cluster
 

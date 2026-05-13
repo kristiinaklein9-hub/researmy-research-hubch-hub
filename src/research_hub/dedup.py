@@ -39,6 +39,16 @@ class DedupHit:
 
 
 @dataclass
+class DedupCompactReport:
+    before_doi_keys: int = 0
+    before_title_keys: int = 0
+    after_doi_keys: int = 0
+    after_title_keys: int = 0
+    removed_zotero_keys: list[str] = field(default_factory=list)
+    dry_run: bool = True
+
+
+@dataclass
 class DedupIndex:
     """Index of already-ingested papers across Zotero and Obsidian."""
 
@@ -172,6 +182,36 @@ class DedupIndex:
             self.add(hit)
         return self
 
+    def compact(self, raw_root: Path, zot=None, *, dry_run: bool = True) -> tuple["DedupIndex", DedupCompactReport]:
+        """Rebuild Obsidian hits and drop Zotero hits whose item now 404s."""
+
+        compacted = self.copy()
+        report = DedupCompactReport(
+            before_doi_keys=len(self.doi_to_hits),
+            before_title_keys=len(self.title_to_hits),
+            dry_run=dry_run,
+        )
+        compacted.rebuild_from_obsidian(raw_root)
+        stale_keys = _find_stale_zotero_keys(compacted, zot) if zot is not None else []
+        if stale_keys:
+            _remove_zotero_keys(compacted, set(stale_keys))
+        report.removed_zotero_keys = stale_keys
+        report.after_doi_keys = len(compacted.doi_to_hits)
+        report.after_title_keys = len(compacted.title_to_hits)
+        return compacted, report
+
+    def copy(self) -> "DedupIndex":
+        copied = DedupIndex.empty()
+        copied.doi_to_hits = {
+            key: [DedupHit(**hit.__dict__) for hit in hits]
+            for key, hits in self.doi_to_hits.items()
+        }
+        copied.title_to_hits = {
+            key: [DedupHit(**hit.__dict__) for hit in hits]
+            for key, hits in self.title_to_hits.items()
+        }
+        return copied
+
     @staticmethod
     def _append_unique(hits: list[DedupHit], new_hit: DedupHit) -> None:
         marker = (
@@ -192,6 +232,50 @@ class DedupIndex:
             if existing_marker == marker:
                 return
         hits.append(new_hit)
+
+
+def _find_stale_zotero_keys(index: DedupIndex, zot) -> list[str]:
+    keys: set[str] = set()
+    for mapping in (index.doi_to_hits, index.title_to_hits):
+        for hits in mapping.values():
+            for hit in hits:
+                if hit.source == "zotero" and hit.zotero_key:
+                    keys.add(hit.zotero_key)
+    stale: list[str] = []
+    for key in sorted(keys):
+        try:
+            zot.item(key)
+        except Exception as exc:
+            if _is_404_error(exc):
+                stale.append(key)
+            else:
+                raise
+    return stale
+
+
+def _remove_zotero_keys(index: DedupIndex, stale_keys: set[str]) -> None:
+    for mapping in (index.doi_to_hits, index.title_to_hits):
+        for key in list(mapping.keys()):
+            kept = [
+                hit for hit in mapping[key]
+                if not (hit.source == "zotero" and hit.zotero_key in stale_keys)
+            ]
+            if kept:
+                mapping[key] = kept
+            else:
+                del mapping[key]
+
+
+def _is_404_error(exc: Exception) -> bool:
+    for attr in ("status", "status_code", "code"):
+        value = getattr(exc, attr, None)
+        if value == 404 or str(value) == "404":
+            return True
+    response = getattr(exc, "response", None)
+    response_code = getattr(response, "status_code", None)
+    if response_code == 404 or str(response_code) == "404":
+        return True
+    return "404" in str(exc)
 
 
 def build_from_zotero(zot, library_id: str) -> list[DedupHit]:

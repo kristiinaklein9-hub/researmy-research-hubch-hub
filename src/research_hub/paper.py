@@ -41,6 +41,8 @@ class PaperLabel:
     fit_score: int | None = None
     fit_reason: str = ""
     labeled_at: str = ""
+    tags: list[str] = field(default_factory=list)
+    zotero_key: str = ""
 
 
 def read_labels(cfg, slug: str) -> PaperLabel | None:
@@ -275,6 +277,246 @@ def unarchive(cfg, cluster_slug: str, slug: str) -> dict:
     return {"restored": slug, "path": str(dest)}
 
 
+def bulk_relabel(
+    cfg,
+    from_label: str,
+    to_label: str,
+    *,
+    cluster_slug: str | None = None,
+    dry_run: bool = True,
+) -> dict:
+    """Replace a frontmatter label across paper notes and mirror Zotero tags."""
+
+    from_label = from_label.strip()
+    to_label = to_label.strip()
+    if not from_label or not to_label:
+        raise ValueError("--from and --to labels are required")
+
+    changes: list[dict] = []
+    for note_path in _iter_candidate_notes(cfg, cluster_slug):
+        state = _parse_paper_label(note_path, slug=note_path.stem)
+        if from_label not in state.labels:
+            continue
+        new_labels = [to_label if label == from_label else label for label in state.labels]
+        new_labels = _clean_labels(new_labels)
+        changes.append(
+            {
+                "slug": state.slug,
+                "cluster": state.cluster_slug,
+                "path": str(state.path),
+                "labels": state.labels,
+                "new_labels": new_labels,
+                "zotero_key": state.zotero_key,
+            }
+        )
+
+    report = {
+        "mode": "dry_run" if dry_run else "apply",
+        "from": from_label,
+        "to": to_label,
+        "cluster": cluster_slug or "",
+        "changed": changes,
+        "zotero_updated": [],
+        "zotero_errors": [],
+    }
+    if dry_run or not changes:
+        return report
+
+    zot = _maybe_get_zotero_client([change.get("zotero_key", "") for change in changes], report)
+    replacements = _label_tag_replacements(from_label, to_label)
+    for change in changes:
+        path = Path(str(change["path"]))
+        _rewrite_paper_frontmatter(
+            path,
+            {
+                "labels": change["new_labels"],
+                "labeled_at": _utc_now(),
+            },
+        )
+        ensure_label_tags_in_body(path, list(change["new_labels"]))
+        zotero_key = str(change.get("zotero_key") or "")
+        if zot is not None and zotero_key:
+            try:
+                if _replace_zotero_tags(zot, zotero_key, replacements):
+                    report["zotero_updated"].append(zotero_key)
+            except Exception as exc:
+                report["zotero_errors"].append({"key": zotero_key, "error": str(exc)})
+
+    return report
+
+
+def bulk_move(
+    cfg,
+    slugs: list[str],
+    to_cluster: str,
+    *,
+    dry_run: bool = True,
+) -> dict:
+    """Move selected notes to another cluster and rebind their Zotero collection."""
+
+    clean_slugs = _clean_labels(slugs)
+    to_cluster = to_cluster.strip()
+    if not clean_slugs:
+        raise ValueError("at least one slug is required")
+    if not to_cluster:
+        raise ValueError("--to-cluster is required")
+
+    from research_hub.clusters import ClusterRegistry
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    target_cluster = registry.get(to_cluster)
+    if target_cluster is None:
+        raise ValueError(f"target cluster not found: {to_cluster}")
+    target_dirname = target_cluster.obsidian_subfolder or target_cluster.slug
+    target_dir = Path(cfg.raw) / target_dirname
+    target_collection = (target_cluster.zotero_collection_key or "").strip()
+
+    would_move: list[dict] = []
+    missing: list[str] = []
+    skipped: list[dict] = []
+    for slug in clean_slugs:
+        source_path = _find_note_path(cfg, slug)
+        if source_path is None or _is_archived_path(source_path):
+            missing.append(slug)
+            continue
+        state = _parse_paper_label(source_path, slug=slug)
+        target_path = target_dir / f"{slug}.md"
+        if source_path.resolve() == target_path.resolve():
+            skipped.append({"slug": slug, "reason": "already in target cluster"})
+            continue
+        if target_path.exists():
+            skipped.append({"slug": slug, "reason": f"target exists: {target_path}"})
+            continue
+        would_move.append(
+            {
+                "slug": slug,
+                "from_cluster": state.cluster_slug,
+                "to_cluster": to_cluster,
+                "from": str(source_path),
+                "to": str(target_path),
+                "zotero_key": state.zotero_key,
+            }
+        )
+
+    report = {
+        "mode": "dry_run" if dry_run else "apply",
+        "to_cluster": to_cluster,
+        "would_move": would_move,
+        "moved": [],
+        "missing": missing,
+        "skipped": skipped,
+        "zotero_updated": [],
+        "zotero_errors": [],
+    }
+    if dry_run or not would_move:
+        return report
+
+    zot = _maybe_get_zotero_client([move.get("zotero_key", "") for move in would_move], report)
+    for move in would_move:
+        source_path = Path(str(move["from"]))
+        target_path = Path(str(move["to"]))
+        source_cluster = str(move["from_cluster"])
+        source_cluster_obj = registry.get(source_cluster)
+        source_collection = (
+            (source_cluster_obj.zotero_collection_key or "").strip()
+            if source_cluster_obj is not None
+            else ""
+        )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source_path), str(target_path))
+
+        meta = _parse_frontmatter(target_path.read_text(encoding="utf-8"))
+        updates: dict[str, object] = {"topic_cluster": to_cluster}
+        frontmatter_tags = _frontmatter_list(meta, "tags")
+        if frontmatter_tags:
+            updates["tags"] = _replace_cluster_tags(frontmatter_tags, source_cluster, to_cluster)
+        frontmatter_collections = _frontmatter_list(meta, "collections")
+        if frontmatter_collections and target_collection:
+            updates["collections"] = _replace_collection_binding(
+                frontmatter_collections,
+                source_collection,
+                target_collection,
+            )
+        _rewrite_paper_frontmatter(target_path, updates)
+        report["moved"].append(move["slug"])
+
+        zotero_key = str(move.get("zotero_key") or "")
+        if zot is not None and zotero_key and target_collection:
+            try:
+                if _rebind_zotero_collection(
+                    zot,
+                    zotero_key,
+                    target_collection,
+                    remove_collection=source_collection,
+                    tag_from_cluster=source_cluster,
+                    tag_to_cluster=to_cluster,
+                ):
+                    report["zotero_updated"].append(zotero_key)
+            except Exception as exc:
+                report["zotero_errors"].append({"key": zotero_key, "error": str(exc)})
+
+    _rebuild_dedup_index(cfg)
+    return report
+
+
+def bulk_delete_by_tag(
+    cfg,
+    by_tag: str,
+    *,
+    dry_run: bool = True,
+) -> dict:
+    """Remove notes whose frontmatter tags include a tag, trashing Zotero items."""
+
+    by_tag = by_tag.strip()
+    if not by_tag:
+        raise ValueError("--by-tag is required")
+
+    candidates: list[dict] = []
+    for note_path in _iter_candidate_notes(cfg, None):
+        state = _parse_paper_label(note_path, slug=note_path.stem)
+        if by_tag not in state.tags:
+            continue
+        candidates.append(
+            {
+                "slug": state.slug,
+                "cluster": state.cluster_slug,
+                "path": str(state.path),
+                "zotero_key": state.zotero_key,
+            }
+        )
+
+    report = {
+        "mode": "dry_run" if dry_run else "apply",
+        "tag": by_tag,
+        "would_delete": candidates,
+        "deleted": [],
+        "zotero_trashed": [],
+        "zotero_errors": [],
+    }
+    if dry_run or not candidates:
+        return report
+
+    zot = _maybe_get_zotero_client([item.get("zotero_key", "") for item in candidates], report)
+    for candidate in candidates:
+        zotero_key = str(candidate.get("zotero_key") or "")
+        if zot is not None and zotero_key:
+            try:
+                if _trash_zotero_item(zot, zotero_key):
+                    report["zotero_trashed"].append(zotero_key)
+            except Exception as exc:
+                report["zotero_errors"].append({"key": zotero_key, "error": str(exc)})
+        path = Path(str(candidate["path"]))
+        try:
+            path.unlink()
+        except OSError as exc:
+            logger.warning("bulk-delete: failed to delete %s: %s", path, exc)
+            continue
+        report["deleted"].append(candidate["slug"])
+
+    _rebuild_dedup_index(cfg)
+    return report
+
+
 def ensure_label_tags_in_body(path: Path, labels: list[str]) -> bool:
     """Ensure the note body ends with an idempotent label-tag sentinel block."""
 
@@ -411,6 +653,7 @@ def _parse_paper_label(note_path: Path, *, slug: str) -> PaperLabel:
         labels = [str(item) for item in labels_raw if str(item).strip()]
     else:
         labels = []
+    tags = _frontmatter_list(meta, "tags")
 
     fit_score_raw = meta.get("fit_score")
     fit_score: int | None = None
@@ -428,6 +671,8 @@ def _parse_paper_label(note_path: Path, *, slug: str) -> PaperLabel:
         fit_score=fit_score,
         fit_reason=str(meta.get("fit_reason", "") or ""),
         labeled_at=str(meta.get("labeled_at", "") or ""),
+        tags=tags,
+        zotero_key=str(meta.get("zotero-key", meta.get("zotero_key", "")) or ""),
     )
 
 
@@ -528,6 +773,187 @@ def _merge_labels(current: list[str], extra: list[str]) -> list[str]:
         if label not in merged:
             merged.append(label)
     return merged
+
+
+def _frontmatter_list(meta: dict[str, object], key: str) -> list[str]:
+    value = meta.get(key, [])
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    return []
+
+
+def _iter_candidate_notes(cfg, cluster_slug: str | None):
+    raw_root = Path(cfg.raw)
+    if not raw_root.exists():
+        return
+    if cluster_slug:
+        yield from _iter_cluster_notes(cfg, cluster_slug, include_archive=False)
+        return
+    for folder in sorted(raw_root.iterdir()):
+        if not folder.is_dir():
+            continue
+        if folder.name in {ARCHIVE_DIRNAME, "pdfs", "attachments"} or folder.name.startswith("_deleted_"):
+            continue
+        for note in sorted(folder.glob("*.md")):
+            if note.name in {"00_overview.md", "index.md"}:
+                continue
+            yield note
+
+
+def _label_tag_replacements(from_label: str, to_label: str) -> dict[str, str]:
+    return {
+        from_label: to_label,
+        f"label/{from_label}": f"label/{to_label}",
+        f"cluster/{from_label}": f"cluster/{to_label}",
+        f"topic:{from_label}": f"topic:{to_label}",
+    }
+
+
+def _replace_cluster_tags(tags: list[str], from_cluster: str, to_cluster: str) -> list[str]:
+    replacements = {
+        f"cluster/{from_cluster}": f"cluster/{to_cluster}",
+        f"topic:{from_cluster}": f"topic:{to_cluster}",
+    }
+    return _replace_tag_values(tags, replacements)
+
+
+def _replace_tag_values(tags: list[str], replacements: dict[str, str]) -> list[str]:
+    updated: list[str] = []
+    for tag in tags:
+        replacement = replacements.get(tag, tag)
+        if replacement not in updated:
+            updated.append(replacement)
+    return updated
+
+
+def _replace_collection_binding(
+    collections: list[str],
+    source_collection: str,
+    target_collection: str,
+) -> list[str]:
+    updated = [key for key in collections if not source_collection or key != source_collection]
+    if target_collection not in updated:
+        updated.append(target_collection)
+    return updated
+
+
+def _maybe_get_zotero_client(zotero_keys: list[str], report: dict):
+    if not any(str(key or "").strip() for key in zotero_keys):
+        return None
+    try:
+        return _get_zotero_web_client()
+    except Exception as exc:
+        report.setdefault("zotero_errors", []).append({"key": "", "error": str(exc)})
+        return None
+
+
+def _get_zotero_web_client():
+    from research_hub.zotero.client import ZoteroDualClient
+
+    return ZoteroDualClient().web
+
+
+def _replace_zotero_tags(zot, item_key: str, replacements: dict[str, str]) -> bool:
+    item = zot.item(item_key)
+    data = item.get("data", item)
+    tags = data.get("tags", []) or []
+    updated_tags: list[dict] = []
+    changed = False
+    seen: set[str] = set()
+    for tag_entry in tags:
+        if isinstance(tag_entry, dict):
+            tag_value = str(tag_entry.get("tag", "") or "")
+            new_tag = replacements.get(tag_value, tag_value)
+            new_entry = dict(tag_entry)
+            new_entry["tag"] = new_tag
+        else:
+            tag_value = str(tag_entry)
+            new_tag = replacements.get(tag_value, tag_value)
+            new_entry = {"tag": new_tag}
+        if new_tag != tag_value:
+            changed = True
+        if new_tag and new_tag not in seen:
+            seen.add(new_tag)
+            updated_tags.append(new_entry)
+    if not changed:
+        return False
+    data["tags"] = updated_tags
+    zot.update_item(data)
+    return True
+
+
+def _rebind_zotero_collection(
+    zot,
+    item_key: str,
+    target_collection: str,
+    *,
+    remove_collection: str = "",
+    tag_from_cluster: str = "",
+    tag_to_cluster: str = "",
+) -> bool:
+    item = zot.item(item_key)
+    data = item.get("data", item)
+    collections = [str(key) for key in data.get("collections", []) or []]
+    updated = [
+        key for key in collections
+        if not remove_collection or key != remove_collection
+    ]
+    if target_collection not in updated:
+        updated.append(target_collection)
+    changed = updated != collections
+    data["collections"] = updated
+    if tag_from_cluster and tag_to_cluster:
+        replacement_map = {
+            f"cluster/{tag_from_cluster}": f"cluster/{tag_to_cluster}",
+            f"topic:{tag_from_cluster}": f"topic:{tag_to_cluster}",
+        }
+        tag_entries, tags_changed = _replace_zotero_tag_entries(
+            data.get("tags", []) or [],
+            replacement_map,
+        )
+        data["tags"] = tag_entries
+        changed = changed or tags_changed
+    if not changed:
+        return False
+    zot.update_item(data)
+    return True
+
+
+def _replace_zotero_tag_entries(
+    tags: list,
+    replacements: dict[str, str],
+) -> tuple[list[dict], bool]:
+    updated_tags: list[dict] = []
+    changed = False
+    seen: set[str] = set()
+    for tag_entry in tags:
+        if isinstance(tag_entry, dict):
+            tag_value = str(tag_entry.get("tag", "") or "")
+            new_tag = replacements.get(tag_value, tag_value)
+            new_entry = dict(tag_entry)
+            new_entry["tag"] = new_tag
+        else:
+            tag_value = str(tag_entry)
+            new_tag = replacements.get(tag_value, tag_value)
+            new_entry = {"tag": new_tag}
+        if new_tag != tag_value:
+            changed = True
+        if new_tag and new_tag not in seen:
+            seen.add(new_tag)
+            updated_tags.append(new_entry)
+    return updated_tags, changed
+
+
+def _trash_zotero_item(zot, item_key: str) -> bool:
+    item = zot.item(item_key)
+    data = item.get("data", item)
+    if data.get("deleted"):
+        return False
+    data["deleted"] = 1
+    zot.update_item(data)
+    return True
 
 
 def _parse_inline_list(value: str) -> list[str]:

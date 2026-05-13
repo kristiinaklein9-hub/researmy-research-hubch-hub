@@ -105,9 +105,11 @@ def test_auto_pipeline_full_run_new_cluster(mock_deps):
     )
     mock_deps["run_search"].assert_called_with("New Topic", max_papers=5, cluster_slug="new-topic")
     # v0.73.0: zotero_batch_size=50 added to run_pipeline signature.
+    # v0.88 #3: allow_archived_cluster=False added so archived clusters
+    # are skipped by default unless explicitly requested.
     mock_deps["run_pipeline"].assert_called_with(
         dry_run=False, cluster_slug="new-topic", query="New Topic", verify=False,
-        zotero_batch_size=50,
+        zotero_batch_size=50, allow_archived_cluster=False,
     )
     mock_deps["bundle_cluster"].assert_called()
     mock_deps["upload_cluster"].assert_called()

@@ -185,6 +185,7 @@ def auto_pipeline(
     report = AutoReport(cluster_slug="", cluster_created=False)
 
     # 1. Slugify + 2. cluster create-or-get
+    explicit_cluster_slug = cluster_slug is not None
     slug = cluster_slug or slugify(topic)
     if not slug:
         report.ok = False
@@ -211,6 +212,16 @@ def auto_pipeline(
             _ensure_zotero_collection(registry, cluster, slug, report, print_progress)
     else:
         _step_log(report, "cluster", True, 0.0, f"existing: {slug}", print_progress)
+        if getattr(cluster, "status", "active") == "archived" and not explicit_cluster_slug:
+            _step_log(
+                report,
+                "archive",
+                True,
+                _elapsed(started, report),
+                f"skipped archived cluster: {slug}",
+                print_progress,
+            )
+            return report
         # NOTE: clusters with a recorded zotero_collection_key are trusted
         # without round-tripping to Zotero. If the user manually deleted
         # that collection in the Zotero UI, the next ingest will 404 on
@@ -301,6 +312,7 @@ def auto_pipeline(
             "query": topic,
             "verify": False,
             "zotero_batch_size": zotero_batch_size,
+            "allow_archived_cluster": explicit_cluster_slug,
         }
         if with_pdfs:
             run_kwargs["with_pdfs"] = True

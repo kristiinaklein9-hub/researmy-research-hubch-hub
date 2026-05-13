@@ -154,6 +154,42 @@ def scan_zotero_for_gc(
     return out
 
 
+def lookup_collection_names_and_counts(zot, keys: Iterable[str]) -> dict[str, dict]:
+    """v0.88 #10: enrich a set of Zotero collection keys with their human
+    name + item count. Walks Zotero web library paginated at 200/page
+    (same as scan_zotero_for_gc) and matches against the input key set.
+
+    Returns ``{key: {"name": str, "num_items": int, "num_collections": int}}``
+    for every key in `keys` that exists in Zotero; missing keys are
+    omitted from the result so callers can detect deletions.
+    """
+    wanted = {str(k).strip() for k in keys if str(k).strip()}
+    if not wanted:
+        return {}
+    out: dict[str, dict] = {}
+    start = 0
+    while True:
+        chunk = zot.collections(limit=200, start=start)
+        if not chunk:
+            break
+        for collection in chunk:
+            data = collection.get("data", {})
+            meta = collection.get("meta", {})
+            key = collection.get("key") or data.get("key", "")
+            if key in wanted:
+                out[key] = {
+                    "name": data.get("name", ""),
+                    "num_items": int(meta.get("numItems", 0) or 0),
+                    "num_collections": int(meta.get("numCollections", 0) or 0),
+                }
+                if len(out) == len(wanted):
+                    return out
+        if len(chunk) < 200:
+            break
+        start += 200
+    return out
+
+
 def delete_candidates(zot, candidates: Iterable[GCCandidate]) -> dict[str, str]:
     """Delete each candidate via the Zotero web API.
 

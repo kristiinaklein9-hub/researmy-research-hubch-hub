@@ -1355,12 +1355,17 @@ def _zotero_mark_kept(
     remove_keys: list[str] | None,
     show_list: bool,
     note: str | None,
+    show_counts: bool = False,
+    by_pattern: str | None = None,
 ) -> int:
     """Manage the per-vault kept-collection list used by `zotero gc --respect-kept`."""
+    import re
+
     cfg = get_config()
     from research_hub.zotero.gc import (
         kept_file_path,
         load_kept_keys,
+        lookup_collection_names_and_counts,
         save_kept_keys,
         scan_zotero_for_gc,
     )
@@ -1370,6 +1375,38 @@ def _zotero_mark_kept(
         if not current:
             print("(no kept Zotero collections recorded)")
             return 0
+
+        # v0.88 #10: --show-counts enriches the opaque 8-char keys with
+        # Zotero collection name + item count. --by-pattern filters by
+        # the human-readable name (regex, case-insensitive).
+        details: dict[str, dict] = {}
+        pattern_re = None
+        if by_pattern:
+            try:
+                pattern_re = re.compile(by_pattern, re.IGNORECASE)
+            except re.error as exc:
+                print(f"  [ERR] invalid --by-pattern regex: {exc}", file=sys.stderr)
+                return 2
+
+        if show_counts or pattern_re is not None:
+            from research_hub.zotero.client import get_client
+            zot = get_client()
+            details = lookup_collection_names_and_counts(zot, current)
+            print("key       items  name")
+            print("--------  -----  ----")
+            shown = 0
+            for key in sorted(current):
+                d = details.get(key, {})
+                name = d.get("name", "(unknown)")
+                if pattern_re is not None and not pattern_re.search(name):
+                    continue
+                items_count = d.get("num_items", 0)
+                print(f"{key:8}  {items_count:5d}  {name}")
+                shown += 1
+            print(f"\nfile: {kept_file_path(cfg.research_hub_dir)}")
+            print(f"shown: {shown} / total kept: {len(current)}")
+            return 0
+
         for key in sorted(current):
             print(key)
         print(f"\nfile: {kept_file_path(cfg.research_hub_dir)}")
@@ -4647,6 +4684,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the current kept-collection list and exit",
     )
     mark_kept_parser.add_argument(
+        "--show-counts",
+        action="store_true",
+        help="With --list, enrich keys with collection name + item count via Zotero API (v0.88 #10)",
+    )
+    mark_kept_parser.add_argument(
+        "--by-pattern",
+        default=None,
+        metavar="REGEX",
+        help="With --list, filter rows whose collection name matches the regex (case-insensitive). Implies --show-counts.",
+    )
+    mark_kept_parser.add_argument(
         "--note",
         default=None,
         help="Optional human note recorded with the kept list",
@@ -5692,6 +5740,8 @@ def main(argv: list[str] | None = None) -> int:
                 remove_keys=args.remove,
                 show_list=args.list,
                 note=args.note,
+                show_counts=getattr(args, "show_counts", False),
+                by_pattern=getattr(args, "by_pattern", None),
             )
     if args.command == "migrate-yaml":
         return _migrate_yaml(

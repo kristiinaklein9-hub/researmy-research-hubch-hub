@@ -400,7 +400,20 @@ def _run_summary_step(
     started: float,
     print_progress: bool,
 ) -> None:
-    """Best-effort per-paper summary autofill after ingest."""
+    """Best-effort per-paper summary autofill after ingest.
+
+    v0.88.6: this single step now drives **both** summary layers so
+    `auto --with-summary` produces a fully-filled note (1-line
+    `## Summary` callout AND structured `## Key Findings` /
+    `## Methodology` / `## Relevance` sections). Previously the second
+    layer was only filled when the user ran the separate
+    `research-hub paper summarize --pending` command afterwards, which
+    was an opaque gotcha for new users.
+
+    Failure of either layer is logged but does not block the other —
+    each is best-effort and the structured layer can be retried via
+    `paper summarize --pending` at any time.
+    """
     from research_hub.summarize import summarize_cluster
 
     cli = llm_cli or detect_llm_cli()
@@ -409,41 +422,68 @@ def _run_summary_step(
                   "skipped (no claude/codex/gemini on PATH)", print_progress)
         return
 
+    # --- Layer 1: ## Summary 1-liner callout, via summarize_cluster ---
+    summary_count = 0
+    summary_errors = 0
     try:
         summary_report = summarize_cluster(cfg, slug, llm_cli=cli, apply=True)
     except Exception as exc:
         _step_log(report, "summary", False, _elapsed(started, report),
                   f"summarize failed: {exc}", print_progress)
-        return
+    else:
+        if not summary_report.ok:
+            _step_log(report, "summary", False, _elapsed(started, report),
+                      summary_report.error or "summarize failed", print_progress)
+        else:
+            apply_result = summary_report.apply_result
+            if apply_result is not None:
+                summary_count = len(apply_result.applied)
+                summary_errors = len(apply_result.errors)
 
-    if not summary_report.ok:
-        _step_log(report, "summary", False, _elapsed(started, report),
-                  summary_report.error or "summarize failed", print_progress)
-        return
+    # --- Layer 2: ## Key Findings / Methodology / Relevance, via paper-summarize ---
+    # Drives the v0.87.1 §O3 paper_summarize path so KF/Methodology/Relevance
+    # placeholders also get filled (and summarize_status flips pending → done).
+    paper_done = 0
+    paper_failed = 0
+    paper_errors = 0
+    try:
+        from research_hub.paper_summarize import summarize_pending
 
-    apply_result = summary_report.apply_result
-    if apply_result is None:
-        _step_log(report, "summary", True, _elapsed(started, report),
-                  f"summary completed via {summary_report.cli_used or cli}", print_progress)
-        return
-
-    if apply_result.errors:
-        _step_log(
-            report,
-            "summary",
-            False,
-            _elapsed(started, report),
-            (
-                f"applied {len(apply_result.applied)} summaries via "
-                f"{summary_report.cli_used or cli}; {len(apply_result.errors)} error(s)"
-            ),
-            print_progress,
+        results = summarize_pending(
+            cfg, cluster_slug_filter=slug, backend=cli, dry_run=False
         )
+        for r in results:
+            status = getattr(r, "status", "")
+            if status == "done":
+                paper_done += 1
+            elif status in {"failed_no_abstract", "would_fail_no_abstract"}:
+                paper_failed += 1
+            elif status == "error":
+                paper_errors += 1
+    except Exception as exc:
+        _step_log(report, "summary", False, _elapsed(started, report),
+                  (
+                      f"summary layer-1: {summary_count} ok / {summary_errors} err; "
+                      f"summary layer-2 (KF/Methodology/Relevance): {exc}"
+                  ),
+                  print_progress)
         return
 
-    _step_log(report, "summary", True, _elapsed(started, report),
-              f"applied {len(apply_result.applied)} summaries via {summary_report.cli_used or cli}",
-              print_progress)
+    layer2_msg = (
+        f"layer-2 (KF/Methodology/Relevance): {paper_done} done"
+        + (f" / {paper_failed} failed_no_abstract" if paper_failed else "")
+        + (f" / {paper_errors} errors" if paper_errors else "")
+    )
+    layer1_msg = (
+        f"layer-1 (## Summary): {summary_count} ok"
+        + (f" / {summary_errors} err" if summary_errors else "")
+    )
+    ok = (summary_errors == 0 and paper_errors == 0)
+    _step_log(
+        report, "summary", ok, _elapsed(started, report),
+        f"{layer1_msg}; {layer2_msg} via {cli}",
+        print_progress,
+    )
 
 
 def _run_crystal_step(

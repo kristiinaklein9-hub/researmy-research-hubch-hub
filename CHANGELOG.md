@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.88.6 (2026-05-13) — `auto --with-summary` now fills KF/Methodology/Relevance too
+
+Field-discovered in live re-ingest of `ml-flood-forecasting` (stage A
+smoke test): after `auto --with-summary` finished, the 4 paper notes
+had a filled `## Summary` 1-liner callout but `## Key Findings`,
+`## Methodology`, `## Relevance` were still placeholder, and
+`summarize_status: pending` in frontmatter. Manual recovery required
+running `research-hub paper summarize --pending` as a separate step.
+
+Root cause: `auto --with-summary` ran `summarize.summarize_cluster`
+(v0.81 1-liner layer) but never invoked `paper_summarize.summarize_pending`
+(v0.87.1 §O3 structured layer). Two summary subsystems with similar
+names that both need to run for a fully-filled note. Two-command
+gotcha for new users.
+
+### Fix (`auto.py::_run_summary_step`)
+
+The single `--with-summary` step now drives **both** layers
+sequentially:
+
+- **Layer 1** — `summarize.summarize_cluster` fills `## Summary`
+  callout (1-line TL;DR from abstract).
+- **Layer 2** — `paper_summarize.summarize_pending` fills
+  `## Key Findings` / `## Methodology` / `## Relevance` and flips
+  `summarize_status: pending → done`.
+
+Failure of either layer is logged but does not block the other; both
+are best-effort and either can be retried via
+`paper summarize --pending` afterwards.
+
+The summary step's progress log now reports both layers, e.g.
+`layer-1 (## Summary): 4 ok; layer-2 (KF/Methodology/Relevance): 4 done via claude`.
+
+### Tests
+
+`tests/test_v076_full_auto.py::test_auto_pipeline_runs_summary_when_enabled`
+updated to assert both layers fire. Existing skip / dry-run cases
+still pass unchanged.
+
+### User impact
+
+After v0.88.6 ships, future `research-hub auto --with-summary` runs
+produce fully-filled notes in one pass. Existing clusters where
+only layer-1 was applied can be backfilled with
+`research-hub paper summarize --pending --cluster <slug>` (no change
+to that CLI).
+
 ## v0.88.5 (2026-05-13) — broader MOC keyword heuristic
 
 Field-discovered in live re-ingest of a new `ml-flood-forecasting`

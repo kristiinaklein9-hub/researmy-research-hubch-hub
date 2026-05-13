@@ -59,6 +59,9 @@ def test_auto_cli_full_auto_enables_flags(monkeypatch):
 
 
 def test_auto_pipeline_runs_summary_when_enabled(monkeypatch, tmp_path):
+    """v0.88.6: --with-summary drives BOTH layers — summarize_cluster
+    fills ## Summary callout, paper_summarize.summarize_pending fills
+    Key Findings / Methodology / Relevance. Both must be invoked."""
     _patch_auto_success(monkeypatch, tmp_path)
 
     called = {}
@@ -74,8 +77,16 @@ def test_auto_pipeline_runs_summary_when_enabled(monkeypatch, tmp_path):
             apply_result=SimpleNamespace(applied=["paper"], errors=[]),
         )
 
+    def fake_summarize_pending(cfg, *, cluster_slug_filter=None, backend="claude", **kwargs):
+        called["paper_summarize_cluster"] = cluster_slug_filter
+        called["paper_summarize_backend"] = backend
+        return [SimpleNamespace(status="done"), SimpleNamespace(status="done")]
+
     monkeypatch.setattr("research_hub.auto.detect_llm_cli", lambda: "codex")
     monkeypatch.setattr("research_hub.summarize.summarize_cluster", fake_summarize)
+    monkeypatch.setattr(
+        "research_hub.paper_summarize.summarize_pending", fake_summarize_pending
+    )
 
     report = auto_pipeline(
         "test topic",
@@ -87,12 +98,21 @@ def test_auto_pipeline_runs_summary_when_enabled(monkeypatch, tmp_path):
     )
 
     assert report.ok
+    # Layer 1 wiring
     assert called["cluster_slug"] == "test-topic"
     assert called["llm_cli"] == "codex"
     assert called["apply"] is True
+    # Layer 2 (v0.88.6) — paper_summarize.summarize_pending must also fire
+    assert called["paper_summarize_cluster"] == "test-topic"
+    assert called["paper_summarize_backend"] == "codex"
+
     summary_step = next(step for step in report.steps if step.name == "summary")
     assert summary_step.ok is True
-    assert "applied 1 summaries via codex" in summary_step.detail
+    # Reports both layers in detail
+    assert "layer-1" in summary_step.detail
+    assert "layer-2" in summary_step.detail
+    assert "1 ok" in summary_step.detail  # layer-1
+    assert "2 done" in summary_step.detail  # layer-2
 
 
 def test_auto_pipeline_skips_summary_when_no_llm_cli(monkeypatch, tmp_path):

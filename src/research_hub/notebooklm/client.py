@@ -17,6 +17,20 @@ from notebooklm import (
 )
 
 
+CLUSTER_SYNTHESIS_PROMPT = """\
+Synthesize across ALL sources in this notebook. For each major theme \
+that recurs in multiple sources, write a section that:
+- names the theme
+- lists which sources contribute and what each says
+- notes points of agreement and disagreement
+
+Cover every source at least once. Do NOT default-focus on one paper. \
+End with an "Open questions across the cluster" section that surfaces \
+gaps, contradictions, and follow-up directions raised by more than one \
+source.
+"""
+
+
 class NotebookLMError(Exception):
     """research-hub-specific error class wrapping NotebookLM failures."""
 
@@ -298,9 +312,15 @@ class NotebookLMClient:
 
         async def _go():
             if kind == "brief":
+                # v0.87 N2: default brief = cluster synthesis, not single-source
+                # briefing doc. The NLM auto-briefing pattern focuses on whichever
+                # source it judges most prominent, which produces a 1-of-N brief
+                # for multi-paper clusters. CUSTOM + a synthesis prompt forces
+                # cross-paper coverage. (Locked decision in V087_PLAN.md §N2.)
                 status = await self._client.artifacts.generate_report(
                     notebook_id,
-                    report_format=ReportFormat.BRIEFING_DOC,
+                    report_format=ReportFormat.CUSTOM,
+                    custom_prompt=CLUSTER_SYNTHESIS_PROMPT,
                 )
             elif kind == "audio":
                 status = await self._client.artifacts.generate_audio(notebook_id)

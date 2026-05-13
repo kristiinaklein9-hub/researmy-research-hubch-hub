@@ -18,6 +18,7 @@ from research_hub.dedup import DedupHit, DedupIndex, build_from_obsidian, build_
 from research_hub.manifest import Manifest, new_entry
 from research_hub.utils.doi import extract_arxiv_id
 from research_hub.verify import VerificationResult, VerifyCache, verify_arxiv, verify_doi, verify_paper
+from research_hub.ingest_diff import compute_ingest_gap, write_gap_sidecar
 from research_hub.vault.hub_overview import derive_moc_links, ensure_moc, populate_overview
 from research_hub.vault.link_updater import update_cluster_links
 from research_hub.zotero.client import add_note, check_duplicate, get_client
@@ -1276,6 +1277,28 @@ def run_pipeline(
                 p(f"Hub overview: {hub_result['overview_path']}")
             except Exception as exc:
                 p(f"  [warn] hub overview population failed: {exc}")
+            try:
+                gap_report = compute_ingest_gap(
+                    cluster_slug=cluster_obj.slug,
+                    vault_root=Path(cfg.root),
+                )
+                write_gap_sidecar(
+                    cluster_slug=cluster_obj.slug,
+                    vault_root=Path(cfg.root),
+                    gap_report=gap_report,
+                )
+                if gap_report["gap_count"] > 0:
+                    p(
+                        f"  [warn] ingest gap: {gap_report['gap_count']} of "
+                        f"{gap_report['accepted_count']} fit-check-accepted papers "
+                        f"did not reach raw/{cluster_obj.slug}/"
+                    )
+                    for entry in gap_report["gap"][:5]:
+                        p(f"    - {entry['doi']}  {entry['title'][:80]}")
+                    if gap_report["gap_count"] > 5:
+                        p(f"    (+{gap_report['gap_count'] - 5} more in .ingest_gap.json)")
+            except Exception as exc:
+                p(f"  [warn] ingest-gap reporting failed: {exc}")
         p(f"JSON: {out_path}\n=== DONE ===")
 
     if cluster_obj is not None:

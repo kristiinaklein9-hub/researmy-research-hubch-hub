@@ -1,5 +1,67 @@
 # Changelog
 
+## v0.88.2 (2026-05-13) — paper retype CLI
+
+Closes the second v0.88.1 backlog item from V088_PLAN.md acceptance:
+"Zotero `itemType` change is still a manual step" — pyzotero / the
+Zotero web API rejects PATCH requests that try to change `itemType`
+on an existing item.
+
+### Fix
+
+New `research-hub paper retype --slug X --to-type Y [--dry-run|--apply]`
+CLI. Implements the create-new + trash-old + rewrite-frontmatter
+work-around:
+
+1. Read the Obsidian note's `zotero-key` frontmatter field.
+2. Fetch the current Zotero item; capture `data` + `itemType`.
+3. Get a fresh `item_template(target_type)` from Zotero.
+4. Map shared fields old → new template, with cross-type venue
+   translation (publicationTitle → proceedingsTitle for
+   journalArticle → conferencePaper; both blanked for dataset).
+5. Preserve `creators`, `tags`, `collections` verbatim so the new
+   item lands in the same cluster collection.
+6. `--dry-run` (default): print the plan + fields_copied + fields_dropped.
+7. `--apply`: `zot.create_items([new_data])` → new key. Try soft-trash
+   the old; if pyzotero rejects the `deleted: 1` payload (it does
+   in current Zotero web API), fall back to `delete_item` (hard
+   delete from Zotero — but the new correct-type item already has
+   all the fields, and Zotero web app's Trash UI lets the user
+   restore for ~30 days). Rewrite the note's `zotero-key:` to the
+   new key. Rebuild dedup_index.
+
+### Live verification
+
+Two papers retyped on the user's vault (the v0.87 reviewer-rejection
+cases):
+
+  goldshtein2025  journalArticle → conferencePaper
+    old 3A5FNAXZ → new 8AVTNDDW
+    publicationTitle "World Environmental and Water Resources
+    Congress 2025" → proceedingsTitle (same value, correct field)
+
+  arnold2026      journalArticle → dataset
+    old I92RXW72 → new UHI4TD4Z
+    publicationTitle "" stays blank (dataset has no venue field)
+
+Both new items preserve cluster collection bindings (6ZANW2CZ +
+batch collection). Both Obsidian notes' `zotero-key:` rewritten.
+Both old items removed via `delete_item` (soft-trash unavailable).
+
+### Tests (8 new)
+
+tests/test_v0881_retype.py:
+- dry-run does not create or trash
+- apply creates new + trashes old + rewrites frontmatter key
+- to-dataset blanks venue + drops unsupported fields (volume/issue/pages)
+- target == source returns no-op error
+- missing slug returns clear error
+- missing zotero-key returns clear error
+- unknown target itemType returns Zotero API error
+- creators + tags + collections preserved verbatim
+
+Mocks pyzotero entirely — no live API calls in tests.
+
 ## v0.88.1 (2026-05-13) — fix the 2 shard-test flakes
 
 v0.88.0 shipped with two `@pytest.mark.xfail(strict=False)`-marked

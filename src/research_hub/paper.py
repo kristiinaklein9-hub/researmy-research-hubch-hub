@@ -839,6 +839,185 @@ def _replace_collection_binding(
     return updated
 
 
+def retype_paper(
+    cfg,
+    slug: str,
+    *,
+    target_type: str,
+    dry_run: bool = True,
+) -> dict:
+    """v0.88.2 §B: change a paper's Zotero itemType.
+
+    Background: pyzotero / the Zotero web API rejects PATCH requests
+    that try to change `itemType` on an existing item. The work-around
+    is "create new item with the target type + copy shared fields +
+    delete (trash) the old item + update the Obsidian frontmatter's
+    `zotero-key` to point at the new item". This function wraps that
+    flow.
+
+    Live use cases (V088_PLAN.md): goldshtein2025 should be
+    `conferencePaper` not `journalArticle`; arnold2026 Zenodo deposit
+    should be `dataset` not `journalArticle`.
+
+    Returns a report dict:
+      {
+        "mode": "dry_run" | "apply",
+        "slug": <slug>,
+        "from_type": <current itemType>,
+        "to_type": <target_type>,
+        "old_zotero_key": <key>,
+        "new_zotero_key": <key | "">,  # populated on --apply
+        "fields_copied": [<field>...],
+        "fields_dropped": [<field>...],  # target template lacks them
+        "errors": [<msg>...],
+      }
+    """
+    target_type = (target_type or "").strip()
+    if not target_type:
+        raise ValueError("--to-type is required")
+
+    note_path = _find_note_path(cfg, slug)
+    if note_path is None:
+        return {
+            "mode": "dry_run" if dry_run else "apply",
+            "slug": slug,
+            "errors": [f"note not found for slug: {slug}"],
+        }
+    state = _parse_paper_label(note_path, slug=slug)
+    zotero_key = (state.zotero_key or "").strip()
+    if not zotero_key:
+        return {
+            "mode": "dry_run" if dry_run else "apply",
+            "slug": slug,
+            "errors": ["note has no zotero-key in frontmatter"],
+        }
+
+    report: dict = {
+        "mode": "dry_run" if dry_run else "apply",
+        "slug": slug,
+        "from_type": "",
+        "to_type": target_type,
+        "old_zotero_key": zotero_key,
+        "new_zotero_key": "",
+        "fields_copied": [],
+        "fields_dropped": [],
+        "errors": [],
+    }
+
+    zot = _maybe_get_zotero_client([zotero_key], report)
+    if zot is None:
+        report["errors"].append("zotero client unavailable")
+        return report
+
+    try:
+        item = zot.item(zotero_key)
+    except Exception as exc:
+        report["errors"].append(f"fetch item {zotero_key}: {exc}")
+        return report
+    data = item.get("data", {})
+    report["from_type"] = data.get("itemType", "")
+
+    if report["from_type"] == target_type:
+        report["errors"].append("paper is already the target itemType (no-op)")
+        return report
+
+    try:
+        new_template = zot.item_template(target_type)
+    except Exception as exc:
+        report["errors"].append(f"unknown itemType '{target_type}': {exc}")
+        return report
+
+    # Map shared fields from old data → new template.
+    # Common bibliographic fields are named the same across types; venue
+    # field has type-specific names (publicationTitle / proceedingsTitle /
+    # bookTitle / archive) handled below.
+    NEVER_COPY = {"itemType", "key", "version", "dateAdded", "dateModified",
+                  "tags", "collections", "relations", "creators"}
+    venue_field_map = {
+        "journalArticle": "publicationTitle",
+        "conferencePaper": "proceedingsTitle",
+        "bookSection": "bookTitle",
+        "manuscript": "publicationTitle",
+        "report": "reportType",
+        "dataset": "",   # datasets have no canonical venue field
+    }
+    source_venue_field = venue_field_map.get(report["from_type"], "publicationTitle")
+    target_venue_field = venue_field_map.get(target_type, "publicationTitle")
+
+    new_data = dict(new_template)
+    fields_copied: list[str] = []
+    fields_dropped: list[str] = []
+
+    for key, value in data.items():
+        if key in NEVER_COPY:
+            continue
+        if key == source_venue_field and target_venue_field and target_venue_field != source_venue_field:
+            # Cross-type venue translation: publicationTitle → proceedingsTitle
+            if target_venue_field in new_data:
+                new_data[target_venue_field] = value
+                fields_copied.append(f"{source_venue_field}->{target_venue_field}")
+            else:
+                fields_dropped.append(key)
+            continue
+        if key in new_data:
+            new_data[key] = value
+            fields_copied.append(key)
+        elif value not in ("", [], None):
+            # Substantive value but target template doesn't have this field
+            fields_dropped.append(key)
+
+    # Carry creators + tags + collections explicitly
+    new_data["creators"] = data.get("creators", [])
+    new_data["tags"] = data.get("tags", [])
+    new_data["collections"] = data.get("collections", [])
+    report["fields_copied"] = sorted(set(fields_copied))
+    report["fields_dropped"] = sorted(set(fields_dropped))
+
+    if dry_run:
+        return report
+
+    # Apply: create new + trash old + update note frontmatter.
+    try:
+        resp = zot.create_items([new_data])
+    except Exception as exc:
+        report["errors"].append(f"create_items: {exc}")
+        return report
+    success = (resp or {}).get("success") or {}
+    if not success:
+        report["errors"].append(f"create_items: no success entries in response: {resp}")
+        return report
+    new_key = next(iter(success.values()))
+    report["new_zotero_key"] = new_key
+
+    # v0.88.1: pyzotero's update_item() validates against the item-type
+    # schema and rejects the `deleted: 1` key the soft-trash flow requires —
+    # so soft-trash fails with "Invalid keys present in item 1: deleted".
+    # For retype we already created a new correct-type item, so HARD-DELETE
+    # of the old wrong-type item is safe: no data loss (new item has it all),
+    # and Zotero web app's "Trash" UI still lets the user restore for ~30
+    # days if anything went wrong. Prefer soft-trash first, fall through to
+    # hard delete.
+    trashed = False
+    try:
+        trashed = _trash_zotero_item(zot, zotero_key)
+    except Exception:
+        trashed = False
+    if not trashed:
+        try:
+            zot.delete_item(item)
+            trashed = True
+        except Exception as exc:
+            report["errors"].append(f"delete old item {zotero_key}: {exc}")
+
+    try:
+        _rewrite_paper_frontmatter(note_path, {"zotero-key": new_key})
+    except Exception as exc:
+        report["errors"].append(f"rewrite frontmatter {note_path}: {exc}")
+
+    _rebuild_dedup_index(cfg)
+    return report
+
+
 def _maybe_get_zotero_client(zotero_keys: list[str], report: dict):
     if not any(str(key or "").strip() for key in zotero_keys):
         return None

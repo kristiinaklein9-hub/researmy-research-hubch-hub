@@ -1706,6 +1706,33 @@ def _paper_command(args) -> int:
             for error in result["zotero_errors"]:
                 print(f"  Zotero warning: {error['error']}", file=sys.stderr)
         return 0
+    if args.paper_command == "retype":
+        from research_hub.paper import retype_paper
+
+        cfg = get_config()
+        report = retype_paper(
+            cfg,
+            args.slug,
+            target_type=args.to_type,
+            dry_run=not args.apply,
+        )
+        mode = "dry-run" if not args.apply else "applied"
+        print(f"paper retype ({mode}): {report['slug']}")
+        if report.get("errors"):
+            for err in report["errors"]:
+                print(f"  [ERR] {err}", file=sys.stderr)
+            return 1 if report.get("errors") else 0
+        print(f"  from: {report['from_type']}")
+        print(f"  to:   {report['to_type']}")
+        print(f"  old zotero-key: {report['old_zotero_key']}")
+        if report.get("new_zotero_key"):
+            print(f"  new zotero-key: {report['new_zotero_key']}")
+        print(f"  fields copied:  {len(report['fields_copied'])}")
+        if report.get("fields_dropped"):
+            print(f"  fields dropped: {report['fields_dropped']}")
+        if not args.apply:
+            print("\nRe-run with --apply to perform the change.")
+        return 0
     if args.paper_command == "enrich-existing":
         return _paper_enrich_existing(
             args.cluster,
@@ -5200,6 +5227,26 @@ def build_parser() -> argparse.ArgumentParser:
     bulk_delete_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
     bulk_delete_group.add_argument("--apply", dest="apply", action="store_true", help="Delete notes and move Zotero items to trash")
     bulk_delete_p.set_defaults(apply=False)
+
+    retype_p = paper_sub.add_parser(
+        "retype",
+        help=(
+            "Change a paper's Zotero itemType (v0.88.2): creates a new item "
+            "of the target type, copies shared fields, trashes the old item, "
+            "and updates the Obsidian note's zotero-key. Works around the "
+            "Zotero API's PATCH-itemType ban."
+        ),
+    )
+    retype_p.add_argument("--slug", required=True, help="Paper slug (frontmatter file stem)")
+    retype_p.add_argument(
+        "--to-type",
+        required=True,
+        help="Target Zotero itemType (e.g. conferencePaper, dataset, bookSection, report)",
+    )
+    retype_group = retype_p.add_mutually_exclusive_group()
+    retype_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
+    retype_group.add_argument("--apply", dest="apply", action="store_true", help="Actually create + trash + rewrite frontmatter")
+    retype_p.set_defaults(apply=False)
     enrich_existing = paper_sub.add_parser(
         "enrich-existing",
         help="Re-fetch DOI metadata to fill empty Zotero/Obsidian fields",

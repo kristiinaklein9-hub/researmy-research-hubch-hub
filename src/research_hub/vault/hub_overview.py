@@ -136,6 +136,94 @@ def ensure_moc(vault_root: Path, name: str, *, description: str = "") -> Path:
     return path
 
 
+_MOC_CLUSTERS_HEADING = "Clusters tagged with this MOC"
+# v0.88 #4: `[ \t]*\n` (not `\s*\n`) so the regex doesn't eat blank lines AFTER
+# the heading. With `\s*\n`, each populate_moc() run would consume one more
+# trailing blank into group(1) and then re-emit it, drifting non-idempotent.
+_MOC_CLUSTERS_SECTION_RE = re.compile(
+    rf"(##[ \t]+{re.escape(_MOC_CLUSTERS_HEADING)}[ \t]*\n)(.*?)(?=^##[ \t]|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def populate_moc(
+    vault_root: Path,
+    name: str,
+    cluster_slugs: list[str],
+) -> Path:
+    """v0.88 #4: write the actual list of clusters into a MOC note's body.
+
+    `ensure_moc` only creates the file with a `(populated by sync)`
+    placeholder. This function fills that section with the real
+    `[[<cluster>/00_overview]]` wikilinks so the MOC becomes a navigable
+    hub-of-hubs instead of an orphan stub.
+
+    Idempotent: re-running with the same cluster_slugs produces
+    byte-identical output. The MOC frontmatter and any other body
+    sections the user may have written are preserved.
+    """
+    root = Path(vault_root)
+    path = safe_join(root, "hub", "_moc", f"{name}.md")
+    if not path.exists():
+        ensure_moc(root, name)
+
+    text = path.read_text(encoding="utf-8")
+    # Build the new section body.
+    if cluster_slugs:
+        bullets = "\n".join(
+            f"- [[{slug}/00_overview|{slug}]]"
+            for slug in sorted(set(cluster_slugs))
+        )
+        new_body = bullets + "\n"
+    else:
+        new_body = "(no clusters reference this MOC yet)\n"
+
+    if _MOC_CLUSTERS_SECTION_RE.search(text):
+        updated = _MOC_CLUSTERS_SECTION_RE.sub(
+            lambda m: m.group(1) + "\n" + new_body + "\n",
+            text,
+            count=1,
+        )
+    else:
+        # The heading is missing — append it at the end.
+        sep = "" if text.endswith("\n") else "\n"
+        updated = f"{text}{sep}\n## {_MOC_CLUSTERS_HEADING}\n\n{new_body}\n"
+
+    if updated != text:
+        path.write_text(updated, encoding="utf-8")
+    return path
+
+
+def populate_all_mocs(cfg) -> list[tuple[str, Path]]:
+    """v0.88 #4: for every MOC referenced by any cluster, write its
+    Clusters list. Mirrors `populate_all_overviews` over the MOC plane.
+
+    Returns list of (moc_name, path) tuples for each MOC populated.
+    """
+    from research_hub.clusters import ClusterRegistry
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    vault_root = Path(cfg.root)
+    moc_to_clusters: dict[str, list[str]] = {}
+    for cluster in registry.list():
+        slug = (cluster.slug or "").strip()
+        if not slug:
+            continue
+        moc_links = derive_moc_links(
+            slug,
+            cluster_queries=[str(getattr(cluster, "first_query", "") or "")],
+            moc_links=list(getattr(cluster, "moc_links", []) or []),
+        )
+        for moc_name in moc_links:
+            moc_to_clusters.setdefault(moc_name, []).append(slug)
+
+    written: list[tuple[str, Path]] = []
+    for moc_name, slugs in moc_to_clusters.items():
+        path = populate_moc(vault_root, moc_name, slugs)
+        written.append((moc_name, path))
+    return written
+
+
 def derive_moc_links(
     cluster_slug: str,
     cluster_queries: list[str] | None = None,
@@ -220,6 +308,12 @@ def populate_all_overviews(
             written.append((slug, overview_path))
         except Exception as exc:  # noqa: BLE001 — surface per-cluster failures, continue with rest
             written.append((slug, Path(f"<error: {exc}>")))
+    # v0.88 #4: now that every cluster's overview is up-to-date, refresh
+    # the MOC bodies so each MOC lists its member clusters.
+    try:
+        populate_all_mocs(cfg)
+    except Exception:  # noqa: BLE001 — same defensive posture as the per-cluster loop
+        pass
     return written
 
 

@@ -185,6 +185,7 @@ def make_raw_md(
     verified: bool | None = None,
     verified_at: str = "",
     include_pending_summary_sections: bool = True,
+    moc_links: list[str] | None = None,
 ):
     title = item_data['title'].replace('"', "'")
     authors = item_data['authors']
@@ -254,6 +255,22 @@ def make_raw_md(
 
     summarize_status = "failed_no_abstract" if is_bad_abstract(str(abstract)) else "pending"
     abstract_section = f"\n## Abstract\n\n{abstract}\n" if abstract else ""
+
+    # v0.88 #5: paper notes backlink to their cluster overview + each MOC the
+    # cluster belongs to. Closes the graph orphan-hub problem flagged by V4
+    # audit — papers had wikilinks to 11 cluster siblings but ZERO links to
+    # the actual hubs (overview, MOCs), so graph view showed two dense
+    # blobs with isolated overview/MOC nodes floating beside them.
+    hub_section = ""
+    hub_lines: list[str] = []
+    if topic_cluster:
+        hub_lines.append(f"- Cluster: [[{topic_cluster}/00_overview|{topic_cluster}]]")
+    for moc in moc_links or []:
+        moc_clean = str(moc).strip()
+        if moc_clean:
+            hub_lines.append(f"- MOC: [[{moc_clean}]]")
+    if hub_lines:
+        hub_section = "\n## Hub\n\n" + "\n".join(hub_lines) + "\n"
     pending_summary_sections = ""
     if include_pending_summary_sections:
         pending_summary_sections = "\n" + pending_sections_markdown() + "\n"
@@ -294,7 +311,7 @@ status: unread
 **Year:** {year}
 **Citation:** {citation_line}
 {"**DOI:** " + doi if doi else ""}
-{abstract_section}{related_section}{notes_section}{pending_summary_sections}
+{abstract_section}{related_section}{hub_section}{notes_section}{pending_summary_sections}
 ---
 *Source: Zotero key `{key}`*
 """

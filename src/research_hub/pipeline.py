@@ -606,15 +606,25 @@ def _render_obsidian_note(
         "abstract": pp["abstract"],
         "tags": pp.get("tags", []),
     }
+    cluster_queries_for_note = [_query_for_paper(pp, query)] if cluster_slug else []
+    # v0.88 #5: derive MOC backlinks at note-creation time so every paper
+    # gets a `## Hub` section linking up to its cluster overview + MOCs.
+    moc_links_for_note: list[str] = []
+    if cluster_slug:
+        moc_links_for_note = derive_moc_links(
+            cluster_slug,
+            cluster_queries=cluster_queries_for_note,
+        )
     content = make_raw_md(
         item_data,
         [collection_name],
         [],
         topic_cluster=cluster_slug or "",
-        cluster_queries=[_query_for_paper(pp, query)] if cluster_slug else [],
+        cluster_queries=cluster_queries_for_note,
         verified=pp.get("verified"),
         verified_at=pp.get("verified_at", ""),
         include_pending_summary_sections=False,
+        moc_links=moc_links_for_note,
     )
     if fit_warning:
         content = content.replace('verified_at: "', 'fit_warning: true\nverified_at: "', 1)

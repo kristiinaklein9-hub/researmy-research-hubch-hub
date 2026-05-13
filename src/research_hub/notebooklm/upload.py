@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+from urllib.parse import unquote
 
 from research_hub.notebooklm.auth import default_state_file
 from research_hub.notebooklm.client import (
@@ -19,6 +22,16 @@ from research_hub.notebooklm.client import (
 )
 
 BETWEEN_UPLOADS_SEC = 1.0
+DATASET_DOI_PREFIXES = ("10.5281/zenodo.", "10.6084/m9.figshare.")
+DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.IGNORECASE)
+BAD_TITLE_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
+    ("unable_to_load", "unable to load", re.compile(r"(?i)unable to load")),
+    ("error", "error page", re.compile(r"(?i)\berror\s*\d*\b")),
+    ("abstract_id_pattern", "abstract-id pattern", re.compile(r"^Abstract [A-Z]+[-\d]+$")),
+    ("blank_vol_no", "blank vol/no", re.compile(r"\|\s*Vol\s*,\s*No\s*$")),
+    ("page_not_found", "page not found", re.compile(r"(?i)page not found")),
+    ("forbidden_403", "403 forbidden", re.compile(r"(?i)403\s*forbidden")),
+)
 
 # Legacy test monkeypatch anchors. The RPC implementation no longer uses them.
 open_cdp_session = None
@@ -36,6 +49,65 @@ def _check_session_health(_page) -> tuple[bool, str]:
 
 
 @dataclass
+class SuspiciousSource:
+    doi: str
+    title: str
+    matched_rule: str
+    matched_label: str
+    fulltext_chars: int | None = None
+    source_id: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "doi": self.doi,
+            "title": self.title,
+            "matched_rule": self.matched_rule,
+        }
+        if self.fulltext_chars is not None:
+            payload["fulltext_chars"] = self.fulltext_chars
+        return payload
+
+
+@dataclass
+class IngestValidationReport:
+    cluster_slug: str
+    validated_at: str
+    total: int
+    suspicious: list[SuspiciousSource] = field(default_factory=list)
+
+    @property
+    def suspicious_count(self) -> int:
+        return len(self.suspicious)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "cluster_slug": self.cluster_slug,
+            "validated_at": self.validated_at,
+            "total": self.total,
+            "suspicious_count": self.suspicious_count,
+            "suspicious": [source.to_dict() for source in self.suspicious],
+        }
+
+    def warning_text(self) -> str:
+        if not self.suspicious:
+            return ""
+        lines = [
+            f"[warn] {self.suspicious_count} source(s) look like they did not ingest content:",
+        ]
+        for source in self.suspicious:
+            doi = source.doi or "(unknown DOI)"
+            title = source.title or "(untitled)"
+            lines.append(f'  - {doi}  "{title}"  (matched: {source.matched_label})')
+        lines.extend(
+            [
+                "These poison downstream artifacts. Consider replacing the URL or",
+                "uploading a PDF directly via the NotebookLM web UI.",
+            ]
+        )
+        return "\n".join(lines)
+
+
+@dataclass
 class UploadReport:
     cluster_slug: str
     notebook_url: str = ""
@@ -46,6 +118,7 @@ class UploadReport:
     skipped_already_uploaded: int = 0
     errors: list[dict] = field(default_factory=list)
     dry_run: bool = False
+    ingest_validation: IngestValidationReport | None = None
 
     @property
     def success_count(self) -> int:
@@ -107,6 +180,193 @@ def _log_jsonl(path: Path, event: dict) -> None:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def validate_uploaded_sources(
+    client,
+    handle,
+    doi_list,
+    *,
+    cluster_slug: str = "",
+    artifacts_dir: Path | None = None,
+) -> IngestValidationReport:
+    """Validate NotebookLM source titles/fulltext after upload.
+
+    This is intentionally advisory: unsupported SDK methods or malformed
+    source objects produce an empty report instead of failing the upload.
+    """
+
+    doi_values = [str(doi).strip() for doi in doi_list if str(doi).strip()]
+    validated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    resolved_cluster = cluster_slug or Path(getattr(handle, "name", "") or "notebook").name
+    try:
+        sources = _list_notebook_sources(client, getattr(handle, "notebook_id", ""))
+    except Exception:
+        sources = []
+
+    suspicious: list[SuspiciousSource] = []
+    for index, source in enumerate(sources):
+        title = str(getattr(source, "title", "") or "")
+        source_id = str(getattr(source, "id", "") or getattr(source, "source_id", "") or "")
+        fulltext = _fetch_source_fulltext(client, getattr(handle, "notebook_id", ""), source_id)
+        fulltext_chars = _fulltext_char_count(fulltext)
+        doi = _doi_for_source(source, index, doi_values, fulltext)
+        match = _title_rule_match(title)
+        if match is None and fulltext_chars is not None and fulltext_chars < 2000 and not _is_dataset_doi(doi):
+            match = ("short_fulltext", "short fulltext")
+        if match is None:
+            continue
+        rule_id, label = match
+        suspicious.append(
+            SuspiciousSource(
+                doi=doi,
+                title=title,
+                matched_rule=rule_id,
+                matched_label=label,
+                fulltext_chars=fulltext_chars,
+                source_id=source_id,
+            )
+        )
+
+    report = IngestValidationReport(
+        cluster_slug=resolved_cluster,
+        validated_at=validated_at,
+        total=len(doi_values) if doi_values else len(sources),
+        suspicious=suspicious,
+    )
+    if artifacts_dir is not None:
+        _write_ingest_validation_sidecar(report, artifacts_dir)
+    return report
+
+
+def _write_ingest_validation_sidecar(report: IngestValidationReport, artifacts_dir: Path) -> None:
+    try:
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / ".ingest_validation.json").write_text(
+            json.dumps(report.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _list_notebook_sources(client, notebook_id: str) -> list[Any]:
+    list_sources = getattr(client, "list_sources", None)
+    if list_sources is not None:
+        return list(list_sources(notebook_id) or [])
+    sources_api = getattr(client, "sources", None)
+    if sources_api is None:
+        return []
+    list_method = getattr(sources_api, "list", None)
+    if list_method is None:
+        return []
+    try:
+        return list(list_method(notebook_id) or [])
+    except TypeError:
+        return list(list_method() or [])
+
+
+def _fetch_source_fulltext(client, notebook_id: str, source_id: str) -> Any | None:
+    if not source_id:
+        return None
+    source_fulltext = getattr(client, "source_fulltext", None)
+    if source_fulltext is not None:
+        try:
+            return source_fulltext(notebook_id, source_id)
+        except Exception:
+            return None
+    sources_api = getattr(client, "sources", None)
+    if sources_api is None:
+        return None
+    for method_name in ("get_fulltext", "fulltext"):
+        method = getattr(sources_api, method_name, None)
+        if method is None:
+            continue
+        try:
+            return method(notebook_id, source_id)
+        except TypeError:
+            try:
+                return method(source_id)
+            except Exception:
+                return None
+        except Exception:
+            return None
+    return None
+
+
+def _fulltext_char_count(fulltext: Any | None) -> int | None:
+    if fulltext is None:
+        return None
+    char_count = getattr(fulltext, "char_count", None)
+    if isinstance(char_count, int):
+        return char_count
+    if isinstance(fulltext, str):
+        return len(fulltext)
+    content = getattr(fulltext, "content", None)
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(fulltext, dict):
+        value = fulltext.get("char_count")
+        if isinstance(value, int):
+            return value
+        content_value = fulltext.get("content")
+        if isinstance(content_value, str):
+            return len(content_value)
+    return None
+
+
+def _title_rule_match(title: str) -> tuple[str, str] | None:
+    for rule_id, label, pattern in BAD_TITLE_PATTERNS:
+        if pattern.search(title):
+            return rule_id, label
+    return None
+
+
+def _doi_for_source(source: Any, index: int, doi_list: list[str], fulltext: Any | None) -> str:
+    candidates = [
+        getattr(source, "doi", ""),
+        getattr(source, "url", ""),
+        getattr(source, "title", ""),
+        getattr(source, "id", ""),
+    ]
+    content = getattr(fulltext, "content", "") if fulltext is not None else ""
+    if isinstance(fulltext, str):
+        content = fulltext
+    elif isinstance(fulltext, dict):
+        content = str(fulltext.get("content") or "")
+    candidates.append(content)
+    for candidate in candidates:
+        doi = _extract_doi(str(candidate or ""))
+        if doi:
+            return doi
+    if index < len(doi_list):
+        return doi_list[index]
+    return ""
+
+
+def _extract_doi(text: str) -> str:
+    normalized = unquote(text)
+    match = DOI_RE.search(normalized)
+    if not match:
+        return ""
+    return match.group(0).rstrip(".,;:)]}").lower()
+
+
+def _is_dataset_doi(doi: str) -> bool:
+    lowered = doi.lower()
+    return any(lowered.startswith(prefix) for prefix in DATASET_DOI_PREFIXES)
+
+
+def _manifest_doi_list(manifest: dict) -> list[str]:
+    seen: set[str] = set()
+    dois: list[str] = []
+    for entry in manifest.get("entries", []):
+        doi = str(entry.get("doi", "") or "").strip()
+        if not doi or doi in seen:
+            continue
+        seen.add(doi)
+        dois.append(doi)
+    return dois
 
 
 def _attempt_upload(
@@ -254,6 +514,18 @@ def upload_cluster(
             else:
                 report.errors.append({"source": key, "error": result.error})
             time.sleep(BETWEEN_UPLOADS_SEC)
+
+        safe_slug = Path(cluster.slug).name
+        report.ingest_validation = validate_uploaded_sources(
+            client,
+            handle,
+            _manifest_doi_list(manifest),
+            cluster_slug=safe_slug,
+            artifacts_dir=cfg.research_hub_dir / "artifacts" / safe_slug,
+        )
+        warning_text = report.ingest_validation.warning_text()
+        if warning_text:
+            print(warning_text)
     finally:
         getattr(client, "close", lambda: None)()
 

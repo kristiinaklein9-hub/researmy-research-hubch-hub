@@ -7,7 +7,7 @@ import re
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 from urllib.parse import urlparse
@@ -38,6 +38,97 @@ class PdfAttachPlan:
     source: str = ""
     publisher_url: str = ""
     error: str = ""
+
+
+@dataclass(frozen=True)
+class PdfAttachEntry:
+    item_key: str
+    title: str
+    doi: str
+    action: str
+    source: str = ""
+    status: int | None = None
+    reason: str | None = None
+    bytes: int | None = None
+    slug: str = ""
+
+    def to_json(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "slug": self.slug or self.item_key,
+            "action": self.action,
+            "source": self.source,
+            "reason": self.reason,
+        }
+        if self.status is not None:
+            payload["status"] = self.status
+        if self.bytes is not None:
+            payload["bytes"] = self.bytes
+        return payload
+
+
+@dataclass
+class PdfAttachSummary:
+    entries: list[PdfAttachEntry] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return len(self.entries)
+
+    @property
+    def ok(self) -> int:
+        return sum(1 for entry in self.entries if entry.action == "OK")
+
+    @property
+    def skip(self) -> int:
+        return sum(1 for entry in self.entries if entry.action == "SKIP")
+
+    @property
+    def fail(self) -> int:
+        return sum(1 for entry in self.entries if entry.action == "FAIL")
+
+    def with_slugs(self, slug_by_key: dict[str, str]) -> "PdfAttachSummary":
+        return PdfAttachSummary(
+            [
+                PdfAttachEntry(
+                    item_key=entry.item_key,
+                    title=entry.title,
+                    doi=entry.doi,
+                    action=entry.action,
+                    source=entry.source,
+                    status=entry.status,
+                    reason=entry.reason,
+                    bytes=entry.bytes,
+                    slug=slug_by_key.get(entry.item_key, entry.slug),
+                )
+                for entry in self.entries
+            ]
+        )
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "total": self.total,
+            "ok": self.ok,
+            "skip": self.skip,
+            "fail": self.fail,
+            "entries": [entry.to_json() for entry in self.entries],
+        }
+
+
+class PdfAttachResults(dict[str, str]):
+    def __init__(self, values: dict[str, str], summary: PdfAttachSummary) -> None:
+        super().__init__(values)
+        self.summary = summary
+
+
+@dataclass(frozen=True)
+class _PdfDownloadResult:
+    path: Path | None
+    status: int | None = None
+    reason: str | None = None
+    bytes: int | None = None
+
+
+_LAST_DOWNLOAD_RESULTS: dict[str, _PdfDownloadResult] = {}
 
 
 def _openalex_oa_url(doi: str, prefetched: Optional[dict] = None) -> str:
@@ -167,7 +258,12 @@ def plan_attach_for_items(
         data = item.get("data", {})
         doi = str(data.get("DOI", "") or "").strip()
         arxiv_id = _extract_arxiv_id(data)
-        pdf_url, source = find_pdf_url(doi=doi, arxiv_id=arxiv_id, unpaywall_email=unpaywall_email)
+        if _is_zenodo_dataset_doi(doi):
+            pdf_url, source = "", ""
+            error = "zenodo_dataset"
+        else:
+            pdf_url, source = find_pdf_url(doi=doi, arxiv_id=arxiv_id, unpaywall_email=unpaywall_email)
+            error = "" if pdf_url else "no_oa_record"
         publisher_url = ""
         if not pdf_url and include_publisher_link:
             publisher_url = (
@@ -176,6 +272,7 @@ def plan_attach_for_items(
             )
             if publisher_url:
                 source = "publisher-page"
+                error = ""
         plans.append(
             PdfAttachPlan(
                 item_key=item.get("key", ""),
@@ -185,6 +282,7 @@ def plan_attach_for_items(
                 pdf_url=pdf_url,
                 source=source,
                 publisher_url=publisher_url,
+                error=error,
             )
         )
     return plans
@@ -217,6 +315,15 @@ def _has_existing_pdf(zot, item_key: str) -> bool:
 
 def _download_pdf_to_temp(url: str, *, max_mb: int = 25) -> Path | None:
     """Download a PDF URL to a temp file and return the local path."""
+
+    result = _download_pdf_to_temp_result(url, max_mb=max_mb)
+    _LAST_DOWNLOAD_RESULTS[url] = result
+    return result.path
+
+
+def _download_pdf_to_temp_result(url: str, *, max_mb: int = 25) -> _PdfDownloadResult:
+    """Download a PDF URL and retain the reason when it cannot be saved."""
+
     parsed = urlparse(url)
     if parsed.netloc.endswith(".test") and parsed.path.lower().endswith(".pdf"):
         # Reserved .test URLs are used throughout the unit suite; keep them
@@ -227,30 +334,44 @@ def _download_pdf_to_temp(url: str, *, max_mb: int = 25) -> Path | None:
         try:
             target.write_bytes(content)
         except Exception:
-            return None
-        return target
+            return _PdfDownloadResult(None, reason="network_error")
+        return _PdfDownloadResult(target, bytes=len(content))
     try:
         response = requests.get(url, timeout=60, stream=True)
     except Exception:
-        return None
+        return _PdfDownloadResult(None, reason="network_error")
+    status = _response_status(response)
     if not response.ok:
-        return None
+        return _PdfDownloadResult(None, status=status, reason=_http_failure_reason(status))
     try:
         content = response.content
     except Exception:
-        return None
+        return _PdfDownloadResult(None, status=status, reason="network_error")
     if len(content) > max_mb * 1024 * 1024:
-        return None
+        return _PdfDownloadResult(None, status=status, reason="pdf_invalid")
     content_type = str((response.headers or {}).get("Content-Type", "") or "").lower()
     if "pdf" not in content_type and not content.startswith(b"%PDF"):
-        return None
+        return _PdfDownloadResult(None, status=status, reason="pdf_invalid")
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
     target = Path(tempfile.gettempdir()) / f"rh_pdf_{digest}.pdf"
     try:
         target.write_bytes(content)
     except Exception:
-        return None
-    return target
+        return _PdfDownloadResult(None, status=status, reason="network_error")
+    return _PdfDownloadResult(target, status=status, bytes=len(content))
+
+
+def _response_status(response) -> int | None:
+    status = getattr(response, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _http_failure_reason(status: int | None) -> str:
+    if status == 403:
+        return "paywall_403"
+    if status == 404:
+        return "not_found_404"
+    return f"http_{status}" if status is not None else "network_error"
 
 
 def _upload_local_pdf(zot, parent_key: str, local_path: Path, source_label: str) -> str:
@@ -288,6 +409,144 @@ def _create_imported_url_attachment(zot, parent_key: str, url: str, *, title: st
     zot.create_items([template])
 
 
+def _entry(
+    plan: PdfAttachPlan,
+    action: str,
+    source: str,
+    *,
+    status: int | None = None,
+    reason: str | None = None,
+    bytes: int | None = None,
+) -> PdfAttachEntry:
+    return PdfAttachEntry(
+        item_key=plan.item_key,
+        title=plan.title,
+        doi=plan.doi,
+        action=action,
+        source=source,
+        status=status,
+        reason=reason,
+        bytes=bytes,
+    )
+
+
+def _report_source(plan: PdfAttachPlan) -> str:
+    source = plan.source
+    if source == "openalex-oa":
+        return "openalex"
+    if source == "crossref-link":
+        return "crossref"
+    if source == "publisher-page":
+        return "crossref"
+    if source in {"crossref", "openalex", "unpaywall", "arxiv"}:
+        return source
+    if plan.arxiv_id:
+        return "arxiv"
+    if plan.doi:
+        return "unpaywall"
+    return ""
+
+
+def _download_failure_reason(result: _PdfDownloadResult | None, source: str) -> str:
+    if result is None:
+        return "pdf_invalid"
+    if source == "arxiv" and result.status == 404:
+        return "arxiv_withdrawn"
+    return result.reason or "pdf_invalid"
+
+
+def _safe_size(path: Path) -> int | None:
+    try:
+        return path.stat().st_size
+    except Exception:
+        return None
+
+
+def _upload_failure_reason(upload_result: str) -> str:
+    if upload_result.startswith("create-attachment-failed"):
+        return "upload_failed"
+    if upload_result.startswith("upload-failed"):
+        return "upload_failed"
+    return "pdf_invalid"
+
+
+def _is_zenodo_dataset_doi(doi: str) -> bool:
+    return doi.lower().startswith("10.5281/zenodo.")
+
+
+def _action_for_reason(reason: str) -> str:
+    if reason in {"no_oa_record", "zenodo_dataset", "arxiv_withdrawn", "already_has_pdf"}:
+        return "SKIP"
+    return "FAIL"
+
+
+def _summary_from_legacy_results(
+    plans: Iterable[PdfAttachPlan],
+    results: dict[str, str],
+) -> PdfAttachSummary:
+    entries: list[PdfAttachEntry] = []
+    plan_by_key = {plan.item_key: plan for plan in plans}
+    for item_key, status in results.items():
+        plan = plan_by_key.get(item_key) or PdfAttachPlan(item_key=item_key, title="", doi="", arxiv_id="")
+        source = _report_source(plan)
+        if status == "ok":
+            entries.append(_entry(plan, "OK", source))
+        elif status.startswith("skip:"):
+            reason = status.split(":", 1)[1].replace("-", "_")
+            entries.append(_entry(plan, "SKIP", source, reason=reason))
+        elif status.startswith("fallback-url:"):
+            entries.append(_entry(plan, "SKIP", source, reason="link_only_fallback"))
+        else:
+            entries.append(_entry(plan, "FAIL", source, reason=_legacy_failure_reason(status)))
+    for plan in plan_by_key.values():
+        if plan.item_key in results:
+            continue
+        reason = plan.error or ("zenodo_dataset" if _is_zenodo_dataset_doi(plan.doi) else "no_oa_record")
+        entries.append(_entry(plan, _action_for_reason(reason), _report_source(plan), reason=reason))
+    return PdfAttachSummary(entries)
+
+
+def _legacy_failure_reason(status: str) -> str:
+    if "403" in status:
+        return "paywall_403"
+    if "404" in status:
+        return "not_found_404"
+    if "network" in status.lower():
+        return "network_error"
+    return "pdf_invalid"
+
+
+def _short_label(title: str) -> str:
+    cleaned = re.sub(r"\s+", " ", title).strip()
+    if len(cleaned) <= 32:
+        return cleaned
+    return cleaned[:29].rstrip() + "..."
+
+
+def _entry_details(entry: PdfAttachEntry) -> str:
+    if entry.action == "OK":
+        source = entry.source or "unknown"
+        if entry.bytes is not None:
+            return f"{source}, {_format_bytes(entry.bytes)}"
+        return source
+    reason = entry.reason or "unknown"
+    if entry.status is not None:
+        return f"{reason} on {entry.source or 'unknown'} HTTP {entry.status}"
+    if entry.source:
+        return f"{reason} on {entry.source}"
+    return reason
+
+
+def _format_bytes(size: int) -> str:
+    if size >= 1024 * 1024:
+        value = size / (1024 * 1024)
+        return f"{value:.1f} MB"
+    if size >= 1024:
+        value = size / 1024
+        return f"{value:.0f} KB"
+    return f"{size} B"
+
+
 def attach_pdfs(
     zot,
     plans: Iterable[PdfAttachPlan],
@@ -299,16 +558,23 @@ def attach_pdfs(
     """Attach PDFs as imported_file items, with optional imported_url fallback."""
     sleep_s = 1.0 / max(rate_limit_rps, 0.1)
     results: dict[str, str] = {}
+    entries: list[PdfAttachEntry] = []
     for plan in plans:
+        report_source = _report_source(plan)
         if plan.pdf_url:
             if not _is_safe_url(plan.pdf_url):
                 results[plan.item_key] = "skip:unsafe-url"
+                entries.append(_entry(plan, "FAIL", report_source, reason="unsafe_url"))
                 continue
             if _has_existing_pdf(zot, plan.item_key):
                 results[plan.item_key] = "skip:already-has-pdf"
+                entries.append(_entry(plan, "SKIP", report_source, reason="already_has_pdf"))
                 continue
             local_path = _download_pdf_to_temp(plan.pdf_url, max_mb=max_pdf_size_mb)
+            download_result = _LAST_DOWNLOAD_RESULTS.pop(plan.pdf_url, None)
             if local_path is None:
+                reason = _download_failure_reason(download_result, report_source)
+                status = download_result.status if download_result is not None else None
                 if keep_url_fallback:
                     try:
                         _create_imported_url_attachment(
@@ -318,24 +584,34 @@ def attach_pdfs(
                             title="Full Text PDF (link only)",
                         )
                         results[plan.item_key] = f"fallback-url:{plan.source}"
+                        entries.append(_entry(plan, "SKIP", report_source, status=status, reason="link_only_fallback"))
                     except Exception as exc:
                         results[plan.item_key] = str(exc)[:80]
+                        entries.append(_entry(plan, "FAIL", report_source, status=status, reason=reason))
                 else:
                     results[plan.item_key] = "download-failed-or-not-pdf"
+                    action = "SKIP" if reason == "arxiv_withdrawn" else "FAIL"
+                    entries.append(_entry(plan, action, report_source, status=status, reason=reason))
                 continue
+            byte_count = _safe_size(local_path)
             try:
                 upload_result = _upload_local_pdf(zot, plan.item_key, local_path, plan.source)
                 results[plan.item_key] = "ok" if upload_result.startswith("ok:") else upload_result
+                if upload_result.startswith("ok:"):
+                    entries.append(_entry(plan, "OK", report_source, bytes=byte_count))
+                else:
+                    entries.append(_entry(plan, "FAIL", report_source, reason=_upload_failure_reason(upload_result), bytes=byte_count))
             finally:
                 try:
                     local_path.unlink()
                 except Exception:
                     pass
-            if results[plan.item_key].startswith("ok:"):
+            if results[plan.item_key].startswith("ok"):
                 time.sleep(sleep_s)
         elif plan.publisher_url:
             if not _is_safe_url(plan.publisher_url):
                 results[plan.item_key] = "skip:unsafe-url"
+                entries.append(_entry(plan, "FAIL", report_source, reason="unsafe_url"))
                 continue
             try:
                 template = zot.item_template("attachment", "linked_url")
@@ -345,12 +621,44 @@ def attach_pdfs(
                 template["contentType"] = "text/html"
                 zot.create_items([template])
                 results[plan.item_key] = "ok"
+                entries.append(_entry(plan, "SKIP", report_source, reason="publisher_link_only"))
                 time.sleep(sleep_s)
             except Exception as exc:
                 results[plan.item_key] = str(exc)[:80]
+                entries.append(_entry(plan, "FAIL", report_source, reason="upload_failed"))
         else:
             results[plan.item_key] = "skip:no-source"
-    return results
+            reason = plan.error or ("zenodo_dataset" if _is_zenodo_dataset_doi(plan.doi) else "no_oa_record")
+            entries.append(_entry(plan, _action_for_reason(reason), report_source, reason=reason))
+    return PdfAttachResults(results, PdfAttachSummary(entries))
+
+
+def summarize_pdf_attach(
+    plans: Iterable[PdfAttachPlan],
+    results: dict[str, str],
+    *,
+    slug_by_key: dict[str, str] | None = None,
+) -> PdfAttachSummary:
+    """Return a structured summary from rich or legacy attach results."""
+
+    if isinstance(results, PdfAttachResults):
+        summary = results.summary
+    else:
+        summary = _summary_from_legacy_results(plans, results)
+    if slug_by_key:
+        return summary.with_slugs(slug_by_key)
+    return summary
+
+
+def format_pdf_attach_summary(summary: PdfAttachSummary) -> str:
+    lines = [
+        f"PDF attachment: {summary.ok}/{summary.total} succeeded, {summary.fail} failed, {summary.skip} skipped"
+    ]
+    for entry in summary.entries:
+        label = entry.slug or _short_label(entry.title) or entry.item_key
+        details = _entry_details(entry)
+        lines.append(f"  {f'[{entry.action}]':<6} {label:<16} ({details})")
+    return "\n".join(lines)
 
 
 def upgrade_pdfs_in_cluster(

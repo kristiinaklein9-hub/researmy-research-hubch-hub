@@ -232,6 +232,39 @@ class NotebookLMClient:
     def set_active_notebook(self, notebook_id: str) -> None:
         self._active_notebook_id = notebook_id
 
+    def list_sources(self, notebook_id: str) -> list[Any]:
+        """Return sources in a notebook through the upstream sources API."""
+
+        async def _go():
+            return await self._client.sources.list(notebook_id)
+
+        try:
+            return list(self._run(_go()))
+        except _UpstreamError as exc:
+            raise NotebookLMError(f"failed to list sources: {exc}") from exc
+        except Exception as exc:
+            raise NotebookLMError(f"failed to list sources: {exc}") from exc
+
+    def source_fulltext(self, notebook_id: str, source_id: str) -> Any:
+        """Return indexed fulltext for one source if the SDK exposes it."""
+
+        async def _go():
+            sources_api = self._client.sources
+            getter = getattr(sources_api, "get_fulltext", None) or getattr(sources_api, "fulltext", None)
+            if getter is None:
+                raise NotebookLMError("NotebookLM sources API does not expose fulltext")
+            try:
+                return await getter(notebook_id, source_id)
+            except TypeError:
+                return await getter(source_id)
+
+        try:
+            return self._run(_go())
+        except _UpstreamError as exc:
+            raise NotebookLMError(f"failed to fetch source fulltext: {exc}") from exc
+        except Exception as exc:
+            raise NotebookLMError(f"failed to fetch source fulltext: {exc}") from exc
+
     def generate_briefing(self, notebook_id: str) -> BriefingArtifact:
         try:
             text = self._generate_and_download_report(notebook_id)

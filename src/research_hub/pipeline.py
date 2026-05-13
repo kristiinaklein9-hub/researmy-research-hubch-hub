@@ -682,6 +682,7 @@ def run_pipeline(
 
     log_path = _resolve_log_path(cfg.logs)
     out_path = cfg.logs / "pipeline_output.json"
+    pdf_attach_summary_json: dict[str, object] | None = None
     papers_json = cfg.root / "papers_input.json"
     collection_name = (
         cfg.zotero_collections.get(collection_key, {}).get("name", collection_key)
@@ -1157,7 +1158,12 @@ def run_pipeline(
                 )
 
         if with_pdfs and not no_zotero:
-            from research_hub.zotero.pdf_attach import attach_pdfs, plan_attach_for_items
+            from research_hub.zotero.pdf_attach import (
+                attach_pdfs,
+                format_pdf_attach_summary,
+                plan_attach_for_items,
+                summarize_pdf_attach,
+            )
 
             oa_email = (
                 getattr(cfg, "unpaywall_email", "")
@@ -1173,8 +1179,19 @@ def run_pipeline(
                     items = [zot.item(key) for key in just_added_keys]
                     plans = plan_attach_for_items(items, unpaywall_email=oa_email)
                     pdf_results = attach_pdfs(zot, plans, rate_limit_rps=2.0)
-                    attached = sum(1 for value in pdf_results.values() if value == "ok")
-                    p(f"PDF attach: {attached}/{len(plans)} attached")
+                    slug_by_key = {
+                        pp.get("zotero_key", ""): pp.get("slug", "")
+                        for pp in papers_for_notes
+                        if pp.get("zotero_key")
+                    }
+                    pdf_attach_summary = summarize_pdf_attach(
+                        plans,
+                        pdf_results,
+                        slug_by_key=slug_by_key,
+                    )
+                    pdf_attach_summary_json = pdf_attach_summary.to_json()
+                    for line in format_pdf_attach_summary(pdf_attach_summary).splitlines():
+                        p(line)
                     if cluster_slug:
                         pdf_batch_label = f"pdf-attach-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
                         papers_by_key = {
@@ -1263,6 +1280,8 @@ def run_pipeline(
                 for paper in papers
             ],
         }
+        if pdf_attach_summary_json is not None:
+            out["pdf_attach_summary"] = pdf_attach_summary_json
         with out_path.open("w", encoding="utf-8") as file_obj:
             json.dump(out, file_obj, indent=2, ensure_ascii=False)
         dedup.save(dedup_path)

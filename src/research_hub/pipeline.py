@@ -447,8 +447,15 @@ def write_papers_to_zotero(
     batch_papers: list[dict] = []
     target_collection = (cluster_coll or "").strip()
 
+    from research_hub.zotero.doi_overrides import apply_doi_prefix_overrides
+
     for pp in papers:
-        template = zot.item_template("journalArticle")
+        # v0.87.1 #1: apply DOI-prefix overrides so wrong venues from
+        # search backends (e.g. ASCE paper tagged "arXiv", Zenodo dataset
+        # tagged "Open MIND" journal) get fixed before they reach Zotero.
+        apply_doi_prefix_overrides(pp)
+        item_type = pp.get("item_type", "") or "journalArticle"
+        template = zot.item_template(item_type)
         template["title"] = pp["title"]
         template["creators"] = pp["authors"]
         template["date"] = pp["year"]

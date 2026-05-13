@@ -2498,6 +2498,29 @@ def _vault_graph_colors(refresh: bool) -> int:
     return 0
 
 
+def _vault_tag_migrate(*, cluster_slug: str | None, dry_run: bool) -> int:
+    """Backfill topic:<slug> tag into existing paper notes (v0.87.1 §6)."""
+    from collections import Counter
+
+    from research_hub.vault.tag_migrate import migrate_all
+
+    cfg = get_config()
+    results = migrate_all(
+        Path(cfg.root),
+        cluster_slug_filter=cluster_slug,
+        dry_run=dry_run,
+    )
+    counts = Counter(r.action for r in results)
+    mode = "dry-run" if dry_run else "applied"
+    print(f"vault tag-migrate ({mode}): scanned {len(results)} notes")
+    for action in ("added", "already_present", "skipped_no_topic_cluster", "skipped_no_tags_line", "skipped_no_frontmatter"):
+        if counts.get(action):
+            print(f"  {action:30s}  {counts[action]}")
+    if dry_run and counts.get("added"):
+        print("\nRe-run with --apply to write the changes.")
+    return 0
+
+
 def _vault_rebuild_overviews(*, cluster_slug: str | None) -> int:
     """Re-run populate_overview + ensure_moc for every cluster (v0.87.1 §5)."""
     from research_hub.vault.hub_overview import populate_all_overviews
@@ -4301,6 +4324,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Restrict to a single cluster slug (default: walk all clusters)",
     )
+    vault_tag_migrate = vault_subparsers.add_parser(
+        "tag-migrate",
+        help="Backfill topic:<slug> tag into existing paper-note frontmatter (v0.87.1)",
+    )
+    vault_tag_migrate.add_argument(
+        "--cluster",
+        default=None,
+        help="Restrict to a single cluster slug (default: walk all clusters)",
+    )
+    vault_tag_migrate.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Report changes without writing (default)",
+    )
+    vault_tag_migrate.add_argument(
+        "--apply",
+        dest="dry_run",
+        action="store_false",
+        help="Actually write the new tag into frontmatter",
+    )
 
     bases_parser = subparsers.add_parser("bases", help="Obsidian Bases (.base) generator")
     bases_sub = bases_parser.add_subparsers(dest="bases_command", required=True)
@@ -5455,6 +5499,11 @@ def main(argv: list[str] | None = None) -> int:
             return _vault_polish_markdown(cluster=args.cluster, dry_run=args.dry_run)
         if args.vault_command == "rebuild-overviews":
             return _vault_rebuild_overviews(cluster_slug=args.cluster)
+        if args.vault_command == "tag-migrate":
+            return _vault_tag_migrate(
+                cluster_slug=args.cluster,
+                dry_run=args.dry_run,
+            )
     if args.command == "bases":
         if args.bases_command == "emit":
             return _bases_emit(

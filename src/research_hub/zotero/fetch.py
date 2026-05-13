@@ -196,6 +196,13 @@ def make_raw_md(
     key = item_data['key']
 
     author_str = '; '.join(authors) if authors else 'Unknown'
+    # v0.87.1 #6: ensure topic:<slug> tag is present so Obsidian tag pane
+    # surfaces the cluster + graph view can color-group papers by topic.
+    # Locked decision (V087_PLAN.md / V088_PLAN.md Q1): use `topic:` prefix.
+    if topic_cluster:
+        topic_tag = f"topic:{topic_cluster}"
+        if topic_tag not in tags:
+            tags = list(tags) + [topic_tag]
     tags_yaml = '[' + ', '.join(f'"{t}"' for t in tags) + ']' if tags else '[]'
     collections_yaml = '[' + ', '.join(f'"{c}"' for c in collections_list) + ']'
     cluster_queries_yaml = '[' + ', '.join(

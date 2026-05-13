@@ -155,6 +155,74 @@ def derive_moc_links(
     return links
 
 
+def latest_brief_md(vault_root: Path, cluster_slug: str) -> Path | None:
+    """Return the most-recent NotebookLM brief markdown mirror for a cluster.
+
+    Mirrors are written by `notebooklm download --type brief` to
+    `hub/<slug>/notebooklm-brief-<UTC-timestamp>.md`. Sorted by
+    filename so the lexicographic order matches chronological order.
+    Returns None when no brief mirror exists yet.
+    """
+    hub_dir = vault_root / "hub" / cluster_slug
+    if not hub_dir.exists():
+        return None
+    candidates = sorted(hub_dir.glob("notebooklm-brief-*.md"))
+    return candidates[-1] if candidates else None
+
+
+def populate_all_overviews(
+    cfg,
+    *,
+    cluster_slug_filter: str | None = None,
+) -> list[tuple[str, Path]]:
+    """Re-run populate_overview + ensure_moc for every cluster in the registry.
+
+    Use cases (v0.87.1 §5):
+    - Backfill clusters that were ingested BEFORE v0.87's
+      post-ingest hub-overview hook landed.
+    - Bulk refresh after a template change to the overview scaffold.
+    - One-shot CLI: `research-hub hub rebuild-overviews`.
+
+    For each cluster: look up the latest brief mirror (if any), derive
+    MOC links from slug + cluster.first_query, ensure_moc them, then
+    populate_overview. Returns list of (slug, overview_path) tuples.
+
+    Errors per cluster are caught and logged; one bad cluster does
+    not stop the rest.
+    """
+    from research_hub.clusters import ClusterRegistry
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    vault_root = Path(cfg.root)
+    written: list[tuple[str, Path]] = []
+    for cluster in registry.list():
+        slug = (cluster.slug or "").strip()
+        if not slug:
+            continue
+        if cluster_slug_filter and slug != cluster_slug_filter:
+            continue
+        try:
+            cluster_queries = [str(getattr(cluster, "first_query", "") or "")]
+            moc_links = derive_moc_links(
+                slug,
+                cluster_queries=cluster_queries,
+                moc_links=list(getattr(cluster, "moc_links", []) or []),
+            )
+            for name in moc_links:
+                ensure_moc(vault_root, name)
+            brief_md = latest_brief_md(vault_root, slug)
+            overview_path = populate_overview(
+                cluster_slug=slug,
+                vault_root=vault_root,
+                brief_md_path=brief_md,
+                moc_links=moc_links,
+            )
+            written.append((slug, overview_path))
+        except Exception as exc:  # noqa: BLE001 — surface per-cluster failures, continue with rest
+            written.append((slug, Path(f"<error: {exc}>")))
+    return written
+
+
 def _parse_overview_sections(md: str) -> dict[str, str]:
     """Parse level-2 overview sections into an ordered mapping."""
 

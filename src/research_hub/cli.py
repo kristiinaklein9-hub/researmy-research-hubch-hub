@@ -2498,6 +2498,26 @@ def _vault_graph_colors(refresh: bool) -> int:
     return 0
 
 
+def _vault_rebuild_overviews(*, cluster_slug: str | None) -> int:
+    """Re-run populate_overview + ensure_moc for every cluster (v0.87.1 §5)."""
+    from research_hub.vault.hub_overview import populate_all_overviews
+
+    cfg = get_config()
+    results = populate_all_overviews(cfg, cluster_slug_filter=cluster_slug)
+    if not results:
+        print("(no clusters processed)")
+        return 0
+    errors = 0
+    for slug, path in results:
+        marker = "[OK]"
+        path_str = str(path)
+        if path_str.startswith("<error:"):
+            marker = "[FAIL]"
+            errors += 1
+        print(f"  {marker}  {slug}  {path_str}")
+    return 0 if errors == 0 else 1
+
+
 def _vault_polish_markdown(*, cluster: str | None, dry_run: bool) -> int:
     """Upgrade paper notes to v0.42 callout + block-ID conventions."""
     from research_hub.markdown_conventions import upgrade_paper_body
@@ -4272,6 +4292,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually write changes to disk",
     )
 
+    vault_rebuild = vault_subparsers.add_parser(
+        "rebuild-overviews",
+        help="Re-run populate_overview + ensure_moc for every cluster (v0.87.1)",
+    )
+    vault_rebuild.add_argument(
+        "--cluster",
+        default=None,
+        help="Restrict to a single cluster slug (default: walk all clusters)",
+    )
+
     bases_parser = subparsers.add_parser("bases", help="Obsidian Bases (.base) generator")
     bases_sub = bases_parser.add_subparsers(dest="bases_command", required=True)
     bases_emit = bases_sub.add_parser("emit", help="Emit or refresh a cluster's .base file")
@@ -5423,6 +5453,8 @@ def main(argv: list[str] | None = None) -> int:
             return _vault_graph_colors(refresh=args.refresh)
         if args.vault_command == "polish-markdown":
             return _vault_polish_markdown(cluster=args.cluster, dry_run=args.dry_run)
+        if args.vault_command == "rebuild-overviews":
+            return _vault_rebuild_overviews(cluster_slug=args.cluster)
     if args.command == "bases":
         if args.bases_command == "emit":
             return _bases_emit(

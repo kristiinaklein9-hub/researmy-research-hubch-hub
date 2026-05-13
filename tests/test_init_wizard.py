@@ -30,10 +30,6 @@ def test_init_non_interactive_happy_path(tmp_path, monkeypatch, capsys):
         "user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
     monkeypatch.setattr("requests.head", lambda *args, **kwargs: SimpleNamespace(status_code=200))
 
     exit_code = init_wizard.run_init(
@@ -135,11 +131,6 @@ def test_init_creates_vault_subdirs(tmp_path, monkeypatch):
         "user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
-
     assert init_wizard.run_init(vault_root=str(vault), non_interactive=True) == 0
 
     for name in ("raw", "hub", "logs", "pdfs", ".research_hub"):
@@ -166,11 +157,6 @@ def test_init_preserves_existing_config(tmp_path, monkeypatch):
         "user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
-
     assert init_wizard.run_init(vault_root=str(tmp_path / "vault"), non_interactive=True) == 0
 
     config = json.loads((config_dir / "config.json").read_text(encoding="utf-8"))
@@ -194,11 +180,6 @@ def test_init_validates_zotero_credentials(tmp_path, monkeypatch, capsys):
         lambda *args, **kwargs: str(config_dir),
     )
     monkeypatch.setattr("requests.head", fake_head)
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
-
     assert (
         init_wizard.run_init(
             vault_root=str(tmp_path / "vault"),
@@ -236,11 +217,6 @@ def test_init_zotero_validation_failure(tmp_path, monkeypatch, capsys):
         "requests.head",
         lambda *args, **kwargs: (_ for _ in ()).throw(ConnectionError("boom")),
     )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
-
     assert (
         init_wizard.run_init(
             vault_root=str(tmp_path / "vault"),
@@ -309,11 +285,6 @@ def test_init_idempotent(tmp_path, monkeypatch):
         "user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
-
     assert init_wizard.run_init(vault_root=str(vault), non_interactive=True) == 0
     assert init_wizard.run_init(vault_root=str(vault), non_interactive=True) == 0
 

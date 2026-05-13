@@ -53,10 +53,6 @@ def _setup_smoke_env(tmp_path, monkeypatch) -> SimpleNamespace:
         lambda open_browser=False: _write_dashboard_file(cfg),
         raising=False,
     )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: "C:/Chrome/chrome.exe",
-    )
 
     class _Response:
         def __init__(self, status_code: int, url: str, payload: dict | None = None) -> None:
@@ -207,10 +203,6 @@ def test_full_pipeline_smoke(tmp_path, monkeypatch):
         "research_hub.dashboard.generate_dashboard",
         lambda open_browser=False: _write_dashboard_file(cfg),
         raising=False,
-    )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: "C:/Chrome/chrome.exe",
     )
 
     class _Response:

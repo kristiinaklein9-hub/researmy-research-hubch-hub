@@ -30,10 +30,6 @@ def _write_config(tmp_path, monkeypatch, *, no_zotero: bool = False):
         "user_config_dir",
         lambda *args, **kwargs: str(tmp_path),
     )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: "C:/Chrome/chrome.exe",
-    )
     return root
 
 

@@ -81,10 +81,6 @@ def test_doctor_all_green(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr("requests.head", lambda *args, **kwargs: SimpleNamespace(status_code=200))
     monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: "C:/Chrome/chrome.exe",
-    )
-    monkeypatch.setattr(
         "research_hub.defuddle_extract.find_defuddle_binary",
         lambda: "C:/npm/defuddle.cmd",
     )
@@ -109,11 +105,6 @@ def test_doctor_all_green(tmp_path, monkeypatch, capsys):
 def test_doctor_missing_config(monkeypatch):
     from research_hub.doctor import print_doctor_report, run_doctor
 
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
-
     results = run_doctor()
 
     assert any(result.name == "config" and result.status == "FAIL" for result in results)
@@ -132,10 +123,6 @@ def test_doctor_missing_vault(tmp_path, monkeypatch):
             research_hub_dir=missing_root / ".research_hub",
         ),
     )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
 
     results = run_doctor()
 
@@ -146,10 +133,6 @@ def test_doctor_no_zotero_key(tmp_path, monkeypatch):
     from research_hub.doctor import run_doctor
 
     _write_config(tmp_path, monkeypatch, zotero_key=None)
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
     # Isolate from the user's real legacy zotero-skills config
     monkeypatch.setattr(
         "research_hub.zotero.client._load_legacy_zotero_skill_config",
@@ -168,10 +151,6 @@ def test_doctor_zotero_unreachable(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "requests.head",
         lambda *args, **kwargs: (_ for _ in ()).throw(ConnectionError("boom")),
-    )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
     )
 
     results = run_doctor()
@@ -229,10 +208,6 @@ def test_doctor_exit_code_zero_if_only_warns(tmp_path, monkeypatch):
     monkeypatch.setenv("ZOTERO_API_KEY", "secret")
     monkeypatch.setenv("ZOTERO_LIBRARY_ID", "123")
     monkeypatch.setattr("requests.head", lambda *args, **kwargs: SimpleNamespace(status_code=403))
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
     # Keep config OK and vault OK, but allow WARN checks for dedup/chrome/session/api.
     assert root.exists()
 
@@ -358,14 +333,6 @@ def test_doctor_output_mentions_defuddle_check(tmp_path, monkeypatch, capsys):
 
     _write_config(tmp_path, monkeypatch)
     monkeypatch.setattr("requests.head", lambda *args, **kwargs: SimpleNamespace(status_code=200))
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: "C:/Chrome/chrome.exe",
-    )
-    monkeypatch.setattr(
-        "research_hub.defuddle_extract.find_defuddle_binary",
-        lambda: "C:/npm/defuddle.cmd",
-    )
     monkeypatch.setattr(
         "research_hub.defuddle_extract.find_defuddle_binary",
         lambda: None,

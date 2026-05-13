@@ -15,7 +15,6 @@ def test_init_analyst_persona_skips_zotero(tmp_path, monkeypatch):
         "research_hub.init_wizard.platformdirs.user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr("research_hub.notebooklm.cdp_launcher.find_chrome_binary", lambda: None)
 
     assert run_init(vault_root=str(tmp_path / "vault"), non_interactive=True, persona="analyst") == 0
     config = json.loads((config_dir / "config.json").read_text(encoding="utf-8"))
@@ -30,7 +29,6 @@ def test_init_analyst_non_interactive_no_zotero_key_required(tmp_path, monkeypat
         "research_hub.init_wizard.platformdirs.user_config_dir",
         lambda *args, **kwargs: str(tmp_path / "cfg"),
     )
-    monkeypatch.setattr("research_hub.notebooklm.cdp_launcher.find_chrome_binary", lambda: None)
 
     assert run_init(vault_root=str(tmp_path / "vault"), non_interactive=True, persona="analyst") == 0
 
@@ -43,7 +41,6 @@ def test_init_researcher_persona_default(tmp_path, monkeypatch):
         "research_hub.init_wizard.platformdirs.user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr("research_hub.notebooklm.cdp_launcher.find_chrome_binary", lambda: None)
 
     assert run_init(
         vault_root=str(tmp_path / "vault"),
@@ -74,7 +71,6 @@ def test_doctor_skips_zotero_when_no_zotero_config(tmp_path, monkeypatch):
         "research_hub.config.platformdirs.user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr("research_hub.notebooklm.cdp_launcher.find_chrome_binary", lambda: None)
 
     result = next(item for item in run_doctor() if item.name == "zotero_key")
     assert result.status == "OK"
@@ -97,7 +93,6 @@ def test_doctor_skips_zotero_when_env_var_set(tmp_path, monkeypatch):
         "research_hub.config.platformdirs.user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr("research_hub.notebooklm.cdp_launcher.find_chrome_binary", lambda: None)
     monkeypatch.setenv("RESEARCH_HUB_NO_ZOTERO", "1")
 
     result = next(item for item in run_doctor() if item.name == "zotero_key")

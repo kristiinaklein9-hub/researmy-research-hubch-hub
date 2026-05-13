@@ -553,7 +553,6 @@ def test_init_chmods_config_to_600(tmp_path, monkeypatch):
         "research_hub.init_wizard.platformdirs.user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr("research_hub.notebooklm.cdp_launcher.find_chrome_binary", lambda: None)
 
     assert run_init(vault_root=str(tmp_path / "vault"), non_interactive=True, persona="analyst") == 0
 
@@ -575,7 +574,6 @@ def test_init_chmods_research_hub_dir_to_700(tmp_path, monkeypatch):
         "research_hub.config.platformdirs.user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr("research_hub.notebooklm.cdp_launcher.find_chrome_binary", lambda: None)
 
     vault_root = tmp_path / "vault"
     assert run_init(vault_root=str(vault_root), non_interactive=True, persona="analyst") == 0

@@ -67,10 +67,6 @@ def test_init_wizard_retries_zotero_credentials_on_validation_failure(tmp_path, 
     )
     monkeypatch.setattr("builtins.input", lambda prompt="": prompts.append(prompt) or next(answers))
     monkeypatch.setattr("requests.head", lambda *args, **kwargs: SimpleNamespace(status_code=next(statuses)))
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: "C:/Chrome/chrome.exe",
-    )
 
     assert init_wizard.run_init() == 0
 
@@ -107,10 +103,6 @@ def test_init_wizard_aborts_when_user_aborts_after_network_failure(tmp_path, mon
     monkeypatch.setattr(
         "requests.head",
         lambda *args, **kwargs: (_ for _ in ()).throw(ConnectionError("boom")),
-    )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: "C:/Chrome/chrome.exe",
     )
 
     assert init_wizard.run_init() == 1

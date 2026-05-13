@@ -19,10 +19,6 @@ def test_init_accepts_persona_flag(tmp_path, monkeypatch, persona):
         "user_config_dir",
         lambda *args, **kwargs: str(config_dir),
     )
-    monkeypatch.setattr(
-        "research_hub.notebooklm.cdp_launcher.find_chrome_binary",
-        lambda: None,
-    )
     monkeypatch.setattr("requests.head", lambda *args, **kwargs: SimpleNamespace(status_code=200))
 
     rc = init_wizard.run_init(

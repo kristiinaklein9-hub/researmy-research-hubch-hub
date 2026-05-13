@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.86.2 (2026-05-13)
+
+CI hotfix: tests across 8 files referenced the deleted
+`research_hub.notebooklm.cdp_launcher` module, causing the entire test
+suite to crash with `ModuleNotFoundError` on import. CI on master has
+been red since v0.83.0 because of this — every release since the v0.46
+patchright migration left these monkeypatches in place, and v0.86.0's
+NotebookLM Phase 1 migration finally removed the module they targeted.
+
+Removed 17 dead `monkeypatch.setattr("...cdp_launcher.find_chrome_binary", ...)`
+calls (93 deletions, 0 additions). The production chrome check uses
+`patchright.sync_api.sync_playwright` directly (since v0.46) and is
+covered by `test_doctor_chrome_not_found` — the deleted monkeypatches
+were already no-ops at runtime, just lethal at import time.
+
+Verified locally: 111 passed, 3 skipped, 0 failed across all touched
+test modules (44s). No production code changed.
+
+Affected files (test-only):
+- tests/test_doctor.py
+- tests/test_doctor_invariants.py
+- tests/test_e2e_smoke.py
+- tests/test_init_wizard.py
+- tests/test_persona_modes.py
+- tests/test_v030_security.py
+- tests/test_v038_init_persona.py
+- tests/test_v040_onboarding.py
+
 ## v0.86.1 (2026-05-13)
 
 Hotfix: `notebooklm login` was broken since v0.86.0 — the subprocess

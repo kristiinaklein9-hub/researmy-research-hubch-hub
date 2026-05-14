@@ -9,6 +9,7 @@ from typing import Any
 from research_hub.dashboard.data import collect_dashboard_data
 from research_hub import __version__
 from research_hub import mcp_server as _m
+from research_hub.errors import ResearchHubError
 
 
 def _unwrap(t):
@@ -37,9 +38,19 @@ web_search = _unwrap(_m.web_search)
 API_VERSION = __version__
 
 
-class ApiError(Exception):
+class ApiError(ResearchHubError):
+    error_code = "api_error"
+
     def __init__(self, status: int, code: str, message: str) -> None:
-        super().__init__(message)
+        super().__init__(
+            message,
+            context={
+                "code": status,
+                "error_code": code,
+                "message": message,
+                "status": status,
+            },
+        )
         self.status = status
         self.code = code
         self.message = message

@@ -116,6 +116,8 @@ class IngestValidationReport:
 class NotebookLMCapacityError(NotebookLMError):
     """Raised when a cluster exceeds NotebookLM's per-notebook source cap."""
 
+    error_code = "notebooklm_capacity"
+
 
 @dataclass
 class UploadReport:

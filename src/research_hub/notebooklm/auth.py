@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from notebooklm import AuthError, NotebookLMClient
+from research_hub.errors import RequiresAuthRefresh
 
 
 def default_session_dir(research_hub_dir: Path) -> Path:
@@ -90,6 +91,20 @@ def check_session_health(state_file: Path) -> dict[str, Any]:
         return {"ok": False, "reason": f"auth error: {exc}", "expires_at": None}
     except Exception as exc:
         return {"ok": False, "reason": f"unexpected error: {exc}", "expires_at": None}
+
+
+def require_session_health(state_file: Path) -> None:
+    """Raise a structured auth-refresh error when NotebookLM auth is stale."""
+
+    health = check_session_health(state_file)
+    if health.get("ok"):
+        return
+    reason = str(health.get("reason") or "auth invalid")
+    raise RequiresAuthRefresh(
+        service="NotebookLM",
+        fix_command="python -m research_hub notebooklm login",
+        message=f"NotebookLM session check failed: {reason}. Run: python -m research_hub notebooklm login",
+    )
 
 
 async def _probe_state_file(state_file: Path) -> bool:

@@ -8,6 +8,7 @@ import time
 
 import requests
 
+from research_hub.errors import UpstreamRateLimited
 from research_hub.search.base import SearchResult
 
 logger = logging.getLogger(__name__)
@@ -27,8 +28,20 @@ DEFAULT_FIELDS = (
 SEMANTIC_SCHOLAR_API_KEY_ENV = "SEMANTIC_SCHOLAR_API_KEY"
 
 
-class RateLimitError(RuntimeError):
+class RateLimitError(UpstreamRateLimited):
     """Semantic Scholar returned HTTP 429."""
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(
+            "Semantic Scholar",
+            retry_after=retry_after,
+            message=message or "Semantic Scholar rate-limited (HTTP 429)",
+        )
 
 
 class SemanticScholarClient:

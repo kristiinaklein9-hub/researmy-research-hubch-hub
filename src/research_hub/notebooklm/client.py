@@ -15,6 +15,7 @@ from notebooklm import (
     NotebookLMError as _UpstreamError,
     ReportFormat,
 )
+from research_hub.errors import ResearchHubError
 
 
 CLUSTER_SYNTHESIS_PROMPT = """\
@@ -31,8 +32,10 @@ source.
 """
 
 
-class NotebookLMError(Exception):
+class NotebookLMError(ResearchHubError):
     """research-hub-specific error class wrapping NotebookLM failures."""
+
+    error_code = "notebooklm_error"
 
     def __init__(
         self,
@@ -41,7 +44,10 @@ class NotebookLMError(Exception):
         selector: str | None = None,
         page_url: str | None = None,
     ) -> None:
-        super().__init__(message)
+        super().__init__(
+            message,
+            context={"selector": selector, "page_url": page_url},
+        )
         self.selector = selector
         self.page_url = page_url
 

@@ -16,6 +16,7 @@ from typing import Optional
 from research_hub.clusters import ClusterRegistry, slugify
 from research_hub.config import get_config
 from research_hub.discover import _to_papers_input
+from research_hub.errors import MissingExternalTool
 from research_hub.notebooklm.bundle import bundle_cluster
 from research_hub.notebooklm.upload import (
     download_briefing_for_cluster,
@@ -29,6 +30,11 @@ from research_hub.vault.graph_config import refresh_graph_from_vault
 
 
 _LLM_CLI_CANDIDATES = ("claude", "codex", "gemini")
+_LLM_CLI_INSTALL_HINTS = {
+    "claude": "npm i -g @anthropic-ai/claude-code",
+    "codex": "npm i -g @anthropic-ai/codex",
+    "gemini": "pip install google-gemini-cli",
+}
 
 
 def detect_llm_cli() -> Optional[str]:
@@ -59,7 +65,13 @@ def _invoke_llm_cli(cli_name: str, prompt: str, timeout_sec: float = 180.0) -> s
     """
     resolved = shutil.which(cli_name)
     if not resolved:
-        raise RuntimeError(f"{cli_name} not on PATH")
+        raise MissingExternalTool(
+            cli_name,
+            install_hint=_LLM_CLI_INSTALL_HINTS.get(
+                cli_name,
+                f"Install {cli_name} and add it to PATH",
+            ),
+        )
     if cli_name == "claude":
         cmd = [resolved, "-p"]
         stdin_input = prompt

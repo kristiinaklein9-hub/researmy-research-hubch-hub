@@ -1,5 +1,75 @@
 # Changelog
 
+## v0.88.12 (2026-05-14) — Semantic Scholar API key + frontmatter dedupe migration
+
+Two W1/W3 audit follow-ups:
+
+### Fix #1 — `SEMANTIC_SCHOLAR_API_KEY` env var pass-through
+
+Stage B hit HTTP 429 from Semantic Scholar's shared-pool anonymous
+limit (~100 req per 5 min across all unauthenticated callers).
+`SemanticScholarClient` now reads `SEMANTIC_SCHOLAR_API_KEY` at
+construction time:
+
+- If set: sends `x-api-key: <key>` header on every request and
+  lifts the polite throttle from 3.0s → 1.0s (matches S2's
+  published authenticated rate of ~1 req/sec).
+- If unset: behavior unchanged from v0.88.11.
+
+429 messages also branch by auth status — anonymous 429 points the
+user at the API-key application page; authenticated 429 says to
+check key validity or back off.
+
+Get a key at: https://www.semanticscholar.org/product/api#api-key-form
+
+### Fix #2 — `vault cleanup-frontmatter --dedupe-lists` migration
+
+W3 found 10/12 human-water-llm papers still carry 3× repeated
+`cluster_queries` lines despite v0.88.4 making `_render_field`
+order-preserving dedupe list values. The dedupe only fires when
+frontmatter is REWRITTEN; notes that pre-dated v0.88.4 and were
+never touched since then keep their accumulated dupes on disk.
+
+New module `research_hub/vault/frontmatter_dedupe.py` exposes
+`migrate_one_note` + `migrate_all`, mirroring the existing
+`tag_migrate` / `hub_backlink_migrate` patterns. New CLI:
+
+```bash
+research-hub vault cleanup-frontmatter --dry-run   # default
+research-hub vault cleanup-frontmatter --apply
+```
+
+Dedupe targets a conservative allow-list: `cluster_queries`, `tags`,
+`collections`, `aliases`. Same `_rewrite_paper_frontmatter` plumbing
+as the other migrations — v0.88.4's `_render_field` does the actual
+dedupe on write.
+
+### Live verification on user vault
+
+```
+vault cleanup-frontmatter (apply): scanned 49 notes
+  deduped                         10   ← matches W3 audit exactly
+  clean                           39
+
+Details:
+  fu2025: cluster_queries: 16→6
+  jiang2026: cluster_queries: 16→6
+  ranaweera2026, ren2024, samuel2024, schück2026, taormina2024:
+    16→6 each
+  wang2025, wang2026-epanetagentic, wen2026: 16→6 each
+```
+
+Second-run dry-run reports "49 clean" — idempotent.
+
+### Tests (`tests/test_v08812_s2_key_and_dedupe.py` — 13 new)
+
+- 7 covering S2 key plumbing: env-var read, no-env default,
+  throttle-lift on auth, headers content (with/without key),
+  explicit `api_key=""` override, end-to-end search() header pass-through
+- 6 covering migration: 15→5 cluster_queries dedupe, tags dedupe,
+  no-op on clean, dry-run preserves disk, cluster_slug_filter,
+  missing-vault defensive return
+
 ## v0.88.11 (2026-05-14) — post-Stage-B polish bundle
 
 Three in-scope fixes from the W3/W4 audit, no new public CLI/MCP

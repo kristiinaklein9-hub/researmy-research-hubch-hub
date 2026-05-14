@@ -2775,6 +2775,42 @@ def _vault_hub_backlink_migrate(*, cluster_slug: str | None, dry_run: bool) -> i
     return 0
 
 
+def _vault_cleanup_frontmatter(*, cluster_slug: str | None, dry_run: bool) -> int:
+    """v0.88.12: dedupe list-valued frontmatter fields across all paper notes.
+
+    Mirrors the pattern of tag-migrate / hub-backlink-migrate /
+    summarize-status-migrate so the user gets a consistent dry-run +
+    --apply UX across the v0.87/v0.88 migration tools.
+    """
+    from collections import Counter
+
+    from research_hub.vault.frontmatter_dedupe import migrate_all
+
+    cfg = get_config()
+    results = migrate_all(
+        Path(cfg.root),
+        cluster_slug_filter=cluster_slug,
+        dry_run=dry_run,
+    )
+    counts = Counter(r.action for r in results)
+    mode = "dry-run" if dry_run else "applied"
+    print(f"vault cleanup-frontmatter ({mode}): scanned {len(results)} notes")
+    for action in ("deduped", "clean", "skipped_no_lists", "skipped_no_frontmatter"):
+        if counts.get(action):
+            print(f"  {action:30s}  {counts[action]}")
+    deduped_results = [r for r in results if r.action == "deduped"]
+    if deduped_results:
+        print("\nDetails:")
+        for r in deduped_results:
+            shrinks = ", ".join(
+                f"{f}: {r.before[f]}→{r.after[f]}" for f in r.fields_deduped
+            )
+            print(f"  {r.path.name}: {shrinks}")
+    if dry_run and counts.get("deduped"):
+        print("\nRe-run with --apply to write the changes.")
+    return 0
+
+
 def _vault_tag_migrate(*, cluster_slug: str | None, dry_run: bool) -> int:
     """Backfill topic:<slug> tag into existing paper notes (v0.87.1 §6)."""
     from collections import Counter
@@ -4767,6 +4803,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually write summarize_status frontmatter",
     )
 
+    # v0.88.12: cleanup-frontmatter — backfill the v0.88.4 list-dedupe
+    # across pre-existing paper notes whose frontmatter was never re-
+    # written since v0.88.4 shipped.
+    vault_cleanup_fm = vault_subparsers.add_parser(
+        "cleanup-frontmatter",
+        help="Dedupe list-valued frontmatter fields (cluster_queries, tags, collections, aliases) — v0.88.12",
+    )
+    vault_cleanup_fm.add_argument(
+        "--cluster",
+        default=None,
+        help="Restrict to a single cluster slug (default: walk all clusters)",
+    )
+    vault_cleanup_fm.add_argument(
+        "--dedupe-lists",
+        action="store_true",
+        default=True,
+        help="Dedupe list-valued fields (currently the only supported cleanup, default ON)",
+    )
+    vault_cleanup_fm.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Report changes without writing (default)",
+    )
+    vault_cleanup_fm.add_argument(
+        "--apply",
+        dest="dry_run",
+        action="store_false",
+        help="Actually write deduped frontmatter back to disk",
+    )
+
     bases_parser = subparsers.add_parser("bases", help="Obsidian Bases (.base) generator")
     bases_sub = bases_parser.add_subparsers(dest="bases_command", required=True)
     bases_emit = bases_sub.add_parser("emit", help="Emit or refresh a cluster's .base file")
@@ -6025,6 +6092,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.vault_command == "summarize-status-migrate":
             return _vault_summarize_status_migrate(
+                cluster_slug=args.cluster,
+                dry_run=args.dry_run,
+            )
+        if args.vault_command == "cleanup-frontmatter":
+            return _vault_cleanup_frontmatter(
                 cluster_slug=args.cluster,
                 dry_run=args.dry_run,
             )

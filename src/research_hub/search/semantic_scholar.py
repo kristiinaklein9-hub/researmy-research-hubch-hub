@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 import requests
@@ -18,20 +19,51 @@ DEFAULT_FIELDS = (
     "journal"
 )
 
+# v0.88.12: env var the user sets if they've applied for a free
+# Semantic Scholar API key (https://www.semanticscholar.org/product/api).
+# Unauthenticated sustained rate is ~100 req per 5 min shared across all
+# anonymous callers — Stage B hit this wall as HTTP 429. With a key,
+# the published limit is ~1 req/sec dedicated per key — ~50× headroom.
+SEMANTIC_SCHOLAR_API_KEY_ENV = "SEMANTIC_SCHOLAR_API_KEY"
+
 
 class RateLimitError(RuntimeError):
     """Semantic Scholar returned HTTP 429."""
 
 
 class SemanticScholarClient:
-    """Thin Semantic Scholar REST client with polite throttling."""
+    """Thin Semantic Scholar REST client with polite throttling.
+
+    v0.88.12: when ``SEMANTIC_SCHOLAR_API_KEY`` env var is set, the
+    client sends it as the ``x-api-key`` header on every request and
+    drops the polite throttle delay (S2's published authenticated rate
+    is ~1 req/sec, well above our default 3 s polite delay).
+    """
 
     name = "semantic-scholar"
 
-    def __init__(self, delay_seconds: float = 3.0, timeout: int = 30) -> None:
-        self.delay = delay_seconds
+    def __init__(
+        self,
+        delay_seconds: float = 3.0,
+        timeout: int = 30,
+        api_key: str | None = None,
+    ) -> None:
+        # If api_key is None, fall back to the env var. Pass api_key=""
+        # explicitly to force-disable env lookup (useful for tests).
+        if api_key is None:
+            api_key = os.environ.get(SEMANTIC_SCHOLAR_API_KEY_ENV, "") or None
+        self.api_key = api_key
+        # Authenticated clients can poll faster; cap the throttle so a
+        # key-holder doesn't waste the rate budget.
+        self.delay = 1.0 if api_key else delay_seconds
         self.timeout = timeout
         self._last_request: float | None = None
+
+    def _headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if self.api_key:
+            headers["x-api-key"] = self.api_key
+        return headers
 
     def _throttle(self) -> None:
         current_time = time.time()
@@ -68,16 +100,27 @@ class SemanticScholarClient:
                 f"{SEMANTIC_SCHOLAR_BASE}/paper/search",
                 params=params,
                 timeout=self.timeout,
+                headers=self._headers(),
             )
         except requests.exceptions.RequestException:
             return []
         if response.status_code == 429:
-            logger.warning(
-                "semantic-scholar rate-limited (HTTP 429); "
-                "backend returned 0 results. Consider requesting an API key at "
-                "https://www.semanticscholar.org/product/api#api-key-form or "
-                "using --backend-trace to see the silent-drop."
-            )
+            if self.api_key:
+                # Authenticated 429 = we genuinely exceeded the per-key
+                # rate; back off harder. Anonymous 429 = shared-pool
+                # contention; suggest applying for a key.
+                logger.warning(
+                    "semantic-scholar rate-limited (HTTP 429) WITH API key. "
+                    "Back off harder or check key validity."
+                )
+            else:
+                logger.warning(
+                    "semantic-scholar rate-limited (HTTP 429); "
+                    "backend returned 0 results. Consider requesting an API key at "
+                    "https://www.semanticscholar.org/product/api#api-key-form and "
+                    "exporting it as SEMANTIC_SCHOLAR_API_KEY, "
+                    "or using --backend-trace to see the silent-drop."
+                )
             time.sleep(self.delay * 2)
             return []
         try:
@@ -94,6 +137,7 @@ class SemanticScholarClient:
                 f"{SEMANTIC_SCHOLAR_BASE}/paper/{identifier}",
                 params={"fields": DEFAULT_FIELDS},
                 timeout=self.timeout,
+                headers=self._headers(),
             )
         except requests.exceptions.RequestException:
             return None

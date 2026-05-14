@@ -80,7 +80,12 @@ def test_auto_pipeline_runs_summary_when_enabled(monkeypatch, tmp_path):
     def fake_summarize_pending(cfg, *, cluster_slug_filter=None, backend="claude", **kwargs):
         called["paper_summarize_cluster"] = cluster_slug_filter
         called["paper_summarize_backend"] = backend
-        return [SimpleNamespace(status="done"), SimpleNamespace(status="done")]
+        # v0.88.8 regression guard: SummarizeResult uses `.action` not
+        # `.status`. The earlier v0.88.6 test set `status="done"` on the
+        # SimpleNamespace which masked the production attribute typo —
+        # both the test fake and the production code agreed on the wrong
+        # name, so layer-2 silently logged "0 done" in real runs.
+        return [SimpleNamespace(action="done"), SimpleNamespace(action="done")]
 
     monkeypatch.setattr("research_hub.auto.detect_llm_cli", lambda: "codex")
     monkeypatch.setattr("research_hub.summarize.summarize_cluster", fake_summarize)
@@ -113,6 +118,49 @@ def test_auto_pipeline_runs_summary_when_enabled(monkeypatch, tmp_path):
     assert "layer-2" in summary_step.detail
     assert "1 ok" in summary_step.detail  # layer-1
     assert "2 done" in summary_step.detail  # layer-2
+
+
+def test_summary_step_counts_real_summarize_result_objects(monkeypatch, tmp_path):
+    """v0.88.8 regression guard: layer-2 attribute is `.action`, not
+    `.status`. The v0.88.6 ship used `.status` which silently logged
+    "0 done" even when paper-summarize completed every note. Use the
+    REAL `SummarizeResult` dataclass (not SimpleNamespace duck-typing)
+    so any future rename of the field would fail this test."""
+    _patch_auto_success(monkeypatch, tmp_path)
+
+    from research_hub.paper_summarize import SummarizeResult
+
+    monkeypatch.setattr("research_hub.auto.detect_llm_cli", lambda: "codex")
+    monkeypatch.setattr(
+        "research_hub.summarize.summarize_cluster",
+        lambda *_a, **_k: SimpleNamespace(
+            ok=True,
+            cli_used="codex",
+            apply_result=SimpleNamespace(applied=["paper"], errors=[]),
+        ),
+    )
+    monkeypatch.setattr(
+        "research_hub.paper_summarize.summarize_pending",
+        lambda *_a, **_k: [
+            SummarizeResult(tmp_path / "p1.md", "done", backend="codex"),
+            SummarizeResult(tmp_path / "p2.md", "done", backend="codex"),
+            SummarizeResult(tmp_path / "p3.md", "failed_no_abstract", backend="codex"),
+        ],
+    )
+
+    report = auto_pipeline(
+        "test topic",
+        do_nlm=False,
+        do_fit_check=False,
+        do_cluster_overview=False,
+        with_summary=True,
+        print_progress=False,
+    )
+
+    summary_step = next(step for step in report.steps if step.name == "summary")
+    # 2 done + 1 failed_no_abstract should both surface in the log line.
+    assert "2 done" in summary_step.detail
+    assert "1 failed_no_abstract" in summary_step.detail
 
 
 def test_auto_pipeline_skips_summary_when_no_llm_cli(monkeypatch, tmp_path):

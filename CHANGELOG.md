@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.88.8 (2026-05-13) — fix v0.88.6 layer-2 attribute typo (.status → .action)
+
+Field-discovered in live Stage B (15-paper grow on
+`ml-flood-forecasting`): the v0.88.6 unified-summary log line read
+``layer-2 (KF/Methodology/Relevance): 0 done`` even though 12 of 14
+paper notes had actually been filled correctly. Vault was right;
+the report lied.
+
+Root cause: `SummarizeResult` exposes its outcome under `.action`
+(see `paper_summarize.py:67`), but v0.88.6's loop in
+`auto.py::_run_summary_step` read `getattr(r, "status", "")`, which
+always returned the empty default. Counts stayed at zero. The
+v0.88.6 unit test used `SimpleNamespace(status="done")` and so
+mirrored the production typo — both wrong, both green, neither
+caught the bug.
+
+### Fix (`auto.py`)
+
+Read `getattr(r, "action", "") or getattr(r, "status", "")` for
+back-compat. Production code now correctly reports counts.
+
+### Tests (`tests/test_v076_full_auto.py`)
+
+- Existing v0.88.6 test updated: SimpleNamespace fake now uses
+  `action=` field name to mirror real `SummarizeResult`.
+- **New regression guard** `test_summary_step_counts_real_summarize_result_objects`
+  uses the **real `SummarizeResult` dataclass** (not duck-typed
+  SimpleNamespace) so any future field rename trips the test
+  immediately rather than silently mis-counting on disk.
+
+Behavior unchanged in this release; only the log line + tests are
+affected. Vaults populated under v0.88.6 already have the correct
+KF/Methodology/Relevance.
+
+### Stage B side-findings (NOT fixed in this release)
+
+Documented for a possible v0.89:
+- `cluster_overview` autofill step logs FAIL "already filled; use
+  force=True" even when the bare scaffold was just written. Cosmetic
+  noise in the auto report; vault is correct.
+- `nlm.upload` reported 8 succeeded out of ~14 candidates — 3 RPC
+  ADD_SOURCE retries plus 3 sources flagged "did not ingest content"
+  (Cloudflare wall, IEEE Xplore login wall, JS-rendered Chinese
+  paper). NLM-side, not research-hub.
+- `claude --print` 180 s timeout while generating crystals — Claude
+  CLI subprocess took longer than the cap. Prompt persisted to disk
+  for manual rerun.
+
 ## v0.88.7 (2026-05-13) — NLM cookie auto-refresh (stop "auth keeps expiring")
 
 User-reported pain: every few days `notebooklm bundle/upload/download`

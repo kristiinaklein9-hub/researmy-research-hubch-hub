@@ -452,13 +452,17 @@ def _run_summary_step(
         results = summarize_pending(
             cfg, cluster_slug_filter=slug, backend=cli, dry_run=False
         )
+        # v0.88.8: SummarizeResult exposes its outcome under `.action`,
+        # not `.status` — v0.88.6 read the wrong attribute, so the count
+        # always logged as "0 done" even when 12+ paper notes had actually
+        # been filled. The on-disk work was correct; only the report lied.
         for r in results:
-            status = getattr(r, "status", "")
-            if status == "done":
+            action = getattr(r, "action", "") or getattr(r, "status", "")
+            if action == "done":
                 paper_done += 1
-            elif status in {"failed_no_abstract", "would_fail_no_abstract"}:
+            elif action in {"failed_no_abstract", "would_fail_no_abstract"}:
                 paper_failed += 1
-            elif status == "error":
+            elif action == "error":
                 paper_errors += 1
     except Exception as exc:
         _step_log(report, "summary", False, _elapsed(started, report),

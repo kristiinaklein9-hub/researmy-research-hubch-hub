@@ -24,6 +24,8 @@ import urllib.error
 import warnings
 from pathlib import Path
 
+from research_hub.errors import MissingCredential
+from research_hub.config import zotero_credential_fallback_paths
 from research_hub.security.secret_box import decrypt, is_encrypted
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -189,9 +191,22 @@ def check_local_api(timeout=2) -> bool:
 
 def get_client():
     """Create authenticated Zotero Web API client from env, .env, or config."""
+    api_key, lib_id, lib_type = _load_credentials()
+    if not api_key or not lib_id:
+        message = None
+        if api_key and not lib_id:
+            message = (
+                "Missing Zotero credentials: library_id not configured. "
+                "Set $ZOTERO_API_KEY and ZOTERO_LIBRARY_ID."
+            )
+        raise MissingCredential(
+            "Zotero API key",
+            env_var="ZOTERO_API_KEY",
+            fallback_paths_tried=zotero_credential_fallback_paths(),
+            message=message,
+        )
     from pyzotero import zotero
 
-    api_key, lib_id, lib_type = _load_credentials()
     return zotero.Zotero(lib_id, lib_type, api_key)
 
 

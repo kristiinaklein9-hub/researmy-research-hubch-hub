@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+
 import platformdirs
 
 from research_hub.security import chmod_sensitive
 
 CONFIG_PATH = Path.home() / ".claude" / "skills" / "knowledge-base" / "config.json"
+_LEGACY_ZOTERO_SKILL_CONFIG = Path.home() / ".claude" / "skills" / "zotero-skills" / "config.json"
 
 
 def _validate_root_under_home(root: Path) -> None:
@@ -60,6 +62,32 @@ def _resolve_config_path() -> Path | None:
     return None
 
 
+def zotero_credential_fallback_paths() -> list[str]:
+    """Return the supported Zotero credential lookup locations in order."""
+
+    paths = [
+        "$ZOTERO_API_KEY",
+        str(Path.home() / ".claude" / ".env"),
+    ]
+    env = os.environ.get("RESEARCH_HUB_CONFIG")
+    if env:
+        paths.append(str(Path(env).expanduser()))
+    paths.append(
+        str(Path(platformdirs.user_config_dir("research-hub", ensure_exists=False)) / "config.json")
+    )
+    paths.append(str(CONFIG_PATH))
+    paths.append(str(Path(__file__).resolve().parents[2] / "config.json"))
+    paths.append(str(_LEGACY_ZOTERO_SKILL_CONFIG))
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        ordered.append(path)
+    return ordered
+
+
 class HubConfig:
     """Resolve Research Hub paths from config, env vars, or HOME defaults."""
 
@@ -71,6 +99,7 @@ class HubConfig:
         config_logs: str | None = None
         config_graph: str | None = None
         config_clusters_file: str | None = None
+        config_zotero_api_key: str | None = None
         config_zotero_library_id: str | None = None
         config_zotero_library_type: str | None = None
         config_zotero_default_collection: str | None = None
@@ -98,6 +127,7 @@ class HubConfig:
             config_no_zotero = bool(data.get("no_zotero", False))
             zotero = data.get("zotero", {})
             config_unpaywall_email = data.get("unpaywall_email")
+            config_zotero_api_key = zotero.get("api_key")
             config_zotero_library_id = zotero.get("library_id")
             config_zotero_library_type = zotero.get("library_type")
             config_zotero_default_collection = zotero.get("default_collection")
@@ -111,6 +141,7 @@ class HubConfig:
         projects_path = config_projects or os.environ.get("RESEARCH_HUB_PROJECTS")
         logs_path = config_logs or os.environ.get("RESEARCH_HUB_LOGS")
         graph_path = config_graph or os.environ.get("RESEARCH_HUB_GRAPH")
+        zotero_api_key = config_zotero_api_key or os.environ.get("ZOTERO_API_KEY")
         zotero_library_id = config_zotero_library_id or os.environ.get("ZOTERO_LIBRARY_ID")
         zotero_default_collection = config_zotero_default_collection or os.environ.get(
             "RESEARCH_HUB_DEFAULT_COLLECTION"
@@ -139,6 +170,7 @@ class HubConfig:
             else self.research_hub_dir / "clusters.yaml"
         )
         self.zotero_library_id = zotero_library_id
+        self.zotero_api_key = zotero_api_key
         self.zotero_library_type = config_zotero_library_type or os.environ.get(
             "ZOTERO_LIBRARY_TYPE", "user"
         )

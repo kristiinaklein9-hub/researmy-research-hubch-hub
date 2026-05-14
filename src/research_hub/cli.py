@@ -19,6 +19,7 @@ from pathlib import Path
 from research_hub.clusters import ClusterRegistry
 from research_hub.config import get_config, require_config
 from research_hub.dedup import DedupIndex, build_from_obsidian, build_from_zotero
+from research_hub.errors import ResearchHubError
 from research_hub.operations import add_paper, mark_paper, move_paper, remove_paper
 from research_hub.pipeline import run_pipeline
 from research_hub.pipeline_repair import repair_cluster
@@ -3422,18 +3423,21 @@ def _preflight_nlm_session(cfg, *, op_name: str) -> int | None:
     browser launches a 30-second deep-stack failure. Returns None when
     OK to proceed, or an exit code (1) with a one-line actionable hint
     printed to stderr when not."""
-    from research_hub.notebooklm.auth import default_state_file, check_session_health
+    from research_hub.notebooklm.auth import default_state_file, require_session_health
 
     state_file = default_state_file(cfg.research_hub_dir)
-    health = check_session_health(state_file)
-    if health.get("ok"):
+    try:
+        require_session_health(state_file)
+    except ResearchHubError as exc:
+        reason = str(exc).split(": ", 1)[1] if ": " in str(exc) else str(exc)
+        print(
+            f"[notebooklm {op_name}] session check failed: {reason}. "
+            "Run `research-hub notebooklm login` to sign in.",
+            file=sys.stderr,
+        )
+        return 1
+    else:
         return None
-    print(
-        f"[notebooklm {op_name}] session check failed: {health.get('reason', 'auth invalid')}. "
-        "Run `research-hub notebooklm login` to sign in.",
-        file=sys.stderr,
-    )
-    return 1
 
 
 def _notebooklm_bundle(cluster_slug: str, download_pdfs: bool = False) -> int:
@@ -6127,9 +6131,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+def _main_dispatch(args, parser) -> int:
     exempt_commands = {"init", "setup", "doctor", "install", "examples", "where", "config", "package-dxt", "context"}
 
     if args.command not in exempt_commands and get_config is require_config.__globals__["get_config"]:
@@ -6956,3 +6958,24 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.error(f"Unknown command: {args.command}")
     return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return _main_dispatch(args, parser)
+    except ResearchHubError as exc:
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": exc.to_dict(),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        raise

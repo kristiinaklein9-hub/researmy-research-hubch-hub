@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.88.13 (2026-05-14) — `vault install-theme` ships the Obsidian tech aesthetic
+
+Bundles the Obsidian CSS snippet that was added directly to the
+user's vault in v0.88.10 conversation, behind a one-command CLI so
+anyone on PyPI can install it.
+
+### Ship
+
+- `src/research_hub/assets/themes/research-hub-tech.css` — the tech
+  aesthetic CSS bundled with the wheel (Hatch picks it up automatically
+  under the existing `src/research_hub` package directory)
+- `src/research_hub/vault/install_theme.py` — copy + enable / disable
+  helpers with `InstallThemeResult` dataclass return shape
+- New CLI:
+
+```bash
+research-hub vault install-theme                  # dry-default? no, installs
+research-hub vault install-theme --force          # overwrite tampered snippet
+research-hub vault install-theme --uninstall      # remove + disable
+research-hub vault install-theme --theme research-hub-tech   # explicit
+```
+
+### Behavior
+
+- Copies bundled CSS to `<vault>/.obsidian/snippets/<theme>.css`
+- Adds `<theme>` to `enabledCssSnippets` in
+  `<vault>/.obsidian/appearance.json` (preserving any other user
+  appearance keys verbatim)
+- Idempotent: re-run is a `skipped_exists` no-op unless `--force`
+- Detects re-enable cases: if CSS exists but theme is disabled in
+  appearance.json, flips the enabled bit (returns `re_enabled`)
+- `--uninstall` removes the CSS + disables the snippet; never touches
+  unrelated user appearance settings
+- Unknown theme name → `no_op` with an error pointing at available
+  themes
+
+### Tests (`tests/test_v08813_install_theme.py` — 9 new)
+
+- 5 happy-path: fresh install, skip-on-exists, force-overwrites,
+  preserves other appearance keys, idempotent (no duplicate in enabled)
+- 1 error path: unknown theme returns error
+- 3 uninstall: removes + disables, no-op when already uninstalled,
+  preserves other appearance keys
+
+### Theme contents
+
+The snippet is the same as the v0.88.11 conversation install: cyan
++ amber accent palette, JetBrains Mono frontmatter/tables/wikilinks,
+dotted-grid background, instrument-panel callouts, mobile breakpoint
+tweaks. Targets the Obsidian classes via stable CSS variables.
+
+Restart Obsidian after install to load the snippet
+(Settings → Appearance → CSS snippets should already show it on).
+
 ## v0.88.12 (2026-05-14) — Semantic Scholar API key + frontmatter dedupe migration
 
 Two W1/W3 audit follow-ups:

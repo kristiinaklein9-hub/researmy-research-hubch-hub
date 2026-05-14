@@ -2775,6 +2775,40 @@ def _vault_hub_backlink_migrate(*, cluster_slug: str | None, dry_run: bool) -> i
     return 0
 
 
+def _vault_install_theme(*, theme: str, force: bool, uninstall: bool) -> int:
+    """v0.88.13: install or remove a bundled Obsidian CSS theme."""
+    from research_hub.vault.install_theme import install_theme, uninstall_theme
+
+    cfg = get_config()
+    vault_root = Path(cfg.root)
+    if uninstall:
+        result = uninstall_theme(vault_root, theme=theme)
+    else:
+        result = install_theme(vault_root, theme=theme, force=force)
+
+    for err in result.errors:
+        print(f"  [ERROR] {err}")
+
+    if result.css_path:
+        print(f"  snippet path: {result.css_path}")
+    if result.appearance_path:
+        print(f"  appearance:   {result.appearance_path}")
+    print(f"  action: {result.action}")
+    if result.action == "skipped_exists":
+        print("    (file already present — re-run with --force to overwrite)")
+    print(f"  enabled: {result.enabled}")
+
+    if result.action == "installed" and not result.errors:
+        print(
+            "\nDone. Restart Obsidian to load the snippet "
+            "(Settings → Appearance → CSS snippets should already show it enabled)."
+        )
+    if result.action == "uninstalled":
+        print("\nUninstalled. Restart Obsidian to drop the styling.")
+
+    return 0 if not result.errors else 1
+
+
 def _vault_cleanup_frontmatter(*, cluster_slug: str | None, dry_run: bool) -> int:
     """v0.88.12: dedupe list-valued frontmatter fields across all paper notes.
 
@@ -4803,6 +4837,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually write summarize_status frontmatter",
     )
 
+    # v0.88.13: install-theme — copy a bundled Obsidian CSS snippet into
+    # the user's vault and enable it. Discoverable shortcut so users
+    # don't have to manually copy from the repo's assets/themes/ dir.
+    vault_install_theme = vault_subparsers.add_parser(
+        "install-theme",
+        help="Install a bundled Obsidian CSS theme (v0.88.13)",
+    )
+    vault_install_theme.add_argument(
+        "--theme",
+        default="research-hub-tech",
+        choices=("research-hub-tech",),
+        help="Which bundled theme to install (default: research-hub-tech)",
+    )
+    vault_install_theme.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing snippet file at the target path",
+    )
+    vault_install_theme.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove the snippet file + disable it in appearance.json",
+    )
+
     # v0.88.12: cleanup-frontmatter — backfill the v0.88.4 list-dedupe
     # across pre-existing paper notes whose frontmatter was never re-
     # written since v0.88.4 shipped.
@@ -6099,6 +6157,12 @@ def main(argv: list[str] | None = None) -> int:
             return _vault_cleanup_frontmatter(
                 cluster_slug=args.cluster,
                 dry_run=args.dry_run,
+            )
+        if args.vault_command == "install-theme":
+            return _vault_install_theme(
+                theme=args.theme,
+                force=args.force,
+                uninstall=args.uninstall,
             )
     if args.command == "bases":
         if args.bases_command == "emit":

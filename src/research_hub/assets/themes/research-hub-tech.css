@@ -1,0 +1,370 @@
+/* ============================================================
+   research-hub Tech Aesthetic
+   ============================================================
+   A clean, technical look for an Obsidian research vault. Tuned
+   for dark mode (primary use case) with light-mode fallbacks.
+
+   Design intent:
+   - Monospace for technical content (frontmatter, tables, code,
+     wikilinks rendered inline) — feels like reading instrument
+     output
+   - Sans-serif for prose paragraphs — keeps long reads
+     comfortable
+   - Cyan accent (#00d4ff) on interactive surfaces; amber accent
+     (#ffb86c) on warnings / data emphasis
+   - Subtle 1px borders + glow on hover, no heavy fills
+   - Hides visual noise (^block-id markers in Reading View)
+
+   Install:
+   1. Save this file to <vault>/.obsidian/snippets/
+   2. Settings → Appearance → CSS snippets → toggle ON
+
+   Author: research-hub v0.88.10
+   ============================================================ */
+
+
+/* -- 1. Color tokens ------------------------------------------ */
+
+.theme-dark {
+  --rh-accent-primary: #00d4ff;
+  --rh-accent-secondary: #ffb86c;
+  --rh-accent-success: #50fa7b;
+  --rh-accent-warning: #ffb86c;
+  --rh-accent-danger: #ff5555;
+  --rh-bg-elevated: rgba(0, 212, 255, 0.04);
+  --rh-border-subtle: rgba(0, 212, 255, 0.18);
+  --rh-border-strong: rgba(0, 212, 255, 0.45);
+  --rh-glow: 0 0 12px rgba(0, 212, 255, 0.35);
+  --rh-grid-line: rgba(255, 255, 255, 0.025);
+  --rh-mono-font: "JetBrains Mono", "Cascadia Code", "Fira Code",
+                  "SF Mono", "Consolas", "Menlo", monospace;
+}
+
+.theme-light {
+  --rh-accent-primary: #0099cc;
+  --rh-accent-secondary: #d97e00;
+  --rh-accent-success: #2e8b57;
+  --rh-accent-warning: #d97e00;
+  --rh-accent-danger: #cc3333;
+  --rh-bg-elevated: rgba(0, 153, 204, 0.05);
+  --rh-border-subtle: rgba(0, 153, 204, 0.20);
+  --rh-border-strong: rgba(0, 153, 204, 0.50);
+  --rh-glow: 0 0 8px rgba(0, 153, 204, 0.25);
+  --rh-grid-line: rgba(0, 0, 0, 0.025);
+  --rh-mono-font: "JetBrains Mono", "Cascadia Code", "Fira Code",
+                  "SF Mono", "Consolas", "Menlo", monospace;
+}
+
+
+/* -- 2. Subtle dotted-grid background on the workspace ------- */
+
+.workspace-leaf-content[data-type="markdown"] .markdown-source-view,
+.workspace-leaf-content[data-type="markdown"] .markdown-reading-view {
+  background-image:
+    radial-gradient(var(--rh-grid-line) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: 0 0;
+}
+
+
+/* -- 3. Frontmatter — render as a "data block" ---------------- */
+
+.metadata-container {
+  border: 1px solid var(--rh-border-subtle);
+  border-left: 3px solid var(--rh-accent-primary);
+  border-radius: 4px;
+  background: var(--rh-bg-elevated);
+  font-family: var(--rh-mono-font);
+  font-size: 0.85em;
+  padding: 8px 12px;
+  margin-bottom: 1.5em;
+}
+
+.metadata-property-key {
+  color: var(--rh-accent-primary);
+  opacity: 0.85;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.metadata-property[data-property-key="zotero-key"] .metadata-property-value,
+.metadata-property[data-property-key="doi"] .metadata-property-value {
+  font-family: var(--rh-mono-font);
+  color: var(--rh-accent-secondary);
+}
+
+.metadata-property[data-property-key="summarize_status"] .metadata-property-value {
+  font-family: var(--rh-mono-font);
+  color: var(--rh-accent-success);
+}
+
+.metadata-property[data-property-key="summarize_status"][data-property-value="failed_no_abstract"]
+  .metadata-property-value,
+.metadata-property[data-property-key="summarize_status"][data-property-value="pending"]
+  .metadata-property-value {
+  color: var(--rh-accent-warning);
+}
+
+/* Tag pills */
+.metadata-property[data-property-key="tags"] .multi-select-pill,
+.tag {
+  font-family: var(--rh-mono-font);
+  font-size: 0.78em;
+  background: var(--rh-bg-elevated);
+  border: 1px solid var(--rh-border-subtle);
+  border-radius: 3px;
+  padding: 1px 6px;
+  color: var(--rh-accent-primary);
+  transition: all 0.15s ease;
+}
+
+.tag:hover {
+  border-color: var(--rh-border-strong);
+  box-shadow: var(--rh-glow);
+  text-decoration: none;
+}
+
+
+/* -- 4. Headings — technical hierarchy ----------------------- */
+
+.markdown-rendered h1 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--rh-border-subtle);
+  padding-bottom: 0.3em;
+}
+
+.markdown-rendered h2 {
+  color: var(--rh-accent-primary);
+  font-family: var(--rh-mono-font);
+  font-weight: 500;
+  font-size: 1.35em;
+  letter-spacing: 0.01em;
+  margin-top: 1.6em;
+}
+
+.markdown-rendered h2::before {
+  content: "// ";
+  opacity: 0.4;
+  font-weight: 400;
+}
+
+.markdown-rendered h3 {
+  color: var(--rh-accent-secondary);
+  font-family: var(--rh-mono-font);
+  font-weight: 500;
+  font-size: 1.1em;
+  opacity: 0.9;
+}
+
+
+/* -- 5. Wikilinks — cyan, no underline, glow on hover --------- */
+
+.cm-hmd-internal-link,
+.internal-link {
+  color: var(--rh-accent-primary);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--rh-border-subtle);
+  transition: all 0.15s ease;
+  padding: 0 1px;
+}
+
+.cm-hmd-internal-link:hover,
+.internal-link:hover {
+  border-bottom-color: var(--rh-accent-primary);
+  text-shadow: var(--rh-glow);
+}
+
+.internal-link.is-unresolved {
+  color: var(--rh-accent-warning);
+  border-bottom-style: dotted;
+  opacity: 0.8;
+}
+
+
+/* -- 6. Callouts — instrument-panel feel --------------------- */
+
+.callout {
+  border-radius: 4px;
+  border: 1px solid var(--rh-border-subtle);
+  border-left-width: 3px;
+  background: var(--rh-bg-elevated);
+  margin: 0.8em 0;
+  padding: 6px 12px;
+}
+
+.callout[data-callout="info"] {
+  --callout-color: 0, 212, 255;
+  border-left-color: var(--rh-accent-primary);
+}
+
+.callout[data-callout="abstract"],
+.callout[data-callout="summary"],
+.callout[data-callout="tldr"] {
+  --callout-color: 0, 212, 255;
+  border-left-color: var(--rh-accent-primary);
+}
+
+.callout[data-callout="success"] {
+  --callout-color: 80, 250, 123;
+  border-left-color: var(--rh-accent-success);
+}
+
+.callout[data-callout="warning"] {
+  --callout-color: 255, 184, 108;
+  border-left-color: var(--rh-accent-warning);
+}
+
+.callout[data-callout="danger"],
+.callout[data-callout="error"] {
+  --callout-color: 255, 85, 85;
+  border-left-color: var(--rh-accent-danger);
+}
+
+.callout-title {
+  font-family: var(--rh-mono-font);
+  font-size: 0.88em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
+}
+
+
+/* -- 7. Code blocks — bright terminal ------------------------ */
+
+.markdown-rendered pre,
+.cm-line .cm-inline-code,
+code {
+  font-family: var(--rh-mono-font);
+}
+
+.markdown-rendered pre {
+  border: 1px solid var(--rh-border-subtle);
+  border-left: 3px solid var(--rh-accent-primary);
+  border-radius: 4px;
+  background: var(--rh-bg-elevated);
+}
+
+
+/* -- 8. Tables — data grid ----------------------------------- */
+
+.markdown-rendered table {
+  font-family: var(--rh-mono-font);
+  font-size: 0.88em;
+  border-collapse: collapse;
+}
+
+.markdown-rendered table th {
+  background: var(--rh-bg-elevated);
+  border-bottom: 2px solid var(--rh-accent-primary);
+  color: var(--rh-accent-primary);
+  text-align: left;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 0.85em;
+  padding: 6px 10px;
+}
+
+.markdown-rendered table td {
+  border-bottom: 1px solid var(--rh-border-subtle);
+  padding: 4px 10px;
+}
+
+.markdown-rendered table tr:hover td {
+  background: var(--rh-bg-elevated);
+}
+
+
+/* -- 9. Hide block-id eyesore in Reading View ----------------- */
+
+/* `^block-id` markers (^summary, ^findings, etc.) are useful for
+ * deep-linking but are visual noise inline. Hide them only in
+ * Reading View where the user isn't editing references. */
+.markdown-rendered .block-language-meta,
+.markdown-reading-view a.block-link[href^="#^"] {
+  display: none;
+}
+
+
+/* -- 10. Bases (Obsidian Bases dashboards) -------------------- */
+
+.bases-cards-card,
+.bases-table-row {
+  border: 1px solid var(--rh-border-subtle);
+  border-radius: 3px;
+  transition: all 0.2s ease;
+  background: var(--rh-bg-elevated);
+}
+
+.bases-cards-card:hover,
+.bases-table-row:hover {
+  border-color: var(--rh-border-strong);
+  box-shadow: var(--rh-glow);
+}
+
+.bases-table th {
+  background: var(--rh-bg-elevated);
+  color: var(--rh-accent-primary);
+  font-family: var(--rh-mono-font);
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 2px solid var(--rh-accent-primary);
+}
+
+
+/* -- 11. Status bar + side panel polish ----------------------- */
+
+.status-bar {
+  font-family: var(--rh-mono-font);
+  font-size: 0.78em;
+  border-top: 1px solid var(--rh-border-subtle);
+}
+
+.workspace-tab-header.is-active {
+  border-top: 2px solid var(--rh-accent-primary);
+}
+
+.nav-file-title.is-active,
+.nav-folder-title.is-active {
+  background: var(--rh-bg-elevated);
+  border-left: 2px solid var(--rh-accent-primary);
+}
+
+
+/* -- 12. Mobile readability tweaks ---------------------------- */
+
+@media (max-width: 600px) {
+  /* Long H1 titles wrap awkwardly on iPhone — tighten line height
+   * and let them break on words */
+  .markdown-rendered h1 {
+    font-size: 1.4em;
+    line-height: 1.2;
+    word-break: break-word;
+  }
+
+  /* Frontmatter takes a lot of mobile screen real estate; collapse
+   * size on small viewports */
+  .metadata-container {
+    font-size: 0.75em;
+    padding: 6px 8px;
+  }
+
+  /* Tables get a horizontal scroll instead of overflowing */
+  .markdown-rendered table {
+    font-size: 0.75em;
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+
+/* -- 13. Graph view tinting ----------------------------------- */
+
+/* Subtle tweak so the graph view feels "telemetry" not "social
+ * network" — desaturate the fill, brighten the edges. */
+.graph-view.color-fill {
+  --graph-color-fill: var(--rh-accent-primary);
+  --graph-color-line: var(--rh-border-subtle);
+}

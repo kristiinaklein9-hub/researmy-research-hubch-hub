@@ -198,7 +198,14 @@ class NotebookLMClient:
     ) -> UploadResult:
         async def _go():
             if file_path is not None:
-                return await self._client.sources.add_file(notebook_id, path=str(file_path))
+                # v0.88.10: notebooklm-py 0.4.x renamed the file kwarg from
+                # `path=` to `file_path=` (see notebooklm._sources.SourcesAPI
+                # .add_file signature: (notebook_id, file_path, mime_type, ...)).
+                # The previous `path=` call raised TypeError on every PDF
+                # upload — Stage B saw 0/5 PDF uploads succeed because of
+                # this single bug, masked by 3-retry indiscriminate backoff
+                # in upload.py::_attempt_upload.
+                return await self._client.sources.add_file(notebook_id, file_path=str(file_path))
             return await self._client.sources.add_url(notebook_id, url=url)
 
         source_kind = "pdf" if file_path is not None else "url"

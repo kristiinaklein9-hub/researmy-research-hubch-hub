@@ -30,9 +30,12 @@ class _FakeSourcesAPI:
     def __init__(self, owner):
         self._owner = owner
 
-    async def add_file(self, notebook_id: str, path: str):
-        self._owner.uploads.append(("file", notebook_id, path))
-        return SimpleNamespace(title=Path(path).name)
+    async def add_file(self, notebook_id: str, file_path: str):
+        # v0.88.10: notebooklm-py 0.4.x renamed `path=` to `file_path=`.
+        # The production code now passes `file_path=`; the fake must
+        # match the real upstream signature.
+        self._owner.uploads.append(("file", notebook_id, file_path))
+        return SimpleNamespace(title=Path(file_path).name)
 
     async def add_url(self, notebook_id: str, url: str):
         self._owner.uploads.append(("url", notebook_id, url))

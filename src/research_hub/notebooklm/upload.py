@@ -640,6 +640,36 @@ def _chunk_entries(entries: list[Entry], shard_size: int) -> list[list[Entry]]:
     return [entries[index:index + shard_size] for index in range(0, len(entries), shard_size)]
 
 
+# v0.88.10: error fingerprints we should NOT retry. SDK contract drift
+# (TypeError / unexpected keyword argument), validation errors, and 4xx
+# auth errors will never recover by retrying — burning the retry budget
+# on them just slows down ingest by 12+ seconds per upload. Stage B's
+# 5 PDF uploads each ate 12s of pointless backoff before the
+# `add_file()` kwarg-mismatch finally fell through. Match by lowercased
+# substring.
+_NON_RETRYABLE_ERROR_PATTERNS = (
+    "unexpected keyword argument",   # TypeError from SDK kwarg drift
+    "got multiple values for",       # TypeError from SDK signature drift
+    "missing 1 required",            # TypeError from SDK signature drift
+    "is not a valid",                # validation error from SDK
+    "invalid mime type",             # SDK rejected file before upload
+    "401 unauthorized",
+    "403 forbidden",
+    "404 not found",
+)
+
+
+def _is_non_retryable(error_text: str) -> bool:
+    """Return True if the upload error is a contract/validation problem
+    that no amount of retry will fix. Conservative — only matches a
+    small known set so transient 5xx / rate-limit / network errors
+    still get the full retry budget."""
+    if not error_text:
+        return False
+    needle = error_text.lower()
+    return any(pattern in needle for pattern in _NON_RETRYABLE_ERROR_PATTERNS)
+
+
 def _attempt_upload(
     client,
     entry: dict,
@@ -647,7 +677,13 @@ def _attempt_upload(
     *,
     max_attempts: int = 3,
 ):
-    """Try an upload up to ``max_attempts`` times with exponential backoff."""
+    """Try an upload up to ``max_attempts`` times with exponential backoff.
+
+    v0.88.10: short-circuits the retry loop when the error fingerprint
+    matches `_NON_RETRYABLE_ERROR_PATTERNS` (SDK contract drift, validation,
+    auth). Stage B burned 12 s × 5 PDFs in pointless retries on the same
+    TypeError before the underlying `add_file()` kwarg fix landed.
+    """
     action = entry.get("action", "?")
     key = entry.get("pdf_path") or entry.get("url") or entry.get("doi") or ""
     last_result = None
@@ -674,6 +710,19 @@ def _attempt_upload(
                 "error": result.error,
             },
         )
+        # v0.88.10: don't retry SDK contract / validation / auth errors
+        if _is_non_retryable(result.error or ""):
+            _log_jsonl(
+                log_path,
+                {
+                    "kind": "upload_non_retryable",
+                    "attempt": attempt,
+                    "action": action,
+                    "key": key,
+                    "error": result.error,
+                },
+            )
+            return last_result
         if attempt < max_attempts:
             time.sleep(3 ** (attempt - 1))
     return last_result

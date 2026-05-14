@@ -1,5 +1,75 @@
 # Changelog
 
+## v0.88.10 (2026-05-14) — CRITICAL: NLM PDF upload was 100% broken since v0.88
+
+Field-discovered in the W4 audit of Stage B logs: every NotebookLM PDF
+upload since notebooklm-py 0.4.x went out has failed with the same
+TypeError, masked by 3 retries × exponential backoff that all hit the
+same wall. Stage B reported "8 succeeded out of 14" but the most
+recent NLM debug log shows **0/5 PDF uploads actually landed** — they
+were all failing with:
+
+```
+SourcesAPI.add_file() got an unexpected keyword argument 'path'
+```
+
+### Root cause
+
+`notebooklm._sources.SourcesAPI.add_file` signature is
+``(self, notebook_id, file_path, mime_type, wait, wait_timeout)`` —
+the kwarg is `file_path=`, not `path=`. research-hub's
+`NotebookLMClient.upload_source` was passing `path=` (legacy from an
+earlier SDK version), so every PDF upload threw immediately.
+
+### Fix #1 — `client.py:201`
+
+`add_file(notebook_id, file_path=str(file_path))` (was `path=`).
+One-line patch.
+
+### Fix #2 — non-retryable error classification (`upload.py`)
+
+The W4 audit also flagged that `_attempt_upload` retries
+indiscriminately — burning 12 s of backoff per upload on errors that
+will never recover (SDK contract drift, validation failures, 4xx
+auth). New helper `_is_non_retryable(error_text)` matches a small
+conservative set of fingerprints:
+
+- ``unexpected keyword argument`` / ``got multiple values for`` /
+  ``missing 1 required`` — TypeError from SDK signature drift
+- ``is not a valid`` / ``invalid mime type`` — validation
+- ``401 unauthorized`` / ``403 forbidden`` / ``404 not found`` — auth
+
+Transient errors (5xx, timeouts, rate limits, network) still get the
+full 3-attempt retry budget. The early-exit emits a new
+``upload_non_retryable`` JSONL log line for forensics.
+
+### Tests (`tests/test_v08810_pdf_upload.py` — 16 new)
+
+- `test_upload_source_passes_file_path_kwarg` — locks in `file_path=`
+  vs `path=`
+- `test_upload_source_url_path_unchanged` — sanity guard for URL path
+- `test_attempt_upload_skips_retry_on_typeerror_kwarg` — exact Stage
+  B error short-circuits after attempt 1; no backoff sleep fires
+- `test_attempt_upload_still_retries_on_transient_errors` — 503
+  flake still gets full retry budget
+- `test_is_non_retryable_classification` × 12 cases (8 non-retryable
+  + 3 retryable + 1 empty) — parametric coverage of the classifier
+
+### User impact
+
+After v0.88.10:
+- Every existing cluster's PDFs that were silently failing will succeed
+  on next `notebooklm upload`. No vault state migration needed.
+- Failed-upload log noise drops by ~3× because non-recoverable errors
+  exit immediately instead of cycling through 3 attempts each.
+
+If you have a cluster with `nlm_uploaded: 0` even though `nlm bundle`
+reported PDFs, re-run:
+
+```bash
+research-hub notebooklm upload --cluster <slug>
+```
+
 ## v0.88.9 (2026-05-14) — Stage B follow-ups: cluster_overview false-FAIL + crystals timeout
 
 Two unrelated polish fixes both surfaced by today's Stage B live

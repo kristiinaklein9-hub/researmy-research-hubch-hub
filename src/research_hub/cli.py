@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext, redirect_stdout
 import json
 import os
 import re
@@ -11,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,6 +43,36 @@ from research_hub.writing import (
     resolve_paper_meta,
     save_quote,
 )
+
+
+def _json_safe(value):
+    if hasattr(value, "to_dict") and callable(getattr(value, "to_dict")):
+        return _json_safe(value.to_dict())
+    if isinstance(value, Path):
+        return str(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return {key: _json_safe(item) for key, item in asdict(value).items()}
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _emit_cli_json(command: str, rc: int, report) -> None:
+    from research_hub import __version__
+
+    payload = {
+        "ok": rc == 0,
+        "command": command,
+        "version": __version__,
+        "report": _json_safe(report),
+    }
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def _stdout_to_stderr(enabled: bool):
+    return redirect_stdout(sys.stderr) if enabled else nullcontext()
 
 
 def _config_encrypt_secrets() -> int:
@@ -185,6 +216,7 @@ def _dedup(args) -> int:
     cfg = get_config()
     path = cfg.research_hub_dir / "dedup_index.json"
     index = DedupIndex.load(path)
+    emit_json = bool(getattr(args, "json", False))
 
     if args.dedup_command == "invalidate":
         if not args.doi and not args.path:
@@ -235,6 +267,17 @@ def _dedup(args) -> int:
         compacted, report = index.compact(cfg.raw, zot, dry_run=not args.apply)
         if args.apply:
             compacted.save(path)
+        if emit_json:
+            _emit_cli_json(
+                "dedup compact",
+                0,
+                {
+                    "path": str(path),
+                    "apply": bool(args.apply),
+                    "report": report,
+                },
+            )
+            return 0
         verb = "Would remove" if not args.apply else "Removed"
         print(f"{verb} {len(report.removed_zotero_keys)} stale Zotero hit(s)")
         print(f"Index compacted: {report.after_doi_keys} DOIs, {report.after_title_keys} titles")
@@ -286,7 +329,7 @@ def _clusters_show(slug: str) -> int:
     return 0
 
 
-def _clusters_audit(cluster_slug: str | None = None) -> int:
+def _clusters_audit(cluster_slug: str | None = None, *, emit_json: bool = False) -> int:
     from research_hub.doctor import (
         check_cluster_collection_collision,
         check_cluster_test_pattern,
@@ -326,7 +369,9 @@ def _clusters_audit(cluster_slug: str | None = None) -> int:
     drift_available = not any(result.status == "INFO" for result in drift_results)
     zot = _load_zotero_if_configured() if drift_available else None
     bad = False
-    print(f"{'cluster':40} {'obsidian':>8} {'zotero':>8} {'in_both':>8} {'drift':>8} {'test?':>6} {'collision?':>11}")
+    rows: list[dict[str, object]] = []
+    if not emit_json:
+        print(f"{'cluster':40} {'obsidian':>8} {'zotero':>8} {'in_both':>8} {'drift':>8} {'test?':>6} {'collision?':>11}")
     for cluster in clusters:
         if drift_available and zot is not None:
             status = compute_sync_status(cluster, zot, cfg.raw)
@@ -342,8 +387,39 @@ def _clusters_audit(cluster_slug: str | None = None) -> int:
             drift_cell = "n/a"
         test_mark = "!" if cluster.slug in test_slugs else "-"
         collision_mark = "!" if cluster.slug in collision_slugs else "-"
-        print(f"{cluster.slug:40} {obsidian_cell:>8} {zotero_cell:>8} {in_both_cell:>8} {drift_cell:>8} {test_mark:>6} {collision_mark:>11}")
+        rows.append(
+            {
+                "cluster_slug": cluster.slug,
+                "obsidian": obsidian_cell,
+                "zotero": zotero_cell,
+                "in_both": in_both_cell,
+                "drift": drift_cell,
+                "test_pattern": test_mark == "!",
+                "collision": collision_mark == "!",
+            }
+        )
+        if not emit_json:
+            print(f"{cluster.slug:40} {obsidian_cell:>8} {zotero_cell:>8} {in_both_cell:>8} {drift_cell:>8} {test_mark:>6} {collision_mark:>11}")
         bad = bad or cluster.slug in drifted or test_mark == "!" or collision_mark == "!"
+
+    if emit_json:
+        rc = 1 if bad else 0
+        _emit_cli_json(
+            "clusters audit",
+            rc,
+            {
+                "cluster_filter": cluster_slug,
+                "drift_available": drift_available,
+                "checks": {
+                    "drift": drift_results,
+                    "test_pattern": test_result,
+                    "collection_collision": collision_result,
+                    "manifest_orphan_cluster": orphan_result,
+                },
+                "clusters": rows,
+            },
+        )
+        return rc
 
     if orphan_result.status != "OK":
         print()
@@ -905,7 +981,7 @@ def _autofill_apply(cluster_slug: str, scored_path: str) -> int:
     return 0
 
 
-def _cmd_crystal(args, cfg) -> int:
+def _cmd_crystal(args, cfg, *, emit_json: bool = False) -> int:
     from research_hub import crystal
 
     if args.crystal_command == "emit":
@@ -913,13 +989,42 @@ def _cmd_crystal(args, cfg) -> int:
         prompt = crystal.emit_crystal_prompt(cfg, args.cluster, question_slugs=question_slugs)
         if args.out:
             Path(args.out).write_text(prompt, encoding="utf-8")
+            if emit_json:
+                _emit_cli_json(
+                    "crystal emit",
+                    0,
+                    {
+                        "cluster_slug": args.cluster,
+                        "question_slugs": question_slugs or [],
+                        "out_path": args.out,
+                        "prompt_chars": len(prompt),
+                    },
+                )
+                return 0
             print(f"wrote {args.out}")
         else:
+            if emit_json:
+                _emit_cli_json(
+                    "crystal emit",
+                    0,
+                    {
+                        "cluster_slug": args.cluster,
+                        "question_slugs": question_slugs or [],
+                        "out_path": None,
+                        "prompt": prompt,
+                        "prompt_chars": len(prompt),
+                    },
+                )
+                return 0
             print(prompt)
         return 0
     if args.crystal_command == "apply":
         scored = json.loads(Path(args.scored).read_text(encoding="utf-8"))
         result = crystal.apply_crystals(cfg, args.cluster, scored)
+        rc = 0 if not result.errors else 1
+        if emit_json:
+            _emit_cli_json("crystal apply", rc, result)
+            return rc
         print(f"written: {len(result.written)}, replaced: {len(result.replaced)}, skipped: {len(result.skipped)}")
         if result.errors:
             for error in result.errors:
@@ -953,7 +1058,7 @@ def _cmd_crystal(args, cfg) -> int:
     raise ValueError(f"unknown crystal command: {args.crystal_command}")
 
 
-def _cmd_summarize(args, cfg) -> int:
+def _cmd_summarize(args, cfg, *, emit_json: bool = False) -> int:
     from research_hub import summarize as summarize_mod
 
     report = summarize_mod.summarize_cluster(
@@ -965,20 +1070,37 @@ def _cmd_summarize(args, cfg) -> int:
         write_obsidian=not args.no_obsidian,
     )
     if not report.ok:
+        if emit_json:
+            _emit_cli_json("summarize", 1, report)
+            return 1
         print(f"summarize failed: {report.error}", file=sys.stderr)
         return 1
     if report.prompt_path:
+        if emit_json:
+            _emit_cli_json("summarize", 0, report)
+            return 0
         print(f"no LLM CLI on PATH; prompt saved to {report.prompt_path}")
         print("pipe it through your LLM (claude/codex/gemini) and re-run with --apply")
         return 0
-    print(f"cli used: {report.cli_used}")
     if not args.apply:
+        if emit_json:
+            _emit_cli_json("summarize", 0, report)
+            return 0
+        print(f"cli used: {report.cli_used}")
         print("(dry-run; pass --apply to write to Obsidian + Zotero)")
         return 0
     apply_result = report.apply_result
     if apply_result is None:
+        if emit_json:
+            _emit_cli_json("summarize", 1, report)
+            return 1
         print("no apply result returned")
         return 1
+    rc = 0 if not apply_result.errors else 1
+    if emit_json:
+        _emit_cli_json("summarize", rc, report)
+        return rc
+    print(f"cli used: {report.cli_used}")
     print(
         f"applied: {len(apply_result.applied)}  "
         f"skipped: {len(apply_result.skipped)}  "
@@ -989,10 +1111,15 @@ def _cmd_summarize(args, cfg) -> int:
         print(f"  SKIP {skip}")
     for err in apply_result.errors:
         print(f"  ERROR {err}", file=sys.stderr)
-    return 0 if not apply_result.errors else 1
+    return rc
 
 
-def _vault_summarize_status_migrate(cluster_slug: str | None, dry_run: bool) -> int:
+def _vault_summarize_status_migrate(
+    cluster_slug: str | None,
+    dry_run: bool,
+    *,
+    emit_json: bool = False,
+) -> int:
     from collections import Counter
 
     from research_hub.vault.summarize_migrate import migrate_existing_to_pending_status
@@ -1004,6 +1131,18 @@ def _vault_summarize_status_migrate(cluster_slug: str | None, dry_run: bool) -> 
         dry_run=dry_run,
     )
     counts = Counter(action for _path, action in results)
+    if emit_json:
+        _emit_cli_json(
+            "vault summarize-status-migrate",
+            0,
+            {
+                "cluster_filter": cluster_slug,
+                "dry_run": dry_run,
+                "counts": dict(counts),
+                "results": [{"path": path, "action": action} for path, action in results],
+            },
+        )
+        return 0
     mode = "would flip" if dry_run else "flipped"
     print(f"{counts.get('pending', 0):4d} notes {mode} pending")
     print(f"{counts.get('done', 0):4d} notes {mode} done")
@@ -1572,6 +1711,7 @@ def _zotero_gc(
 
 
 def _paper_command(args) -> int:
+    emit_json = bool(getattr(args, "json", False))
     if args.paper_command == "lookup-doi":
         from research_hub.doi_lookup import batch_lookup_missing_dois, lookup_doi_for_slug
 
@@ -1655,6 +1795,9 @@ def _paper_command(args) -> int:
             cluster_slug=args.cluster,
             dry_run=not args.apply,
         )
+        if emit_json:
+            _emit_cli_json("paper bulk-relabel", 0, result)
+            return 0
         action = "would relabel" if not args.apply else "relabeled"
         print(f"{action} {len(result['changed'])} paper(s)")
         for change in result["changed"]:
@@ -1676,8 +1819,23 @@ def _paper_command(args) -> int:
                 dry_run=not args.apply,
             )
         except ValueError as exc:
+            if emit_json:
+                _emit_cli_json(
+                    "paper bulk-move",
+                    2,
+                    {
+                        "slugs": slugs,
+                        "to_cluster": args.to_cluster,
+                        "error": str(exc),
+                    },
+                )
+                return 2
             print(str(exc), file=sys.stderr)
             return 2
+        rc = 0 if not result["missing"] else 1
+        if emit_json:
+            _emit_cli_json("paper bulk-move", rc, result)
+            return rc
         action = "would move" if not args.apply else "moved"
         print(f"{action} {len(result['would_move']) if not args.apply else len(result['moved'])} paper(s)")
         if result["missing"]:
@@ -1687,7 +1845,7 @@ def _paper_command(args) -> int:
         if result.get("zotero_errors"):
             for error in result["zotero_errors"]:
                 print(f"  Zotero warning: {error['error']}", file=sys.stderr)
-        return 0 if not result["missing"] else 1
+        return rc
     if args.paper_command == "bulk-delete":
         from research_hub.paper import bulk_delete_by_tag
 
@@ -1697,6 +1855,9 @@ def _paper_command(args) -> int:
             args.by_tag,
             dry_run=not args.apply,
         )
+        if emit_json:
+            _emit_cli_json("paper bulk-delete", 0, result)
+            return 0
         action = "would delete" if not args.apply else "deleted"
         count = len(result["would_delete"]) if not args.apply else len(result["deleted"])
         print(f"{action} {count} paper(s) tagged {args.by_tag!r}")
@@ -1717,11 +1878,15 @@ def _paper_command(args) -> int:
             dry_run=not args.apply,
         )
         mode = "dry-run" if not args.apply else "applied"
+        rc = 1 if report.get("errors") else 0
+        if emit_json:
+            _emit_cli_json("paper retype", rc, report)
+            return rc
         print(f"paper retype ({mode}): {report['slug']}")
         if report.get("errors"):
             for err in report["errors"]:
                 print(f"  [ERR] {err}", file=sys.stderr)
-            return 1 if report.get("errors") else 0
+            return rc
         print(f"  from: {report['from_type']}")
         print(f"  to:   {report['to_type']}")
         print(f"  old zotero-key: {report['old_zotero_key']}")
@@ -1732,7 +1897,7 @@ def _paper_command(args) -> int:
             print(f"  fields dropped: {report['fields_dropped']}")
         if not args.apply:
             print("\nRe-run with --apply to perform the change.")
-        return 0
+        return rc
     if args.paper_command == "enrich-existing":
         return _paper_enrich_existing(
             args.cluster,
@@ -1781,9 +1946,10 @@ def _cleanup_hub(dry_run: bool = False) -> int:
     return 0
 
 
-def _import_folder_command(args) -> int:
+def _import_folder_command(args, emit_json: bool | None = None) -> int:
     from research_hub.importer import import_folder
 
+    emit_json = bool(getattr(args, "json", False) if emit_json is None else emit_json)
     cfg = require_config()
     report = import_folder(
         cfg,
@@ -1798,6 +1964,10 @@ def _import_folder_command(args) -> int:
         yes=args.yes,
         batch_label=args.batch_label,
     )
+    rc = 0 if report.failed_count == 0 else 1
+    if emit_json:
+        _emit_cli_json("import-folder", rc, report)
+        return rc
     print(f"\nImport summary ({'DRY RUN' if args.dry_run else 'WRITTEN'}):")
     print(f"  imported:  {report.imported_count}")
     print(f"  skipped:   {report.skipped_count}")
@@ -1807,7 +1977,7 @@ def _import_folder_command(args) -> int:
         for entry in report.entries:
             if entry.status == "failed":
                 print(f"  {entry.path.name}: {entry.error}")
-    return 0 if report.failed_count == 0 else 1
+    return rc
 
 
 def _import_folder_dep_precheck(args) -> int | None:
@@ -2456,15 +2626,44 @@ def _dashboard(
     full_page: bool = False,
     markdown_summary: bool = False,
     markdown_summary_out: str | None = None,
+    emit_json: bool = False,
 ) -> int:
     if markdown_summary:
         from pathlib import Path as _Path
 
+        from research_hub.clusters import ClusterRegistry
         from research_hub.dashboard.markdown_summary import write_dashboard_markdown_summary
+        from research_hub.dashboard.markdown_summary import _cluster_stats as _dashboard_cluster_stats
 
         cfg = require_config()
         out_p = _Path(markdown_summary_out) if markdown_summary_out else None
         path = write_dashboard_markdown_summary(cfg, out_path=out_p)
+        if emit_json:
+            registry = ClusterRegistry(cfg.clusters_file)
+            clusters = [cluster for cluster in registry.list() if (cluster.slug or "").strip()]
+            totals = {
+                "cluster_count": len(clusters),
+                "papers": 0,
+                "unread": 0,
+                "pending_summary": 0,
+                "clusters_with_brief": 0,
+            }
+            for cluster in clusters:
+                stats = _dashboard_cluster_stats(Path(cfg.root), cluster.slug)
+                totals["papers"] += int(stats["papers"])
+                totals["unread"] += int(stats["unread"])
+                totals["pending_summary"] += int(stats["pending_summary"])
+                totals["clusters_with_brief"] += int(bool(stats["brief_exists"]))
+            _emit_cli_json(
+                "dashboard",
+                0,
+                {
+                    "markdown_summary": True,
+                    "path": path,
+                    "stats": totals,
+                },
+            )
+            return 0
         print(f"Wrote markdown summary: {path}")
         return 0
 
@@ -2538,11 +2737,29 @@ def _dashboard(
 
     cfg = get_config()
     out_path = generate_dashboard(open_browser=open_browser, rich_bibtex=rich_bibtex)
+    group_count = None
+    graph_refresh_error = ""
     try:
         group_count = refresh_graph_from_vault(cfg)
-        print(f"Graph colors refreshed ({group_count} groups)")
+        if not emit_json:
+            print(f"Graph colors refreshed ({group_count} groups)")
     except Exception as exc:
-        print(f"WARNING: graph color refresh failed: {exc}", file=sys.stderr)
+        graph_refresh_error = str(exc)
+        if not emit_json:
+            print(f"WARNING: graph color refresh failed: {exc}", file=sys.stderr)
+    if emit_json:
+        _emit_cli_json(
+            "dashboard",
+            0,
+            {
+                "markdown_summary": False,
+                "path": out_path,
+                "graph_groups": group_count,
+                "graph_refresh_error": graph_refresh_error,
+                "open_browser": open_browser,
+            },
+        )
+        return 0
     print(f"Dashboard written to {out_path}")
     if open_browser:
         print("Opening in browser...")
@@ -2749,7 +2966,12 @@ def _vault_graph_colors(refresh: bool) -> int:
     return 0
 
 
-def _vault_hub_backlink_migrate(*, cluster_slug: str | None, dry_run: bool) -> int:
+def _vault_hub_backlink_migrate(
+    *,
+    cluster_slug: str | None,
+    dry_run: bool,
+    emit_json: bool = False,
+) -> int:
     """Backfill ## Hub backlink section into existing paper notes (v0.88 §5)."""
     from collections import Counter
 
@@ -2762,6 +2984,18 @@ def _vault_hub_backlink_migrate(*, cluster_slug: str | None, dry_run: bool) -> i
         dry_run=dry_run,
     )
     counts = Counter(r.action for r in results)
+    if emit_json:
+        _emit_cli_json(
+            "vault hub-backlink-migrate",
+            0,
+            {
+                "cluster_filter": cluster_slug,
+                "dry_run": dry_run,
+                "counts": dict(counts),
+                "results": results,
+            },
+        )
+        return 0
     mode = "dry-run" if dry_run else "applied"
     print(f"vault hub-backlink-migrate ({mode}): scanned {len(results)} notes")
     for action in (
@@ -2809,7 +3043,12 @@ def _vault_install_theme(*, theme: str, force: bool, uninstall: bool) -> int:
     return 0 if not result.errors else 1
 
 
-def _vault_cleanup_frontmatter(*, cluster_slug: str | None, dry_run: bool) -> int:
+def _vault_cleanup_frontmatter(
+    *,
+    cluster_slug: str | None,
+    dry_run: bool,
+    emit_json: bool = False,
+) -> int:
     """v0.88.12: dedupe list-valued frontmatter fields across all paper notes.
 
     Mirrors the pattern of tag-migrate / hub-backlink-migrate /
@@ -2827,6 +3066,18 @@ def _vault_cleanup_frontmatter(*, cluster_slug: str | None, dry_run: bool) -> in
         dry_run=dry_run,
     )
     counts = Counter(r.action for r in results)
+    if emit_json:
+        _emit_cli_json(
+            "vault cleanup-frontmatter",
+            0,
+            {
+                "cluster_filter": cluster_slug,
+                "dry_run": dry_run,
+                "counts": dict(counts),
+                "results": results,
+            },
+        )
+        return 0
     mode = "dry-run" if dry_run else "applied"
     print(f"vault cleanup-frontmatter ({mode}): scanned {len(results)} notes")
     for action in ("deduped", "clean", "skipped_no_lists", "skipped_no_frontmatter"):
@@ -2845,7 +3096,12 @@ def _vault_cleanup_frontmatter(*, cluster_slug: str | None, dry_run: bool) -> in
     return 0
 
 
-def _vault_tag_migrate(*, cluster_slug: str | None, dry_run: bool) -> int:
+def _vault_tag_migrate(
+    *,
+    cluster_slug: str | None,
+    dry_run: bool,
+    emit_json: bool = False,
+) -> int:
     """Backfill topic:<slug> tag into existing paper notes (v0.87.1 §6)."""
     from collections import Counter
 
@@ -2858,6 +3114,18 @@ def _vault_tag_migrate(*, cluster_slug: str | None, dry_run: bool) -> int:
         dry_run=dry_run,
     )
     counts = Counter(r.action for r in results)
+    if emit_json:
+        _emit_cli_json(
+            "vault tag-migrate",
+            0,
+            {
+                "cluster_filter": cluster_slug,
+                "dry_run": dry_run,
+                "counts": dict(counts),
+                "results": results,
+            },
+        )
+        return 0
     mode = "dry-run" if dry_run else "applied"
     print(f"vault tag-migrate ({mode}): scanned {len(results)} notes")
     for action in ("added", "already_present", "skipped_no_topic_cluster", "skipped_no_tags_line", "skipped_no_frontmatter"):
@@ -2872,6 +3140,7 @@ def _vault_rebuild_overviews(
     *,
     cluster_slug: str | None,
     force_rebuild: bool = False,
+    emit_json: bool = False,
 ) -> int:
     """Re-run populate_overview + ensure_moc for every cluster (v0.87.1 §5)."""
     from research_hub.vault.hub_overview import populate_all_overviews
@@ -2883,17 +3152,44 @@ def _vault_rebuild_overviews(
         force_rebuild=force_rebuild,
     )
     if not results:
+        if emit_json:
+            _emit_cli_json(
+                "vault rebuild-overviews",
+                0,
+                {
+                    "cluster_filter": cluster_slug,
+                    "force_rebuild": force_rebuild,
+                    "results": [],
+                },
+            )
+            return 0
         print("(no clusters processed)")
         return 0
     errors = 0
+    json_results: list[dict[str, object]] = []
     for slug, path in results:
         marker = "[OK]"
         path_str = str(path)
         if path_str.startswith("<error:"):
             marker = "[FAIL]"
             errors += 1
+        json_results.append({"cluster_slug": slug, "path": path_str, "ok": marker == "[OK]"})
+        if emit_json:
+            continue
         print(f"  {marker}  {slug}  {path_str}")
-    return 0 if errors == 0 else 1
+    rc = 0 if errors == 0 else 1
+    if emit_json:
+        _emit_cli_json(
+            "vault rebuild-overviews",
+            rc,
+            {
+                "cluster_filter": cluster_slug,
+                "force_rebuild": force_rebuild,
+                "results": json_results,
+            },
+        )
+        return rc
+    return rc
 
 
 def _vault_polish_markdown(*, cluster: str | None, dry_run: bool) -> int:
@@ -2941,7 +3237,7 @@ def _vault_polish_markdown(*, cluster: str | None, dry_run: bool) -> int:
     return 0
 
 
-def _bases_emit(*, cluster_slug: str, stdout: bool, force: bool) -> int:
+def _bases_emit(*, cluster_slug: str, stdout: bool, force: bool, emit_json: bool = False) -> int:
     from research_hub.obsidian_bases import (
         ClusterBaseInputs,
         build_cluster_base,
@@ -2952,6 +3248,18 @@ def _bases_emit(*, cluster_slug: str, stdout: bool, force: bool) -> int:
     registry = ClusterRegistry(cfg.clusters_file)
     cluster = registry.get(cluster_slug)
     if cluster is None:
+        if emit_json:
+            _emit_cli_json(
+                "bases emit",
+                1,
+                {
+                    "cluster_slug": cluster_slug,
+                    "stdout": stdout,
+                    "force": force,
+                    "error": f"Cluster not found: {cluster_slug}",
+                },
+            )
+            return 1
         print(f"  [ERR] Cluster not found: {cluster_slug}")
         return 1
 
@@ -2963,6 +3271,19 @@ def _bases_emit(*, cluster_slug: str, stdout: bool, force: bool) -> int:
                 obsidian_subfolder=cluster.obsidian_subfolder,
             )
         )
+        if emit_json:
+            _emit_cli_json(
+                "bases emit",
+                0,
+                {
+                    "cluster_slug": cluster_slug,
+                    "stdout": True,
+                    "force": force,
+                    "path": None,
+                    "content": content,
+                },
+            )
+            return 0
         print(content)
         return 0
 
@@ -2973,6 +3294,19 @@ def _bases_emit(*, cluster_slug: str, stdout: bool, force: bool) -> int:
         obsidian_subfolder=cluster.obsidian_subfolder,
         force=force,
     )
+    if emit_json:
+        _emit_cli_json(
+            "bases emit",
+            0,
+            {
+                "cluster_slug": cluster_slug,
+                "stdout": False,
+                "force": force,
+                "path": path,
+                "written": written,
+            },
+        )
+        return 0
     if written:
         print(f"  [OK] Wrote {path}")
     else:
@@ -3228,10 +3562,23 @@ def _nlm_download(
     artifact_type: str,
     headless: bool,
     slide_format: str = "pdf",
+    emit_json: bool = False,
 ) -> int:
     cfg = get_config()
     rc = _preflight_nlm_session(cfg, op_name="download")
     if rc is not None:
+        if emit_json:
+            _emit_cli_json(
+                "notebooklm download",
+                rc,
+                {
+                    "cluster_slug": cluster_slug,
+                    "artifact_type": artifact_type,
+                    "slide_format": slide_format,
+                    "error": "session check failed",
+                },
+            )
+            return rc
         return rc
     registry = ClusterRegistry(cfg.clusters_file)
     cluster = registry.get(cluster_slug)
@@ -3244,6 +3591,12 @@ def _nlm_download(
         report = download_slide_deck_for_cluster(
             cluster, cfg, headless=headless, output_format=slide_format,
         )
+        if emit_json:
+            payload = _json_safe(report)
+            payload["artifact_type"] = artifact_type
+            payload["slide_format"] = slide_format
+            _emit_cli_json("notebooklm download", 0, payload)
+            return 0
         print(f"Saved: {report.artifact_path}")
         print(f"  format: {slide_format}")
         print(f"  size: {report.char_count} bytes")
@@ -3253,6 +3606,11 @@ def _nlm_download(
     from research_hub.notebooklm.upload import download_briefing_for_cluster
 
     report = download_briefing_for_cluster(cluster, cfg, headless=headless)
+    if emit_json:
+        payload = _json_safe(report)
+        payload["artifact_type"] = artifact_type
+        _emit_cli_json("notebooklm download", 0, payload)
+        return 0
     print(f"Saved: {report.artifact_path}")
     print(f"  notebook: {report.notebook_name}")
     print(f"  characters: {report.char_count}")
@@ -3337,7 +3695,14 @@ def _nlm_ask(cluster_slug: str, *, question: str, headless: bool, timeout_sec: i
     return 0
 
 
-def _fit_check_emit(cluster_slug: str, candidates_path: str, definition: str | None, out: str | None) -> int:
+def _fit_check_emit(
+    cluster_slug: str,
+    candidates_path: str,
+    definition: str | None,
+    out: str | None,
+    *,
+    emit_json: bool = False,
+) -> int:
     from research_hub.fit_check import emit_prompt
 
     cfg = get_config()
@@ -3345,8 +3710,35 @@ def _fit_check_emit(cluster_slug: str, candidates_path: str, definition: str | N
     prompt = emit_prompt(cluster_slug, candidates, definition=definition, cfg=cfg)
     if out:
         Path(out).write_text(prompt, encoding="utf-8")
+        if emit_json:
+            _emit_cli_json(
+                "fit-check emit",
+                0,
+                {
+                    "cluster_slug": cluster_slug,
+                    "candidates_path": candidates_path,
+                    "definition": definition,
+                    "out_path": out,
+                    "prompt_chars": len(prompt),
+                },
+            )
+            return 0
         print(f"wrote {out}")
     else:
+        if emit_json:
+            _emit_cli_json(
+                "fit-check emit",
+                0,
+                {
+                    "cluster_slug": cluster_slug,
+                    "candidates_path": candidates_path,
+                    "definition": definition,
+                    "out_path": None,
+                    "prompt": prompt,
+                    "prompt_chars": len(prompt),
+                },
+            )
+            return 0
         print(prompt)
     return 0
 
@@ -3358,6 +3750,8 @@ def _fit_check_apply(
     threshold: int,
     auto_threshold: bool,
     out: str | None,
+    *,
+    emit_json: bool = False,
 ) -> int:
     from research_hub.fit_check import apply_scores
 
@@ -3372,12 +3766,28 @@ def _fit_check_apply(
         auto_threshold=auto_threshold,
         cfg=cfg,
     )
-    print(f"fit-check {report.summary()}", file=sys.stderr)
     output = json.dumps([item.to_dict() for item in report.accepted], indent=2, ensure_ascii=False)
     if out:
         Path(out).write_text(output, encoding="utf-8")
-    else:
+    elif not emit_json:
         print(output)
+    rc = 0
+    if emit_json:
+        _emit_cli_json(
+            "fit-check apply",
+            rc,
+            {
+                "cluster_slug": report.cluster_slug,
+                "threshold": report.threshold,
+                "candidates_in": report.candidates_in,
+                "accepted": report.accepted,
+                "rejected": report.rejected,
+                "accepted_output_path": out,
+                "auto_threshold": auto_threshold,
+            },
+        )
+        return rc
+    print(f"fit-check {report.summary()}", file=sys.stderr)
     return 0
 
 
@@ -3526,6 +3936,93 @@ def _discover_clean(args) -> int:
     return 0
 
 
+def _cmd_doctor(args, *, emit_json: bool = False) -> int:
+    from research_hub.doctor import print_doctor_report, run_doctor
+    from research_hub.vault_autofix import run_autofix
+
+    autofix_summary = None
+    if getattr(args, "autofix", False):
+        autofix_summary = run_autofix(get_config())
+        if not emit_json:
+            print(
+                "[autofix] "
+                f"topic_cluster={autofix_summary['topic_cluster']} "
+                f"ingested_at={autofix_summary['ingested_at']} "
+                f"doi_derived={autofix_summary['doi_derived']} "
+                f"skipped_no_cluster={autofix_summary['skipped_no_cluster']}"
+            )
+    results = run_doctor(strict=getattr(args, "strict", False))
+    if emit_json:
+        rc = 1 if any(result.status == "FAIL" for result in results) else 0
+        _emit_cli_json(
+            "doctor",
+            rc,
+            {
+                "strict": bool(getattr(args, "strict", False)),
+                "autofix": bool(getattr(args, "autofix", False)),
+                "autofix_summary": autofix_summary,
+                "checks": results,
+            },
+        )
+        return rc
+    return print_doctor_report(results)
+
+
+def _cmd_ingest(args, *, emit_json: bool = False) -> int:
+    run_kwargs = {
+        "dry_run": args.dry_run,
+        "cluster_slug": args.cluster,
+        "query": args.query,
+        "verify": args.verify,
+        "allow_library_duplicates": args.allow_library_duplicates,
+        "fit_check": args.fit_check,
+        "fit_check_threshold": args.fit_check_threshold,
+        "no_fit_check_auto_labels": args.no_fit_check_auto_labels,
+        "batch_label": args.batch_label,
+        "allow_archived_cluster": bool(args.cluster),
+    }
+    if args.with_pdfs:
+        run_kwargs["with_pdfs"] = True
+    with _stdout_to_stderr(emit_json):
+        rc = run_pipeline(**run_kwargs)
+
+    fit_check_labels = None
+    if rc == 0 and args.fit_check and not args.no_fit_check_auto_labels:
+        from research_hub.paper import apply_fit_check_to_labels
+
+        cfg = get_config()
+        fit_check_labels = apply_fit_check_to_labels(cfg, args.cluster)
+        if not emit_json:
+            print(f"auto-labeled {len(fit_check_labels['tagged'])} paper(s) as deprecated from fit-check sidecar")
+    if emit_json:
+        cfg = get_config()
+        pipeline_output_path = Path(cfg.logs) / "pipeline_output.json"
+        pipeline_output = None
+        if pipeline_output_path.exists():
+            try:
+                pipeline_output = json.loads(pipeline_output_path.read_text(encoding="utf-8"))
+            except Exception:
+                pipeline_output = None
+        _emit_cli_json(
+            "ingest",
+            rc,
+            {
+                "cluster_slug": args.cluster,
+                "query": args.query,
+                "dry_run": args.dry_run,
+                "verify": args.verify,
+                "with_pdfs": bool(args.with_pdfs),
+                "fit_check": bool(args.fit_check),
+                "fit_check_threshold": args.fit_check_threshold,
+                "batch_label": args.batch_label,
+                "pipeline_output_path": pipeline_output_path,
+                "pipeline_output": pipeline_output,
+                "fit_check_auto_labels": fit_check_labels,
+            },
+        )
+    return rc
+
+
 def _fit_check_drift(cluster_slug: str, threshold: int) -> int:
     from research_hub.fit_check import drift_check
 
@@ -3585,6 +4082,7 @@ def _auto(
     batch_label: str | None = None,
     with_pdfs: bool = False,
     with_summary: bool = False,
+    emit_json: bool = False,
 ) -> int:
     from research_hub.auto import auto_pipeline
 
@@ -3593,6 +4091,22 @@ def _auto(
         cluster_raw = cfg.raw / cluster_slug
         existing_papers = len(list(cluster_raw.glob("*.md"))) if cluster_raw.exists() else 0
         if existing_papers > 0 and not (append or force):
+            message = (
+                f"cluster '{cluster_slug}' already has {existing_papers} paper(s). "
+                "Re-run with --append or --force."
+            )
+            if emit_json:
+                _emit_cli_json(
+                    "auto",
+                    2,
+                    {
+                        "topic": topic,
+                        "cluster_slug": cluster_slug,
+                        "existing_papers": existing_papers,
+                        "error": message,
+                    },
+                )
+                return 2
             print(f"ERROR: cluster '{cluster_slug}' already has {existing_papers} paper(s).")
             print("       Re-run with --append (add more) or --force (overwrite).")
             return 2
@@ -3615,7 +4129,7 @@ def _auto(
             "zotero_batch_size": zotero_batch_size,
             "llm_cli": llm_cli,
             "dry_run": dry_run,
-            "print_progress": True,
+            "print_progress": not emit_json,
         }
         if with_pdfs:
             auto_kwargs["with_pdfs"] = True
@@ -3629,9 +4143,12 @@ def _auto(
             else:
                 os.environ["RESEARCH_HUB_BATCH_LABEL"] = previous_batch_label
     if not report.ok:
+        if emit_json:
+            _emit_cli_json("auto", 1, report)
+            return 1
         print(f"  [ERR] {report.error}")
         return 1
-    if show and sys.stdin.isatty():
+    if not emit_json and show and sys.stdin.isatty():
         try:
             from research_hub.dashboard import generate_dashboard
 
@@ -3639,6 +4156,8 @@ def _auto(
         except Exception as exc:
             print(f"[auto] Could not open dashboard: {exc}.")
             print("       Run `research-hub serve --dashboard` to view results.")
+    if emit_json:
+        _emit_cli_json("auto", 0, report)
     return 0
 
 
@@ -3785,6 +4304,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show all frontmatter WARNs including expected legacy gaps "
              "(missing DOI on pre-v0.31 imports, empty Summary/Methodology sections). "
              "Default hides them as a single INFO line.",
+    )
+    doctor_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
     )
 
     config_parser = subparsers.add_parser("config", help="Config maintenance commands")
@@ -3995,6 +4519,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Attach open-access PDFs from arXiv/OpenAlex/Unpaywall/Crossref after ingest",
     )
+    auto_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
 
     plan_parser = subparsers.add_parser(
         "plan",
@@ -4041,6 +4570,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--with-pdfs",
         action="store_true",
         help="Attach open-access PDFs from arXiv/Unpaywall after ingest",
+    )
+    ingest_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
     )
 
     import_folder_parser = subparsers.add_parser(
@@ -4095,6 +4629,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional label for the manifest and Zotero batch sub-collection",
     )
+    import_folder_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
 
     for parser_with_verify in (run_parser, ingest_parser):
         parser_with_verify.add_argument(
@@ -4135,6 +4674,11 @@ def build_parser() -> argparse.ArgumentParser:
     compact_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
     compact_group.add_argument("--apply", dest="apply", action="store_true", help="Write the compacted index")
     compact_parser.set_defaults(apply=False)
+    compact_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
 
     clusters_parser = subparsers.add_parser("clusters", help="Manage topic clusters")
     clusters_subparsers = clusters_parser.add_subparsers(dest="clusters_command", required=True)
@@ -4240,6 +4784,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--cluster",
         default=None,
         help="Audit only this cluster slug (default: all)",
+    )
+    audit_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
     )
     restore_p = clusters_subparsers.add_parser(
         "restore-zotero-coll",
@@ -4724,6 +5273,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the markdown summary output path (default: "
              "`<vault>/.research_hub/dashboard-summary.md`)",
     )
+    dashboard_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
 
     vault_parser = subparsers.add_parser("vault", help="Vault maintenance commands")
     vault_subparsers = vault_parser.add_subparsers(dest="vault_command", required=True)
@@ -4772,6 +5326,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Bypass the overview rebuild debounce marker",
     )
+    vault_rebuild.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
     vault_tag_migrate = vault_subparsers.add_parser(
         "tag-migrate",
         help="Backfill topic:<slug> tag into existing paper-note frontmatter (v0.87.1)",
@@ -4792,6 +5351,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="dry_run",
         action="store_false",
         help="Actually write the new tag into frontmatter",
+    )
+    vault_tag_migrate.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
     )
 
     vault_hub_backlink = vault_subparsers.add_parser(
@@ -4815,6 +5379,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Actually write the Hub section into note bodies",
     )
+    vault_hub_backlink.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
     vault_summary_migrate = vault_subparsers.add_parser(
         "summarize-status-migrate",
         help="Backfill summarize_status frontmatter for paper notes (v0.87.2)",
@@ -4835,6 +5404,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="dry_run",
         action="store_false",
         help="Actually write summarize_status frontmatter",
+    )
+    vault_summary_migrate.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
     )
 
     # v0.88.13: install-theme — copy a bundled Obsidian CSS snippet into
@@ -4891,6 +5465,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Actually write deduped frontmatter back to disk",
     )
+    vault_cleanup_fm.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
 
     bases_parser = subparsers.add_parser("bases", help="Obsidian Bases (.base) generator")
     bases_sub = bases_parser.add_subparsers(dest="bases_command", required=True)
@@ -4898,6 +5477,11 @@ def build_parser() -> argparse.ArgumentParser:
     bases_emit.add_argument("--cluster", required=True)
     bases_emit.add_argument("--stdout", action="store_true", help="Print to stdout instead of writing")
     bases_emit.add_argument("--force", action="store_true", help="Overwrite existing .base file")
+    bases_emit.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
 
     migrate_parser = subparsers.add_parser(
         "migrate-yaml", help="Patch legacy notes to v0.3.x YAML spec"
@@ -5187,6 +5771,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     nlm_download.add_argument("--headless", action="store_true", default=False)
     nlm_download.add_argument("--visible", dest="headless", action="store_false")
+    nlm_download.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
     nlm_read_brief = nlm_sub.add_parser(
         "read-briefing",
         help="Print the most recently downloaded briefing for a cluster",
@@ -5219,6 +5808,11 @@ def build_parser() -> argparse.ArgumentParser:
     fit_emit.add_argument("--candidates", required=True)
     fit_emit.add_argument("--definition")
     fit_emit.add_argument("--out")
+    fit_emit.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
 
     fit_apply = fit_sub.add_parser("apply", help="Apply AI scores and emit accepted papers")
     fit_apply.add_argument("--cluster", required=True)
@@ -5231,6 +5825,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compute threshold as median(scores) - 1 (clamped [2, 5])",
     )
     fit_apply.add_argument("--out")
+    fit_apply.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
 
     fit_audit = fit_sub.add_parser("audit", help="Parse the latest briefing for off-topic flags")
     fit_audit.add_argument("--cluster", required=True)
@@ -5262,9 +5861,19 @@ def build_parser() -> argparse.ArgumentParser:
     crystal_emit.add_argument("--cluster", required=True)
     crystal_emit.add_argument("--questions", help="Comma-separated question slugs to emit")
     crystal_emit.add_argument("--out")
+    crystal_emit.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
     crystal_apply = crystal_sub.add_parser("apply", help="Apply AI-generated crystals")
     crystal_apply.add_argument("--cluster", required=True)
     crystal_apply.add_argument("--scored", required=True, help="Path to JSON produced by AI")
+    crystal_apply.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
     crystal_list = crystal_sub.add_parser("list", help="List crystals for a cluster")
     crystal_list.add_argument("--cluster", required=True)
     crystal_read = crystal_sub.add_parser("read", help="Read a specific crystal")
@@ -5298,6 +5907,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-obsidian",
         action="store_true",
         help="Skip Obsidian markdown write (Zotero-only)",
+    )
+    summarize_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
     )
 
     memory_parser = subparsers.add_parser("memory", help="Manage structured cluster memory registries")
@@ -5337,6 +5951,11 @@ def build_parser() -> argparse.ArgumentParser:
     bulk_relabel_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
     bulk_relabel_group.add_argument("--apply", dest="apply", action="store_true", help="Write notes and Zotero tags")
     bulk_relabel_p.set_defaults(apply=False)
+    bulk_relabel_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
     bulk_move_p = paper_sub.add_parser("bulk-move", help="Move selected papers to another cluster")
     slug_group = bulk_move_p.add_mutually_exclusive_group(required=True)
     slug_group.add_argument("--slugs", default=None, help="Comma-separated paper slugs")
@@ -5346,12 +5965,22 @@ def build_parser() -> argparse.ArgumentParser:
     bulk_move_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
     bulk_move_group.add_argument("--apply", dest="apply", action="store_true", help="Move files and update Zotero")
     bulk_move_p.set_defaults(apply=False)
+    bulk_move_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
     bulk_delete_p = paper_sub.add_parser("bulk-delete", help="Delete papers whose frontmatter tags include a tag")
     bulk_delete_p.add_argument("--by-tag", required=True)
     bulk_delete_group = bulk_delete_p.add_mutually_exclusive_group()
     bulk_delete_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
     bulk_delete_group.add_argument("--apply", dest="apply", action="store_true", help="Delete notes and move Zotero items to trash")
     bulk_delete_p.set_defaults(apply=False)
+    bulk_delete_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
 
     retype_p = paper_sub.add_parser(
         "retype",
@@ -5372,6 +6001,11 @@ def build_parser() -> argparse.ArgumentParser:
     retype_group.add_argument("--dry-run", dest="apply", action="store_false", help="Preview only (default)")
     retype_group.add_argument("--apply", dest="apply", action="store_true", help="Actually create + trash + rewrite frontmatter")
     retype_p.set_defaults(apply=False)
+    retype_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
     enrich_existing = paper_sub.add_parser(
         "enrich-existing",
         help="Re-fetch DOI metadata to fill empty Zotero/Obsidian fields",
@@ -5566,19 +6200,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if not failed else 1
 
     if args.command == "doctor":
-        from research_hub.doctor import print_doctor_report, run_doctor
-        from research_hub.vault_autofix import run_autofix
-
-        if getattr(args, "autofix", False):
-            summary = run_autofix(get_config())
-            print(
-                "[autofix] "
-                f"topic_cluster={summary['topic_cluster']} "
-                f"ingested_at={summary['ingested_at']} "
-                f"doi_derived={summary['doi_derived']} "
-                f"skipped_no_cluster={summary['skipped_no_cluster']}"
-            )
-        return print_doctor_report(run_doctor(strict=getattr(args, "strict", False)))
+        return _cmd_doctor(args, emit_json=getattr(args, "json", False))
     if args.command == "config":
         if args.config_command == "encrypt-secrets":
             return _config_encrypt_secrets()
@@ -5704,38 +6326,34 @@ def main(argv: list[str] | None = None) -> int:
             batch_label=args.batch_label,
             with_pdfs=args.with_pdfs,
             with_summary=args.with_summary,
+            emit_json=args.json,
         )
     if args.command == "ingest":
-        run_kwargs = {
-            "dry_run": args.dry_run,
-            "cluster_slug": args.cluster,
-            "query": args.query,
-            "verify": args.verify,
-            "allow_library_duplicates": args.allow_library_duplicates,
-            "fit_check": args.fit_check,
-            "fit_check_threshold": args.fit_check_threshold,
-            "no_fit_check_auto_labels": args.no_fit_check_auto_labels,
-            "batch_label": args.batch_label,
-            "allow_archived_cluster": bool(args.cluster),
-        }
-        if args.with_pdfs:
-            run_kwargs["with_pdfs"] = True
-        rc = run_pipeline(**run_kwargs)
-        if rc == 0 and args.fit_check and not args.no_fit_check_auto_labels:
-            from research_hub.paper import apply_fit_check_to_labels
-
-            cfg = get_config()
-            result = apply_fit_check_to_labels(cfg, args.cluster)
-            print(f"auto-labeled {len(result['tagged'])} paper(s) as deprecated from fit-check sidecar")
-        return rc
+        return _cmd_ingest(args, emit_json=args.json)
     if args.command == "import-folder":
         dep_error = _import_folder_dep_precheck(args)
         if dep_error is not None:
+            if getattr(args, "json", False):
+                _emit_cli_json(
+                    "import-folder",
+                    dep_error,
+                    {
+                        "folder": args.folder,
+                        "cluster_slug": args.cluster,
+                        "error": "dependency precheck failed",
+                    },
+                )
             return dep_error
         return _import_folder_command(args)
     if args.command == "fit-check":
         if args.fit_check_command == "emit":
-            return _fit_check_emit(args.cluster, args.candidates, args.definition, args.out)
+            return _fit_check_emit(
+                args.cluster,
+                args.candidates,
+                args.definition,
+                args.out,
+                emit_json=getattr(args, "json", False),
+            )
         if args.fit_check_command == "apply":
             return _fit_check_apply(
                 args.cluster,
@@ -5744,6 +6362,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.threshold,
                 args.auto_threshold,
                 args.out,
+                emit_json=getattr(args, "json", False),
             )
         if args.fit_check_command == "audit":
             return _fit_check_audit(args.cluster)
@@ -5764,9 +6383,9 @@ def main(argv: list[str] | None = None) -> int:
         if not args.crystal_command:
             parser.error("crystal requires a subcommand")
             return 2
-        return _cmd_crystal(args, get_config())
+        return _cmd_crystal(args, get_config(), emit_json=getattr(args, "json", False))
     if args.command == "summarize":
-        return _cmd_summarize(args, get_config())
+        return _cmd_summarize(args, get_config(), emit_json=getattr(args, "json", False))
     if args.command == "memory":
         if not args.memory_command:
             parser.error("memory requires a subcommand")
@@ -5881,7 +6500,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.clusters_command == "scaffold-missing":
             return _clusters_scaffold_missing()
         if args.clusters_command == "audit":
-            return _clusters_audit(args.cluster)
+            return _clusters_audit(args.cluster, emit_json=getattr(args, "json", False))
         if args.clusters_command == "restore-zotero-coll":
             return _clusters_restore_zotero_coll(args.cluster, args.apply)
         if args.clusters_command == "sync-names":
@@ -6127,6 +6746,7 @@ def main(argv: list[str] | None = None) -> int:
             full_page=args.full_page,
             markdown_summary=getattr(args, "markdown_summary", False),
             markdown_summary_out=getattr(args, "markdown_summary_out", None),
+            emit_json=getattr(args, "json", False),
         )
     if args.command == "vault":
         if args.vault_command == "graph-colors":
@@ -6137,26 +6757,31 @@ def main(argv: list[str] | None = None) -> int:
             return _vault_rebuild_overviews(
                 cluster_slug=args.cluster,
                 force_rebuild=args.force,
+                emit_json=getattr(args, "json", False),
             )
         if args.vault_command == "tag-migrate":
             return _vault_tag_migrate(
                 cluster_slug=args.cluster,
                 dry_run=args.dry_run,
+                emit_json=getattr(args, "json", False),
             )
         if args.vault_command == "hub-backlink-migrate":
             return _vault_hub_backlink_migrate(
                 cluster_slug=args.cluster,
                 dry_run=args.dry_run,
+                emit_json=getattr(args, "json", False),
             )
         if args.vault_command == "summarize-status-migrate":
             return _vault_summarize_status_migrate(
                 cluster_slug=args.cluster,
                 dry_run=args.dry_run,
+                emit_json=getattr(args, "json", False),
             )
         if args.vault_command == "cleanup-frontmatter":
             return _vault_cleanup_frontmatter(
                 cluster_slug=args.cluster,
                 dry_run=args.dry_run,
+                emit_json=getattr(args, "json", False),
             )
         if args.vault_command == "install-theme":
             return _vault_install_theme(
@@ -6170,6 +6795,7 @@ def main(argv: list[str] | None = None) -> int:
                 cluster_slug=args.cluster,
                 stdout=args.stdout,
                 force=args.force,
+                emit_json=getattr(args, "json", False),
             )
     if args.command == "sync":
         if args.sync_command == "status":
@@ -6314,6 +6940,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.type,
                 args.headless,
                 slide_format=getattr(args, "slide_format", "pdf"),
+                emit_json=getattr(args, "json", False),
             )
         if args.notebooklm_command == "read-briefing":
             return _nlm_read_briefing(args.cluster)

@@ -1,5 +1,106 @@
 # Changelog
 
+## v0.89.0 (2026-05-14) — Agent-Native Mode
+
+First minor-version bump after the v0.88.x release train. v0.89.0
+makes research-hub usable by autonomous agents (Claude Cowork /
+OpenClaw / Hermes-style hosts), not just humans driving the CLI.
+
+Designed as 4 parallel Codex workstreams + Claude synthesis +
+post-merge code-review skill audit. Each workstream is its own
+commit + merge.
+
+### Workstream A — Universal `--json` output (commit 0787fa0)
+
+23 CLI subcommands now accept `--json` for machine-readable output.
+Wrapping shape: `{"ok": bool, "command": str, "version": str,
+"report": <to_dict()>}`.
+
+New helpers: `_json_safe()`, `_emit_cli_json()`, `_stdout_to_stderr()`.
+Targets: `auto`, `ingest`, `import-folder`, `doctor`, `crystal
+emit/apply`, `summarize`, `fit-check emit/apply`, `bases emit`,
+`vault rebuild-overviews`, `vault tag-migrate`,
+`vault hub-backlink-migrate`, `vault summarize-status-migrate`,
+`vault cleanup-frontmatter`, `notebooklm download`, `clusters
+audit`, `dedup compact`, `dashboard`, `paper retype`, `paper
+bulk-relabel`, `paper bulk-move`, `paper bulk-delete`. Tests: 23
+parametric.
+
+### Workstream B — Structured exception hierarchy (commit c878a10)
+
+`ResearchHubError` base + 5 subclasses for agent reasoning:
+`MissingCredential`, `RequiresAuthRefresh`, `MissingExternalTool`,
+`UpstreamRateLimited`, `UpstreamUnavailable`.
+
+10 conversion sites: `auto.py`, `notebooklm/*.py`,
+`search/semantic_scholar.py`, `api/v1.py`, `config.py`,
+`zotero/client.py`, `cli.py`. Backwards-compat: `NotebookLMError`,
+`RateLimitError`, `NotebookLMCapacityError`, `ApiError` keep their
+import paths AND inherit from the new base.
+
+CLI top-level handler: when `ResearchHubError` is raised under
+`--json`, emits `{"ok": false, "error": <err.to_dict()>}` instead
+of traceback. Tests: 12.
+
+### Workstream C — `research-hub describe` (commit c9981b9)
+
+New CLI subcommand emits a JSON manifest of capabilities so agents
+can introspect without starting the MCP server. Auto-walks the
+argparse tree (so new subcommands populate without touching
+`describe.py`); introspects FastMCP without starting the server
+(85 MCP tools listed); hand-curated `ENV_VARS` constant is the
+single source of truth used by Workstream D's bootstrap probe.
+Flags: `--filter <subtree>`, `--pretty`. Tests: 6.
+
+### Workstream D — `bootstrap --autonomous` + README rewrite (commit 5b5a56c)
+
+`research-hub setup --autonomous --vault <path> --persona agent`
+emits `BootstrapReport` JSON + exits 0 (ready) or 1 (missing).
+Probes: required env vars (via `describe.ENV_VARS`), vault
+existence, NLM cookie store presence (read-only — never invokes
+browser), Zotero ping, LLM CLI detection. Never prompts.
+
+README rewrite: new `## Personae` section (human Wei-Ling +
+autonomous Cowork-agent), `## Required env vars` table between
+`<!-- env-vars-table-start/-end -->` anchors (regex-parseable),
+`## Autonomous agent quickstart`, `## Human quickstart` decision
+table replacing old A/B/C prose. Version drift fixed (no more
+`v0.81.0` mixed with `v0.68.3`). NLM headless auth upstream-blocked
+status documented. Tests: 11.
+
+### Process notes
+
+- Plan file: `~/.claude/plans/delegated-puzzling-umbrella.md`
+- 3 Explore agents mapped current state of CLI/MCP/auth/error
+  surfaces (Phase 1)
+- 1 Plan agent designed the 4-workstream split (Phase 2)
+- 4 Codex sessions ran sequentially (A first to settle cli.py
+  base; B/C/D rebased on each successive merge)
+- Repomix pack at `.ai/v089/repo-pack.xml` (130K tokens, 14 files)
+  given to B/C/D as optional reference
+- `code-review` skill on combined diff (non-negotiable per CLAUDE.md
+  rule from the v0.88.15 lesson) returned APPROVE / 0 P0/P1 findings
+- Two P2 polish items deferred to v0.89.1: `_json_safe`
+  datetime/bytes/Exception handling (1-line fix: add `default=str`
+  to `json.dumps`); `describe.py` argparse private-API defensive
+  comment
+
+### Suite
+
+- 4 new test files, 46 tests total (23 + 12 + 6 + 5)
+- Full suite: 2442 passed / 0 fail / 24 skip / 2 xfail / 1 xpass
+  (excluding env-blocked `test_v065_extras_install.py`)
+
+### Migration notes
+
+- All v0.88.x CLI invocations work unchanged
+- New: `research-hub describe`, `research-hub setup --autonomous`,
+  `--persona agent`, `--json` on 23 more subcommands
+- Old import paths for exceptions still work; deprecation TBD
+
+Co-Authored-By: Codex (gpt-5.4) <noreply@openai.com>
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
 ## v0.88.15 (2026-05-14) — agent code-review followups (4 P1 + 4 P2 fixes)
 
 After v0.88.14 shipped, I ran the `code-review` skill against the

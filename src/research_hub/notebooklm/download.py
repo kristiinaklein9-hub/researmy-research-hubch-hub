@@ -87,11 +87,75 @@ def write_brief_markdown_mirror(
     # before they know what they're reading, and the brief can be navigated
     # back up to its cluster.
     tldr_block = _build_tldr_and_cluster_block(artifact, cluster_slug)
+    # v0.88.11: also strip the legacy archive-header block from the body
+    # (cluster-title H1 + Source:/Downloaded:/Sources:/Saved briefings:
+    # lines). v0.88.3 added the TL;DR but left the redundant header in
+    # place so every brief had the metadata duplicated above and below
+    # the cluster pointer — wasting iPhone screen real estate.
+    body = _strip_archive_header(body)
     brief_md_path.write_text(
         frontmatter + tldr_block + body + ("" if body.endswith("\n") else "\n"),
         encoding="utf-8",
     )
     return brief_md_path
+
+
+def _strip_archive_header(body: str) -> str:
+    """v0.88.11: drop the NotebookLM archive metadata block from the
+    front of a brief body.
+
+    Archive form (deterministic, set by notebooklm-py's downloader):
+
+        # <Notebook Title>
+        Source: https://notebooklm.google.com/notebook/<id>
+        Downloaded: <ts>
+        Sources: <n>
+        Saved briefings: <list>
+
+        # <Actual Synthesis Title>
+        ...
+
+    We want the second H1 onward — the first H1 is just the notebook
+    name (already in `## TL;DR` and `**Cluster:**`), and the metadata
+    is fully captured in YAML frontmatter.
+
+    Conservative: if the header doesn't match the expected shape,
+    return the body unchanged.
+    """
+    import re as _re
+
+    text = body or ""
+    if not text.lstrip().startswith("# "):
+        return body  # not the archive shape
+    lines = text.splitlines()
+    # Look for the first H1, then a contiguous block of metadata lines
+    # (Source:/Downloaded:/Sources:/Saved briefings:/Notebook:/Generated:),
+    # then a blank line, then the next H1. Strip everything from start
+    # up to (but not including) that next H1.
+    metadata_re = _re.compile(
+        r"^(Source|Downloaded|Sources|Saved briefings?|Notebook|Generated)\s*:",
+        _re.IGNORECASE,
+    )
+    saw_first_h1 = False
+    saw_metadata = False
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not saw_first_h1:
+            if stripped.startswith("# "):
+                saw_first_h1 = True
+            continue
+        # After first H1 — expect either metadata or a second H1
+        if metadata_re.match(stripped):
+            saw_metadata = True
+            continue
+        if not stripped:
+            continue  # tolerate blank lines inside the metadata block
+        if stripped.startswith("# ") and saw_metadata:
+            # Found the start of real synthesis content
+            return "\n".join(lines[idx:])
+        # Anything else means we don't recognize this shape — bail out
+        return body
+    return body
 
 
 def _build_tldr_and_cluster_block(artifact, cluster_slug: str) -> str:

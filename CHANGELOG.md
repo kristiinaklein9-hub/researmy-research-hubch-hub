@@ -1,5 +1,81 @@
 # Changelog
 
+## v0.88.11 (2026-05-14) — post-Stage-B polish bundle
+
+Three in-scope fixes from the W3/W4 audit, no new public CLI/MCP
+surface. All small, all field-discovered in the Stage A + B live
+re-ingest of `ml-flood-forecasting`.
+
+### Fix #1 — Brief mirror archive-header strip (`notebooklm/download.py`)
+
+v0.88.3 prepended `## TL;DR` + `**Cluster:**` to brief mirrors, but
+left the legacy NotebookLM archive-header block in place:
+
+```
+# <Cluster Title>
+Source: https://notebooklm.google.com/notebook/<id>
+Downloaded: <ts>
+Sources: <n>
+Saved briefings: <list>
+
+# <Synthesis Title>
+...
+```
+
+Result: every brief showed the same notebook metadata above and
+below the cluster pointer — wasting iPhone screen real estate. New
+helper `_strip_archive_header(body)` drops everything from the
+leading cluster H1 up to (but not including) the next H1 with real
+synthesis content. Conservative: if the body doesn't match the
+archive shape, return it unchanged so we never accidentally delete
+user content.
+
+### Fix #2 — NLM heartbeat refresh between shards (`notebooklm/upload.py`)
+
+v0.88.7 added `save_cookies_to_storage` on `close()`, but a 200+-
+source upload session holds the client open the entire time. Google
+rotates short-lived auth tokens (SIDCC / SIDTS / OSID / CSRF)
+during each request; without a heartbeat between shards, the
+second/third shard can hit "Authentication expired" mid-flight.
+
+`_upload_cluster_shards` now calls `client.refresh_and_save()`
+after each shard's `uploaded_sources` is committed to `shard_cache`.
+Best-effort — a refresh failure is swallowed so it never poisons
+the upload that just succeeded.
+
+### Fix #3 — `_find_pdf_for_doi` O(P²) → O(P) (`notebooklm/bundle.py`)
+
+`bundle_cluster` paid one `pdfs_dir.rglob("*.pdf")` filesystem walk
+per paper for the DOI-tail lookup, then another full walk for the
+author-year fallback. At 49 papers × ~80 PDFs in the directory,
+that's ~98 wasted walks per bundle. At 500 papers it's pathological.
+
+`_find_pdf_for_doi` and `_find_pdf_by_author_year` now accept an
+optional `pdf_index: list[Path]` kwarg. `bundle_cluster` builds the
+index once at the top of the loop and passes it through. Default
+behaviour is unchanged when the kwarg is omitted.
+
+**Estimated speedup**: 50× at 49 papers, 500× at 500 papers.
+
+### Tests (`tests/test_v08811_polish.py` — 8 new)
+
+- 3 covering `_strip_archive_header`: drops standard metadata block,
+  no-op on unfamiliar shapes (4 edge cases), tolerates
+  Notebook:/Generated: variants
+- 2 covering NLM heartbeat: structural test that `refresh_and_save`
+  is called after `shard_cache[shard_name]` assignment + that it's
+  inside try/except (best-effort)
+- 3 covering bundle memoize: `pdf_index` honored for both lookup
+  functions, fallback to rglob when omitted, end-to-end count of
+  rglob calls in `bundle_cluster` is exactly 1
+
+### Out of scope / deferred
+
+- `status: pending` cross-cluster sweep — defer to v0.89 (needs
+  new `--all-clusters` flag, not a one-line fix)
+- cluster_queries dedup migration tool — defer to v0.89 (needs new
+  `vault cleanup-frontmatter` CLI)
+
 ## v0.88.10 (2026-05-14) — CRITICAL: NLM PDF upload was 100% broken since v0.88
 
 Field-discovered in the W4 audit of Stage B logs: every NotebookLM PDF

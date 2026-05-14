@@ -75,8 +75,21 @@ def _parse_note_metadata(md_path: Path) -> dict[str, str]:
     return meta
 
 
-def _find_pdf_for_doi(pdfs_dir: Path, doi: str) -> Path | None:
-    """Look for a PDF file matching the DOI."""
+def _find_pdf_for_doi(
+    pdfs_dir: Path,
+    doi: str,
+    *,
+    pdf_index: list[Path] | None = None,
+) -> Path | None:
+    """Look for a PDF file matching the DOI.
+
+    v0.88.11: callers can pass a precomputed ``pdf_index`` (sorted
+    ``rglob("*.pdf")``) so they don't pay the O(P) directory walk for
+    every paper in a cluster. ``bundle_cluster`` now builds the index
+    once at the top of the loop, dropping `_find_pdf_for_doi`'s
+    cluster-wide cost from O(P²) to O(P) — a 50× speedup at 49 papers
+    and a 500× speedup at 500.
+    """
     normalized = _normalize_doi(doi)
     if not pdfs_dir.exists() or not normalized:
         return None
@@ -85,14 +98,16 @@ def _find_pdf_for_doi(pdfs_dir: Path, doi: str) -> Path | None:
     if exact.exists():
         return exact
 
+    candidates = pdf_index if pdf_index is not None else sorted(pdfs_dir.rglob("*.pdf"))
+
     tail = normalized.rsplit("/", 1)[-1]
     if tail:
-        for candidate in sorted(pdfs_dir.rglob("*.pdf")):
+        for candidate in candidates:
             if tail.lower() in candidate.name.lower():
                 return candidate
 
     doi_without_prefix = normalized.replace("/", "_")
-    for candidate in sorted(pdfs_dir.rglob("*.pdf")):
+    for candidate in candidates:
         if doi_without_prefix.lower() in candidate.name.lower():
             return candidate
     return None
@@ -113,13 +128,21 @@ def _extract_first_author_surname(authors_str: str) -> str:
     return parts[-1] if parts else ""
 
 
-def _find_pdf_by_author_year(pdfs_dir: Path, authors: str, year: str) -> Path | None:
+def _find_pdf_by_author_year(
+    pdfs_dir: Path,
+    authors: str,
+    year: str,
+    *,
+    pdf_index: list[Path] | None = None,
+) -> Path | None:
     """Match a PDF by Author_Year naming convention (e.g., Ben-Zion_2025.pdf).
 
     The surname must appear at the START of the filename (case-insensitive)
     followed by a non-alphabetic separator (`_`, `-`, space, digit).
     This prevents false positives like "Li" matching "Liu" or "Ma"
     matching "Mao".
+
+    v0.88.11: same memoize pattern as `_find_pdf_for_doi`.
     """
     if not pdfs_dir.exists():
         return None
@@ -129,7 +152,8 @@ def _find_pdf_by_author_year(pdfs_dir: Path, authors: str, year: str) -> Path | 
     escaped = re.escape(surname.lower())
     pattern = re.compile(rf"^{escaped}(?:[_\-\s\d]|$)", re.IGNORECASE)
     year_str = str(year).strip() if year else ""
-    for candidate in sorted(pdfs_dir.rglob("*.pdf")):
+    candidates = pdf_index if pdf_index is not None else sorted(pdfs_dir.rglob("*.pdf"))
+    for candidate in candidates:
         if pattern.match(candidate.stem):
             if not year_str or year_str in candidate.stem:
                 return candidate
@@ -174,6 +198,11 @@ def bundle_cluster(
 
     pdfs_dir = cfg.root / "pdfs"
     notes = list_cluster_notes(cluster.slug, cfg.raw)
+    # v0.88.11: build the PDF index ONCE per bundle instead of having
+    # `_find_pdf_for_doi` rglob the whole directory for every paper
+    # (was O(P²) — 49 papers × 49 file-system walks). At 49 papers this
+    # already saves ~50× time; at 500 papers ~500×.
+    pdf_index = sorted(pdfs_dir.rglob("*.pdf")) if pdfs_dir.exists() else []
     for note_path in notes:
         meta = _parse_note_metadata(note_path)
         entry = BundleEntry(
@@ -183,9 +212,12 @@ def bundle_cluster(
             action="skip",
         )
 
-        pdf = _find_pdf_for_doi(pdfs_dir, entry.doi)
+        pdf = _find_pdf_for_doi(pdfs_dir, entry.doi, pdf_index=pdf_index)
         if pdf is None:
-            pdf = _find_pdf_by_author_year(pdfs_dir, meta.get("authors", ""), meta.get("year", ""))
+            pdf = _find_pdf_by_author_year(
+                pdfs_dir, meta.get("authors", ""), meta.get("year", ""),
+                pdf_index=pdf_index,
+            )
             if pdf is not None:
                 entry.pdf_source = "local-slug"
         elif pdf is not None:

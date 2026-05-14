@@ -845,6 +845,21 @@ def _upload_cluster_shards(
                 time.sleep(BETWEEN_UPLOADS_SEC)
 
             shard_cache[shard_name] = sorted(uploaded_sources)
+
+            # v0.88.11: heartbeat refresh between shards. v0.88.7 added
+            # cookie persist on close(), but a 200+-source upload session
+            # holds one client open the entire time. Google can rotate
+            # short-lived auth tokens (SIDCC / SIDTS / OSID / CSRF)
+            # mid-flight, and without a refresh between shards the
+            # second/third shard hits the wall. Best-effort — never let
+            # a refresh failure poison the upload that just succeeded.
+            refresh = getattr(client, "refresh_and_save", None)
+            if refresh is not None:
+                try:
+                    refresh()
+                except Exception:
+                    pass
+
             created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             shards.append(
                 NotebookShard(

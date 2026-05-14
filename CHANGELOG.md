@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.88.14 (2026-05-14) — PDF content-hash cache (W4 audit #1 token win)
+
+Re-importing the same PDF (rename, retry, cluster-move) re-paid the
+pdfplumber walk cost every time. W4 audit flagged this as the #1 PDF
+win: ~100% on re-import, ~30% on partial cluster re-runs. At a real
+ingest scale (49 papers, ~30 with PDFs, ~20-page average), each
+pdfplumber walk is 1-3 s — the cache turns a 30 s re-import into a
+~1 s one.
+
+### Mechanism
+
+- Key: ``sha256(file_bytes).hexdigest()``
+- Cache location: ``<vault>/.research_hub/cache/pdf_extract/<sha>.txt``
+- Hit: cache file present + readable → return its content; no
+  pdfplumber call
+- Miss: pdfplumber walk → write to cache (best-effort) → return text
+- Renames / cluster-moves of the same file: cache HIT (key is content
+  hash, not path)
+- Content changes: cache MISS (new hash → fresh extraction)
+
+### Wiring
+
+- `importer.set_pdf_extract_cache_dir(path)` module setter, called
+  once per `import_folder` run with `cfg.research_hub_dir /
+  "cache" / "pdf_extract"`
+- Module-level `_PDF_EXTRACT_CACHE_DIR` (None by default = caching
+  off; safe default for tests + ad-hoc importer use)
+- Both read and write are wrapped in `try/except OSError` — corrupt
+  cache or full disk never poisons the extraction itself
+
+### Tests (`tests/test_v08814_pdf_cache.py` — 7 new)
+
+Uses a `FakePdfPlumber` that counts `.open()` calls so we never
+need a real PDF. Each test asserts the exact number of pdfplumber
+invocations expected:
+
+- cache-disabled: 2 calls for 2 imports (default behaviour preserved)
+- cache-enabled, same content: 1 call (hit on second)
+- rename with same content: 1 call (content-hash key)
+- content change: 2 calls (hash mismatch)
+- write failure: returns text + 1 call (best-effort)
+- corrupt cache read: 1 call (fresh extraction fallback)
+- disable mid-session: re-opens (setter respected)
+
+### What's not in this cache yet
+
+- `defuddle_extract.py` URL extraction (W4 #3 — same hash-by-content
+  pattern would apply, but URLs are mutable so the cache key needs
+  to be URL + last-fetched-headers; deferred to a separate fix)
+- `_pdf_metadata_title` second pdfplumber walk (W4 #4) — defer
+
 ## v0.88.13 (2026-05-14) — `vault install-theme` ships the Obsidian tech aesthetic
 
 Bundles the Obsidian CSS snippet that was added directly to the

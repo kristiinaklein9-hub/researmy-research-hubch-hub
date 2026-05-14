@@ -65,7 +65,52 @@ class ImportReport:
         return sum(1 for entry in self.entries if entry.status == "failed")
 
 
+# v0.88.14: content-hash cache for PDF text extraction.
+#
+# pdfplumber walking every page of a non-trivial PDF (~20 pages) takes
+# 1-3 s and produces ~50 KB of plain text. Re-importing the same PDF
+# (which happens whenever the user retries an ingest, re-runs auto on
+# the same cluster, or moves a paper between clusters) re-paid that
+# cost every time, with no caching layer anywhere in the pipeline.
+#
+# We key by sha256 of the file bytes so a moved/renamed PDF (same
+# content) is still a cache hit. The cache lives under
+# `<vault>/.research_hub/cache/pdf_extract/<sha>.txt` — vault-scoped
+# so it's GC'able alongside the rest of the sidecars. Set via
+# `set_pdf_extract_cache_dir(path)` at pipeline boot; if unset, no
+# caching happens (default-safe for tests + ad-hoc importer use).
+
+_PDF_EXTRACT_CACHE_DIR: Path | None = None
+
+
+def set_pdf_extract_cache_dir(path: Path | None) -> None:
+    """v0.88.14: pipeline init point — tell ``_extract_pdf`` where to
+    persist its content-hash cache. Pass ``None`` to disable caching."""
+    global _PDF_EXTRACT_CACHE_DIR
+    _PDF_EXTRACT_CACHE_DIR = Path(path) if path else None
+
+
+def _pdf_cache_paths(file_path: Path) -> tuple[Path | None, str]:
+    """Return (cache_path, sha256_hex) — cache_path is None when
+    caching is disabled."""
+    import hashlib
+
+    cache_dir = _PDF_EXTRACT_CACHE_DIR
+    digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    if cache_dir is None:
+        return None, digest
+    return cache_dir / f"{digest}.txt", digest
+
+
 def _extract_pdf(path: Path) -> str:
+    # v0.88.14: hash + cache hit short-circuit before invoking pdfplumber
+    cache_path, _digest = _pdf_cache_paths(path)
+    if cache_path is not None and cache_path.exists():
+        try:
+            return cache_path.read_text(encoding="utf-8")
+        except OSError:
+            pass  # fall through to fresh extraction
+
     try:
         import pdfplumber
     except ImportError as exc:  # pragma: no cover - dependency-gated
@@ -79,7 +124,18 @@ def _extract_pdf(path: Path) -> str:
             text = page.extract_text() or ""
             if text.strip():
                 parts.append(text)
-    return "\n\n".join(parts).strip()
+    extracted = "\n\n".join(parts).strip()
+
+    # v0.88.14: write cache (best-effort; never let a cache failure
+    # poison the extraction itself)
+    if cache_path is not None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(extracted, encoding="utf-8")
+        except OSError:
+            pass
+
+    return extracted
 
 
 def _pdf_metadata_title(path: Path) -> str | None:
@@ -404,6 +460,10 @@ def import_folder(
     normalized_extensions = tuple(ext.lower().lstrip(".") for ext in requested_extensions)
 
     _maybe_create_cluster(cfg, cluster_slug, dry_run=dry_run)
+    # v0.88.14: opt the PDF extract into vault-scoped content-hash
+    # caching for this run. Re-imports of the same PDF (rename, retry,
+    # cluster move) skip pdfplumber entirely.
+    set_pdf_extract_cache_dir(cfg.research_hub_dir / "cache" / "pdf_extract")
     dedup_path = cfg.research_hub_dir / "dedup_index.json"
     dedup = _load_dedup(dedup_path)
     manifest = Manifest(cfg.research_hub_dir / "manifest.jsonl")

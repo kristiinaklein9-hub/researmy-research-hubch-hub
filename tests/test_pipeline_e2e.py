@@ -357,7 +357,10 @@ def test_stage_10_crystal_emit_cli_and_apply(pipeline_cfg, monkeypatch):
     monkeypatch.setattr(
         auto_mod,
         "_invoke_llm_cli",
-        lambda cli, p: json.dumps(
+        # v0.88.9 wired in a `timeout_sec=600.0` kwarg for the crystals
+        # step; the fake must accept it (and any future positional/keyword
+        # additions) without breaking.
+        lambda cli, p, *args, **kwargs: json.dumps(
             {
                 "generator": "fixture",
                 "crystals": [

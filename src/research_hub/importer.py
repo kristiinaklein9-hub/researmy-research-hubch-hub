@@ -92,13 +92,20 @@ def set_pdf_extract_cache_dir(path: Path | None) -> None:
 
 def _pdf_cache_paths(file_path: Path) -> tuple[Path | None, str]:
     """Return (cache_path, sha256_hex) — cache_path is None when
-    caching is disabled."""
+    caching is disabled.
+
+    v0.88.15: short-circuit before any file I/O when caching is off.
+    The pre-fix path read the full file + hashed it even when the
+    result was discarded — wasted I/O on every call and would
+    needlessly crash with FileNotFoundError on dry-run paths where
+    the file may not yet exist (pdfplumber gives the better error
+    message for that case)."""
     import hashlib
 
     cache_dir = _PDF_EXTRACT_CACHE_DIR
-    digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
     if cache_dir is None:
-        return None, digest
+        return None, ""
+    digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
     return cache_dir / f"{digest}.txt", digest
 
 

@@ -21,6 +21,7 @@ CLI wiring lives in cli.py as ``vault cleanup-frontmatter --dedupe-lists``.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,25 @@ class DedupeResult:
     fields_deduped: list[str]
     before: dict[str, int]
     after: dict[str, int]
+
+
+def _item_signature(item: object) -> str:
+    """v0.88.15: order-stable signature for dedupe key.
+
+    Pre-fix used ``str(item)``, which produces non-deterministic keys
+    for dict values (two semantically identical dicts with different
+    insertion order produce different ``str()`` reprs). The
+    ``_DEDUPE_FIELDS`` allow-list excludes dict-list fields today, but
+    future-proofs against a maintainer adding ``creators`` etc. without
+    revisiting the key strategy. ``json.dumps(sort_keys=True,
+    default=str)`` is the cheap-but-robust choice; non-serializable
+    items fall back to ``str()`` so we never raise from inside the
+    migration.
+    """
+    try:
+        return json.dumps(item, sort_keys=True, default=str, ensure_ascii=False)
+    except Exception:
+        return str(item)
 
 
 def migrate_one_note(note_path: Path, *, dry_run: bool) -> DedupeResult:
@@ -90,7 +110,7 @@ def migrate_one_note(note_path: Path, *, dry_run: bool) -> DedupeResult:
         seen: set[str] = set()
         deduped: list[object] = []
         for item in value:
-            sig = str(item)
+            sig = _item_signature(item)
             if sig in seen:
                 continue
             seen.add(sig)

@@ -142,9 +142,12 @@ def test_refresh_and_save_failure_is_swallowed(tmp_path: Path) -> None:
     # Find the refresh block and check it's inside try/except
     refresh_block_start = src.find("refresh = getattr(client, \"refresh_and_save\"")
     assert refresh_block_start > 0, "v0.88.11 heartbeat block missing"
-    nearby = src[refresh_block_start : refresh_block_start + 500]
+    nearby = src[refresh_block_start : refresh_block_start + 800]
     assert "try:" in nearby
-    assert "except Exception:" in nearby
+    # v0.88.15: heartbeat exception now binds to a name + logs at debug.
+    # Accept either the v0.88.11 bare `except Exception:` or the
+    # v0.88.15+ named binding (e.g. `except Exception as _refresh_exc:`).
+    assert ("except Exception:" in nearby) or ("except Exception as " in nearby)
 
 
 # ---------------------------------------------------------------------------

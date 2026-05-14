@@ -1,5 +1,96 @@
 # Changelog
 
+## v0.88.15 (2026-05-14) — agent code-review followups (4 P1 + 4 P2 fixes)
+
+After v0.88.14 shipped, I ran the `code-review` skill against the
+v0.88.10–v0.88.14 release train (independent verification of an
+earlier code-reviewer subagent pass). The skill confirmed 4 P1 + 1 P2
+real bugs and identified 3 P2 polish items. v0.88.15 fixes all 8 with
+regression tests that lock each contract.
+
+### P1 fixes
+
+1. **`"is not a valid"` non-retryable pattern was too broad**
+   (`upload.py`) — substring match would catch transient errors like
+   `"URL is not a valid resource"` / `"certificate is not a valid
+   X.509"` and short-circuit legitimate retries. Narrowed to specific
+   SDK validation phrases: `"is not a valid notebook id"`, `"is not a
+   valid source"`, `"is not a valid mime type"`, `"invalid mime type"`.
+
+2. **Whitespace-only `SEMANTIC_SCHOLAR_API_KEY` env var was treated as
+   a valid key** (`semantic_scholar.py`) — `"  " or None` evaluated to
+   `"  "` (truthy), sending whitespace as `x-api-key` header and
+   triggering a misleading 403. Now `.strip() or None` so whitespace-
+   only inputs (and the explicit `api_key="  "` kwarg) fall back to
+   anonymous mode.
+
+3. **`install_theme.action` mislabeled first-time `--force` install as
+   `"overwrote"`** (`install_theme.py`) — `dest.exists()` was checked
+   AFTER `shutil.copy2` (always True post-copy). Now captures
+   `already_existed = dest.exists()` BEFORE the copy.
+
+4. **PDF cache read full file + computed sha256 even when caching
+   disabled** (`importer.py`) — defeated the docstring's "default-safe"
+   claim, wasted I/O on every `_extract_pdf` call, and could crash
+   with `FileNotFoundError` on dry-run paths before pdfplumber could
+   give a useful error. Now short-circuits at the top of
+   `_pdf_cache_paths` when `_PDF_EXTRACT_CACHE_DIR is None`.
+
+### P2 fixes (polish)
+
+5. **`_strip_archive_header` silently converted CRLF → LF**
+   (`download.py`) — `splitlines()` + `"\n".join()` lost CRLF. Now
+   detects the original separator and preserves it. Practical impact
+   low (notebooklm-py gives us LF today) but correct-by-construction
+   matters for any future caller passing Windows fixtures.
+
+6. **NLM heartbeat refresh failure was silently swallowed**
+   (`upload.py`) — added `logger.debug("heartbeat refresh_and_save
+   failed between shards (non-fatal): %s", _refresh_exc)`. Still
+   best-effort, but multi-shard auth failures now leave a diagnostic
+   trail.
+
+7. **`frontmatter_dedupe` dedupe key used `str(item)`**
+   (`frontmatter_dedupe.py`) — dict items with different key insertion
+   order produced different signatures. Now `json.dumps(item,
+   sort_keys=True, default=str)` with a `str()` fallback for non-
+   serializable items. Future-proofs against a maintainer adding
+   `creators` (dict list) without revisiting the key strategy.
+
+8. **`uninstall_theme` reported `"uninstalled"` even on partial state**
+   (`install_theme.py`) — when CSS removal succeeded but appearance.json
+   disable failed (read-only fs), the snippet might still load on next
+   Obsidian restart. New `"partial_uninstall"` action distinguishes
+   this case so the CLI summary doesn't lie.
+
+### Tests (`tests/test_v08815_review_followups.py` — 25 new)
+
+Lockdown coverage for every fix:
+
+- 4 parametric tests for the narrowed non-retryable pattern (4
+  transient errors NOT match + 2 genuine validations DO match)
+- 8 tests for env-var whitespace normalization (6 parametric cases +
+  headers/throttle/explicit-arg scenarios)
+- 2 tests for install_theme action label (first-time --force, repeat
+  --force)
+- 1 test for partial_uninstall reporting
+- 2 tests for PDF cache short-circuit (disabled = no I/O; enabled
+  still hashes)
+- 2 tests for CRLF preservation in `_strip_archive_header`
+- 1 structural test for heartbeat debug logging
+- 3 tests for `_item_signature` (order-stable dict, string identity,
+  unhashable fallback)
+
+Two prior test files needed minor updates:
+- `test_v08810_pdf_upload.py::test_is_non_retryable_classification` —
+  `"is not a valid mime type"` re-added as explicit pattern entry
+  (the narrowing of `"is not a valid"` had unintentionally removed it)
+- `test_v08811_polish.py::test_refresh_and_save_failure_is_swallowed`
+  — accept either `except Exception:` or `except Exception as <name>:`
+  so the new named binding doesn't trip the structural assertion
+
+Full suite: TBD (running locally).
+
 ## v0.88.14 (2026-05-14) — PDF content-hash cache (W4 audit #1 token win)
 
 Re-importing the same PDF (rename, retry, cluster-move) re-paid the

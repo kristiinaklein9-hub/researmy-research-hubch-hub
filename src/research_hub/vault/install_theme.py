@@ -120,12 +120,18 @@ def install_theme(
     dest = snippets_dir / source.name
     result.css_path = dest
 
-    if dest.exists() and not force:
+    # v0.88.15: capture existence BEFORE the copy so action="overwrote"
+    # vs "installed" reflects what actually happened. Pre-fix, dest.exists()
+    # was checked AFTER shutil.copy2 (always True post-copy) — first-time
+    # --force installs were mislabeled as "overwrote".
+    already_existed = dest.exists()
+
+    if already_existed and not force:
         result.action = "skipped_exists"
     else:
         try:
             shutil.copy2(source, dest)
-            result.action = "overwrote" if dest.exists() and force else "installed"
+            result.action = "overwrote" if already_existed else "installed"
             # Re-stat for accuracy after copy
             if not (dest.exists() and dest.stat().st_size > 0):
                 result.errors.append(f"copy succeeded but {dest} is empty/missing")
@@ -181,7 +187,13 @@ def uninstall_theme(
     except OSError as exc:
         result.errors.append(f"failed to disable theme: {exc}")
 
-    if removed_file or disabled:
+    # v0.88.15: distinguish "fully uninstalled" from "partial uninstall"
+    # (e.g. file removal succeeded but appearance.json was read-only, OR
+    # vice versa). Pre-fix, any positive outcome reported "uninstalled"
+    # even with errors in result.errors, misleading the CLI summary.
+    if result.errors and (removed_file or disabled):
+        result.action = "partial_uninstall"
+    elif removed_file or disabled:
         result.action = "uninstalled"
     else:
         result.action = "no_op"

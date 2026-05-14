@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -12,6 +13,8 @@ from typing import Any
 from urllib.parse import unquote
 
 from research_hub.notebooklm.auth import default_state_file
+
+logger = logging.getLogger(__name__)
 from research_hub.notebooklm.client import (
     BriefingArtifact,
     NotebookHandle,
@@ -651,8 +654,14 @@ _NON_RETRYABLE_ERROR_PATTERNS = (
     "unexpected keyword argument",   # TypeError from SDK kwarg drift
     "got multiple values for",       # TypeError from SDK signature drift
     "missing 1 required",            # TypeError from SDK signature drift
-    "is not a valid",                # validation error from SDK
-    "invalid mime type",             # SDK rejected file before upload
+    # v0.88.15: bare "is not a valid" matched too aggressively — real
+    # transient errors like "the URL is not a valid resource" / "server
+    # certificate is not a valid X.509" would falsely short-circuit
+    # retries. Narrow to SDK validation messages we actually see.
+    "is not a valid notebook id",
+    "is not a valid source",
+    "is not a valid mime type",      # SDK rejected file before upload
+    "invalid mime type",             # alternate SDK phrasing
     "401 unauthorized",
     "403 forbidden",
     "404 not found",
@@ -857,8 +866,14 @@ def _upload_cluster_shards(
             if refresh is not None:
                 try:
                     refresh()
-                except Exception:
-                    pass
+                except Exception as _refresh_exc:
+                    # v0.88.15: log at debug level so multi-shard auth
+                    # failures leave a diagnostic trail instead of being
+                    # invisible. Still best-effort — must NOT raise.
+                    logger.debug(
+                        "heartbeat refresh_and_save failed between shards "
+                        "(non-fatal): %s", _refresh_exc,
+                    )
 
             created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             shards.append(

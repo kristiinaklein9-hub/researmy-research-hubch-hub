@@ -127,6 +127,12 @@ def _strip_archive_header(body: str) -> str:
     text = body or ""
     if not text.lstrip().startswith("# "):
         return body  # not the archive shape
+    # v0.88.15: detect original line separator so the strip preserves
+    # CRLF if that's what the upstream gave us. splitlines() + bare
+    # "\n".join was silently normalising CRLF → LF on any caller that
+    # passed Windows-style line endings (unlikely in production today,
+    # but cheap to do right).
+    sep = "\r\n" if "\r\n" in text else "\n"
     lines = text.splitlines()
     # Look for the first H1, then a contiguous block of metadata lines
     # (Source:/Downloaded:/Sources:/Saved briefings:/Notebook:/Generated:),
@@ -152,7 +158,7 @@ def _strip_archive_header(body: str) -> str:
             continue  # tolerate blank lines inside the metadata block
         if stripped.startswith("# ") and saw_metadata:
             # Found the start of real synthesis content
-            return "\n".join(lines[idx:])
+            return sep.join(lines[idx:])
         # Anything else means we don't recognize this shape — bail out
         return body
     return body

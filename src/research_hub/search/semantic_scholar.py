@@ -51,7 +51,15 @@ class SemanticScholarClient:
         # If api_key is None, fall back to the env var. Pass api_key=""
         # explicitly to force-disable env lookup (useful for tests).
         if api_key is None:
-            api_key = os.environ.get(SEMANTIC_SCHOLAR_API_KEY_ENV, "") or None
+            # v0.88.15: .strip() before truthiness check so a whitespace-
+            # only env var ("export SEMANTIC_SCHOLAR_API_KEY='  '") is
+            # treated as anonymous rather than sending the whitespace as
+            # `x-api-key` and triggering a misleading 403.
+            raw = os.environ.get(SEMANTIC_SCHOLAR_API_KEY_ENV, "") or ""
+            api_key = raw.strip() or None
+        # Also normalize an explicit api_key=" " arg the same way
+        elif isinstance(api_key, str):
+            api_key = api_key.strip() or None
         self.api_key = api_key
         # Authenticated clients can poll faster; cap the throttle so a
         # key-holder doesn't waste the rate budget.

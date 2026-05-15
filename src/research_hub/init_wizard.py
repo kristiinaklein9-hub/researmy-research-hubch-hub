@@ -6,6 +6,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import platformdirs
 
@@ -150,6 +151,16 @@ def _print_completion_banner(vault_path: Path, config_path: Path, *, persona: st
         print(line)
 
 
+def _print_sample_completion_banner(vault_path: Path) -> None:
+    home_path = vault_path / "_HOME.md"
+    print()
+    print(f"  Sample vault ready at {vault_path}")
+    print(f"  Open {home_path} in Obsidian to explore")
+    print("  Or run: python -m research_hub describe")
+    print(f"  To use real Zotero/NLM, run: research-hub setup --vault {vault_path}")
+    print()
+
+
 def run_init(
     *,
     vault_root: str | None = None,
@@ -158,10 +169,46 @@ def run_init(
     non_interactive: bool = False,
     persona: str | None = None,
     no_browser: bool = False,
+    sample: bool = False,
 ) -> int:
     """Run the init wizard. Returns 0 on success, 1 on error."""
     interactive = sys.stdin.isatty() and not non_interactive
     valid_personas = {"researcher", "analyst", "humanities", "internal"}
+
+    if sample:
+        from research_hub.sample_vault import copy_sample_vault
+        from research_hub.vault.hub_overview import populate_all_overviews
+
+        if vault_root:
+            vault = Path(vault_root).expanduser().resolve()
+        elif interactive:
+            default = str(Path.home() / "knowledge-base")
+            answer = input(f"Sample vault directory [{default}]: ").strip()
+            vault = Path(answer or default).expanduser().resolve()
+        else:
+            vault = (Path.home() / "knowledge-base").expanduser().resolve()
+        vault.parent.mkdir(parents=True, exist_ok=True)
+        # P0 guard (v0.89.1): copy_sample_vault() shutil.rmtree's any
+        # non-None destination that exists. Without this check, a user
+        # who points --sample at their real vault (e.g. ~/knowledge-base
+        # with 49 ingested papers) silently loses everything. Refuse to
+        # clobber non-empty destinations; the user must pass an empty
+        # path or a new one.
+        if vault.exists() and any(vault.iterdir()):
+            print(f"[init --sample] {vault} is not empty.")
+            print("  Pass an empty path or a new one to avoid clobbering your work.")
+            print("  (init --sample REPLACES the destination -- it does not merge.)")
+            return 1
+        copy_sample_vault(vault)
+        populate_all_overviews(
+            SimpleNamespace(
+                root=vault,
+                clusters_file=vault / ".research_hub" / "clusters.yaml",
+            ),
+            force_rebuild=True,
+        )
+        _print_sample_completion_banner(vault)
+        return 0
 
     if persona is None and interactive:
         print("\nDo you use Zotero for managing references? [y/N]")

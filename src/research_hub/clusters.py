@@ -235,16 +235,23 @@ class ClusterRegistry:
             self.clusters[slug] = Cluster(slug=slug, **clean)
 
     def save(self) -> None:
-        """Persist cluster definitions."""
+        """Persist cluster definitions.
+
+        v0.91.0 W4 (G2 #9): payload now includes `schema_version: "1.0"`
+        as the documented contract for third-party parsers. Older files
+        without this field are still readable (see `_load`); they're
+        treated as schema 1.0 implicitly.
+        """
         from research_hub.locks import file_lock
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "schema_version": "1.0",
             "clusters": {
                 cluster.slug: {
                     key: value for key, value in asdict(cluster).items() if key != "slug"
                 }
                 for cluster in self.clusters.values()
-            }
+            },
         }
         with file_lock(self.path):
             try:

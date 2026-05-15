@@ -10,7 +10,15 @@ from pathlib import Path
 
 @dataclass
 class ManifestEntry:
-    """Single ingestion log line."""
+    """Single ingestion log line.
+
+    v0.91.0 W4 (G2 #9): per-entry `_schema` field for third-party
+    parser stability. New entries get `_schema=1`. Pre-existing lines
+    without the field load as schema 0 (i.e., legacy) — `read_all`
+    accepts both shapes via `__init__(..., _schema=...)` default. If
+    we ever break the field set, bump to `_schema=2` and parsers can
+    branch on the value.
+    """
 
     timestamp: str
     cluster: str
@@ -22,6 +30,7 @@ class ManifestEntry:
     obsidian_path: str = ""
     error: str = ""
     batch_label: str = ""
+    _schema: int = 1
 
 
 class Manifest:

@@ -69,10 +69,16 @@ class DedupIndex:
         return index
 
     def save(self, path: Path) -> None:
-        """Persist the index to disk."""
+        """Persist the index to disk.
+
+        v0.91.0 W4 (G2 #9): top-level `schema_version: "1.0"` for
+        third-party parser stability. Older files without this field
+        load as schema 1.0 implicitly (see `load`).
+        """
         from research_hub.locks import file_lock
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "schema_version": "1.0",
             "doi_to_hits": {
                 doi: [hit.__dict__ for hit in hits] for doi, hits in self.doi_to_hits.items()
             },

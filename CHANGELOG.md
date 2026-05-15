@@ -1,5 +1,91 @@
 # Changelog
 
+## v0.90.0 (2026-05-15) — Stability
+
+Phase 1 of the post-v0.89.1 1.0-readiness audit. Four GA-blocker
+classes addressed: silent failures, resource leaks at scale,
+dashboard argv injection, fresh-user UX disaster. Each commit was
+gated by the mandatory code-review skill (W1 governance rule from
+v0.89.1) and one round of REQUEST CHANGES → fix → APPROVE.
+
+### W1 — Silent-failure breadcrumbs (commit bf609bf)
+
+Four `except Exception: pass` / `return None` swallows that hid
+root cause now log to stderr / `logger.warning` while remaining
+non-fatal (preserves "best-effort" semantics).
+
+1. `cli.py:_load_zotero_if_configured` — biggest UX win. Pre-fix,
+   auth fail / network down / missing creds all looked identical
+   ("Zotero not configured"). Now `MissingCredential` is silent
+   None (truly unconfigured); anything else surfaces as
+   `[zotero] WARN ...`.
+2. `notebooklm/client.py:_save_state` — cookie persistence failures
+   now log so next session's auth-expired error has a breadcrumb.
+3. `vault/hub_overview.py:populate_all_overviews` — MOC / _HOME.md
+   rebuild failures warn instead of silent pass.
+4. `notebooklm/upload.py:_load_fit_score_map` — corrupt
+   `.fit_check_accepted.json` logs via `logger.warning`.
+
+### W2 — Resource leaks at scale (commit c93ddd6)
+
+`zotero/pdf_attach.py`: two leaks that compound at N=1000 paper
+batches.
+
+1. `requests.get(stream=True)` connection wrapped in
+   `try/finally response.close()` so connection releases to the
+   pool regardless of exit branch. (Not `with requests.get(...)`
+   because test mocks don't implement `__enter__/__exit__`.)
+2. Partial temp PDF cleanup via new `_cleanup_partial_temp_pdf()`
+   helper called from write_bytes exception branches.
+
+### W3 — Dashboard argv injection + NLM cookie chmod (commit 49382f2)
+
+Two P1 security fixes.
+
+1. `dashboard/executor.py`: `_validate_dashboard_inputs()` guard
+   at the top of `_build_command_args`. Pre-fix, anyone past the
+   localhost CSRF + Origin gate could POST `slug="--apply --force"`
+   and it landed in subprocess argv. `validate_slug()` for 5
+   slug-shaped fields; reject-leading-dash for 8 freeform fields.
+   `outline` exempted (markdown bullets legitimately start with `-`).
+2. `notebooklm/auth.py` + `client.py`: `_tighten_state_file_perms()`
+   chmods `state.json` to 0o600 after login + each cookie rotation.
+   Pre-fix the parent dir was tightened but the file itself stayed
+   world-readable on POSIX. Windows ACL still no-op (G3 P2 #14
+   tracked for v0.91).
+
+### W11 — Bare `research-hub` prints help (commit f4a12df)
+
+Pre-fix, `research-hub` (no subcommand) called `run_pipeline()`
+against an unconfigured vault. Now prints help and exits 0.
+Code-review caught the initial placement (after `require_config()`)
+which still crashed for fresh installs; the final fix places the
+print-help branch at the very top of `_main_dispatch` so it runs
+before any config probing.
+
+### What didn't ship (deferred to v0.91 / v0.95)
+
+| Audit item | Defer to |
+|---|---|
+| `_emit_cli_json` report shape standardize (G2 #8) | v0.91 |
+| Hidden contract schema_version (G2 #9) | v0.91 |
+| CLI + MCP rationalize w/ deprecation (G2 #11-12) | v0.95-rc |
+| `__all__` + deprecation policy (G2 #13) | v0.95-rc |
+| Windows ACL + dashboard token + stderr leak (G3 P2) | v0.91 |
+| CI matrix + dep upper bounds + lockfile + pip-audit | v0.91 |
+| Wheel smoke depth | v0.91 |
+| P2 polish (README + UPGRADE + 74 MCP docstrings) | v0.95-rc |
+
+### Process notes
+
+- Plan: `~/.claude/plans/delegated-puzzling-umbrella.md`
+- Each W1-W3 + W11 was its own commit gated by code-review skill.
+  Two waves needed REQUEST CHANGES → fix → APPROVE rounds (W3
+  `outline` regression + W11 placement bug). The mandatory gate
+  caught both before they shipped.
+- Full test suite green across all 4 commits.
+- No new external dependencies.
+
 ## v0.89.2 (2026-05-15) — Hotfix: broken test_v089_describe
 
 Single-line fix for a regression introduced by v0.89.1's version bump.

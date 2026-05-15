@@ -6182,12 +6182,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _main_dispatch(args, parser) -> int:
+    # v0.90.0 W11 (G4 #20) fix: bare `research-hub` (no subcommand) prints
+    # help and exits 0 BEFORE any config probing — fresh users with no
+    # config.json should see the subcommand list, not a config-missing
+    # error. Code-review caught the previous placement (after require_config)
+    # which still crashed for fresh installs. Explicit `research-hub run`
+    # still routes to the pipeline below.
+    if args.command is None:
+        parser.print_help()
+        return 0
+
     exempt_commands = {"init", "setup", "doctor", "install", "examples", "where", "config", "package-dxt", "describe", "context"}
 
     if args.command not in exempt_commands and get_config is require_config.__globals__["get_config"]:
         require_config()
 
-    if args.command in (None, "run"):
+    if args.command == "run":
         run_kwargs = {
             "dry_run": getattr(args, "dry_run", False),
             "cluster_slug": getattr(args, "cluster", None),

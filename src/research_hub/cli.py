@@ -4224,6 +4224,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Interactive setup wizard for first-time users",
     )
     init_parser.add_argument("--vault", default=None, help="Vault root directory")
+    init_parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="Copy the bundled sample vault and skip all account/tool probes",
+    )
     init_parser.add_argument("--zotero-key", default=None, help="Zotero API key")
     init_parser.add_argument(
         "--zotero-library-id",
@@ -6215,6 +6220,7 @@ def _main_dispatch(args, parser) -> int:
             non_interactive=args.non_interactive,
             persona=args.persona,
             no_browser=args.no_browser,
+            sample=args.sample,
         )
     if args.command == "tidy":
         from research_hub.tidy import run_tidy

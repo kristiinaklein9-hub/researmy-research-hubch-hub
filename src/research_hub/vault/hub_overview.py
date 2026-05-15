@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -511,15 +512,27 @@ def populate_all_overviews(
             written.append((slug, Path(f"<error: {exc}>")))
     # v0.88 #4: now that every cluster's overview is up-to-date, refresh
     # the MOC bodies so each MOC lists its member clusters.
+    # v0.90.0 G1#3 fix: log MOC/_HOME failures to stderr instead of silent
+    # pass — pre-fix swallow left stale MOCs + stale _HOME.md after every
+    # rebuild on partial failure with zero signal to the caller. Still
+    # non-fatal (per-cluster overview writes succeeded), just visible.
     try:
         populate_all_mocs(cfg)
-    except Exception:  # noqa: BLE001 — same defensive posture as the per-cluster loop
-        pass
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"  [vault] WARN populate_all_mocs failed; MOC pages may be stale: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
     # v0.88 #7: refresh vault-root _HOME.md as the canonical landing page.
     try:
         populate_home(cfg)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"  [vault] WARN populate_home failed; _HOME.md may be stale: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
     return written
 
 

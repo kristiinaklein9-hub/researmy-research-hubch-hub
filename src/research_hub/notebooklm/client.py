@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -475,8 +476,16 @@ class NotebookLMClient:
         try:
             from pathlib import Path as _Path
             save_cookies_to_storage(cookie_jar, _Path(str(storage_path)))
-        except Exception:
-            pass
+        except Exception as exc:
+            # v0.90.0 G1#2 fix: still best-effort (don't poison successful
+            # operation), but surface the failure so the next session's
+            # auth-expired error has a breadcrumb to root cause. Pre-fix
+            # silently swallowed all save errors.
+            print(
+                f"  [nlm] WARN cookie persistence to {storage_path} failed: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
 
     def refresh_and_save(self) -> None:
         """v0.88.7: force a token refresh + state.json write mid-session.

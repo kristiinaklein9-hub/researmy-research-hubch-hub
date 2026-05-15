@@ -523,7 +523,18 @@ def _load_fit_score_map(cfg, cluster_slug: str) -> dict[str, int]:
             continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:
+            # v0.90.0 G1#4 fix: log corruption instead of silent continue.
+            # Pre-fix, a corrupt .fit_check_accepted.json silently dropped
+            # the score map → over-cap source selection fell back to "no
+            # scores" mode, changing source ordering with zero warning.
+            logger.warning(
+                "fit-check score map at %s is unreadable (%s: %s); "
+                "over-cap selection will fall back to insertion order",
+                path,
+                type(exc).__name__,
+                exc,
+            )
             continue
         if isinstance(payload, dict):
             items = payload.get("accepted") or payload.get("scores") or []

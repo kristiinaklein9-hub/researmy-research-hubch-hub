@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from research_hub import __version__
 from research_hub.cli import build_parser
 from research_hub.describe import describe_manifest
 
@@ -22,7 +23,10 @@ def _top_level_subparsers(parser: argparse.ArgumentParser) -> argparse._SubParse
 def test_describe_manifest_returns_valid_json_with_expected_keys():
     payload = json.loads(describe_manifest())
 
-    assert payload["version"] == "0.89.0"
+    # v0.89.2 fix (post-release audit G2): pin to package version, not a
+    # hardcoded string. Pre-fix the test silently broke on every minor bump
+    # because describe.py special-cases only one version (0.88.15 → MANIFEST_VERSION).
+    assert payload["version"] == __version__
     assert set(payload) == {"version", "subcommands", "mcp_tools", "env_vars", "skills", "personae"}
     assert payload["personae"] == ["human", "agent"]
 

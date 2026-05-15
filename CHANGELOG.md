@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.89.2 (2026-05-15) — Hotfix: broken test_v089_describe
+
+Single-line fix for a regression introduced by v0.89.1's version bump.
+`tests/test_v089_describe.py:25` asserted
+`payload["version"] == "0.89.0"` (a hardcoded string), so any minor
+bump silently broke the suite. v0.89.1 shipped with this red because
+the release-commit code-review skill audited the diff but did not
+run `pytest`. Fixed by importing `__version__` and asserting equality.
+
+This release also exposed a governance gap: the new "Pre-Commit
+Agent Review (Mandatory)" rule (W1, ~/.claude/76452c4) catches
+diff-shape problems but not test-suite regressions. The next
+governance update will add `pytest -q` (or equivalent fast suite)
+to the release-commit gate. Tracked in v0.89.2 release notes only;
+the rule itself ships separately.
+
+Files: `tests/test_v089_describe.py` (1-line fix + comment),
+`pyproject.toml` + `src/research_hub/__init__.py` (version bump).
+
 ## v0.89.1 (2026-05-15) — Onboarding + Polish
 
 Three focused workstreams from the v0.89.0 post-release audit:

@@ -1,5 +1,107 @@
 # Changelog
 
+## v0.89.1 (2026-05-15) — Onboarding + Polish
+
+Three focused workstreams from the v0.89.0 post-release audit:
+P0 onboarding ROI (`init --sample`), P2 polish from the
+`code-review` skill audit, and a CLAUDE.md governance update
+(separate repo). Total surface: ~140 LOC code + ~80 lines doc
+across 5 commits, all gated by the new mandatory pre-commit
+`code-review` skill rule.
+
+### W2 — `research-hub init --sample` (commit 3ea1773, merge 38aa242)
+
+Cuts clone-to-first-value from 30 min → ≤5 min. Addresses W5
+audit's #1 churn driver (60% prospective-user dropout estimated
+by E3).
+
+```bash
+research-hub init --sample [--vault PATH]
+```
+
+Copies the bundled `samples/sample_vault/` (5 demo papers + 3
+clusters + crystal cards + base + `_HOME.md`) and skips ALL
+Zotero / NLM / LLM CLI probes — the sample is self-contained.
+Default vault: `~/knowledge-base`. Prints clear next-steps:
+
+```
+Sample vault ready at <vault>
+Open <vault>/_HOME.md in Obsidian to explore
+Or run: python -m research_hub describe
+To use real Zotero/NLM, run: research-hub setup --vault <vault>
+```
+
+**P0 guard** (caught by code-review skill, fixed before merge):
+the existing `copy_sample_vault()` helper (v0.60) unconditionally
+`shutil.rmtree`s any non-None destination that exists — safe for
+its tempdir use case, lethal when exposed via CLI. The new code
+refuses non-empty destinations with a clear message before
+calling the helper. Regression test patches `copy_sample_vault`
+to a hard-fail to detect any future bypass.
+
+Files: `init_wizard.py` +47, `cli.py` +6, new
+`tests/test_v0891_init_sample.py` (4 tests).
+
+### W3 — Polish (commit 9b83654)
+
+Three P2 fixes the `code-review` skill flagged during v0.89.0
+synthesis but were too small to block the release:
+
+1. **`_emit_cli_json` survives unknown types** — added
+   `default=str` to `json.dumps()`. v0.89.0 would crash with
+   `TypeError` if a `Report.to_dict()` accidentally leaked a
+   datetime / bytes / Exception. Now serializes via `str()`.
+2. **`describe.py` argparse private-API comment** — 11-line
+   block comment above `_parser_supports_json` flagging
+   dependency on `_actions` / `_choices_actions` /
+   `_SubParsersAction` (Python 3.10–3.14 contract) + recovery
+   hint if a future CPython removes the attrs.
+3. **`_HOME.md` Dashboard link iOS-friendly** — replaced
+   `file:///C:/...` (broke on iOS Obsidian per W3 audit) with
+   `http://127.0.0.1:8765/` (live, when `serve --dashboard` is
+   running) + `.research_hub/dashboard-summary.md` markdown
+   fallback (works anywhere, including iOS).
+
+Files: `cli.py` 1-line, `describe.py` +11 doc, `hub_overview.py`
+~5 LOC, new `tests/test_v0891_polish.py` (5 tests).
+
+**Migration note**: existing vaults need
+`research-hub vault rebuild-overviews --force` once to refresh
+the `_HOME.md` Dashboard link. New vaults get it automatically.
+
+### W1 — CLAUDE.md "Pre-Commit Agent Review (Mandatory)"
+
+Separate repo (`~/.claude/`), commit 76452c4. Codifies a 6-row
+trigger table that self-enforces `code-review` skill invocation
+on:
+
+1. Diff > 50 LOC
+2. Release commit (`__version__` bump or `git tag`)
+3. Critical-path edits (auth / errors / I/O / network / security)
+4. Multi-file diff (≥3 files)
+5. Codex / Gemini delegate just returned
+6. Governance docs (CLAUDE.md / AGENTS.md / settings.json /
+   hooks)
+
+With deny-listed escape hatches (CI configs and doc with
+executable code blocks do NOT skip review). The cost-of-skipping
+reference is the v0.88.15 lesson — 4 P1 bugs hidden behind 2376
+green tests across v0.88.10–v0.88.14, all caught only by
+post-hoc `code-review` skill audit.
+
+This v0.89.1 release was the rule's first dogfood: code-review
+skill ran on W3, W2 (caught the silent-rmtree P0), and on this
+cumulative release commit. APPROVE verdict required at each.
+
+### Process notes
+
+- Plan: `~/.claude/plans/delegated-puzzling-umbrella.md`
+- W3 + W2 + release each invoked `code-review` skill per the
+  new W1 rule
+- Pre-commit hook (`claude-ack-review.sh`) blocked W2 commit
+  until skill ran — mechanism worked as designed
+- Test suite: 4/4 W2 + 5/5 W3 + previous 2376 still green
+
 ## v0.89.0 (2026-05-14) — Agent-Native Mode
 
 First minor-version bump after the v0.88.x release train. v0.89.0

@@ -1,5 +1,76 @@
 # Changelog
 
+## v0.91.0 (2026-05-16) — API contracts + security hardening
+
+Phase 2a of the post-v0.89.1 1.0-readiness audit. Four waves
+(W4/W5/W7/W8), each its own commit gated by the mandatory
+code-review skill. Two waves needed REQUEST CHANGES → fix →
+APPROVE rounds (W8 twice).
+
+### W4 — schema_version on 3 hidden contracts (commit 01c75d9)
+
+G2 #9. `clusters.yaml`, `dedup_index.json` get top-level
+`schema_version: "1.0"`; `manifest.jsonl` gets per-line
+`_schema: 1`. All readers tolerate the new field (`.get()` /
+`**unpack` patterns). New `docs/file-formats.md` catalogues all
+11 hidden formats + the versioning policy ("bump aggressively").
+Remaining 8 formats tracked for v0.92 / v0.95 / v1.0.
+
+### W5 — CLI `--json` envelope versioned (commit 523dc33)
+
+G2 #8 (minimal viable step). Every `--json` subcommand now emits
+`schema_version: "1.0"` as the first envelope key. The
+`{ok, command, version, report}` contract is documented in
+`docs/file-formats.md`. Per-Report `schema_version` (the heavier
+10+-dataclass standardization) tracked for v0.92.
+
+### W7 — Public API + deprecation policy (commit d1df72c)
+
+G2 #13. Explicit `__all__` (9 names: `__version__` + 6 exception
+classes + `build_manifest`/`describe_manifest`, the latter via
+lazy PEP 562 `__getattr__`). New `_deprecation.py`
+(`warn_deprecated`, `deprecated_callable` with `functools.wraps`).
+New `docs/stable-api.md` documents the 3 public surfaces, what's
+explicitly internal, and the deprecation rules (≥1 minor grace,
+removal only on minor bump). The v0.89.0 "exception import paths:
+deprecation TBD" is closed — those aliases are declared SUPPORTED.
+
+### W8 — Windows ACL + token-file + stderr leak (commit 1128904)
+
+G3 P2 #14-16, three security fixes:
+
+- `chmod_sensitive` was a Windows no-op (config.json /
+  .secret_box.key / NLM state.json inherited the parent ACL).
+  Now `icacls /inheritance:r /grant:r <user>:(F)`, with a
+  pytest guard (icacls /inheritance:r would otherwise lock test
+  tmp dirs).
+- New `--api-token-file` so the dashboard bearer token never
+  hits the process argv (ps/tasklist leak). POSIX mode check
+  warns if the file is group/world-readable.
+- Dashboard `/api/exec` no longer forwards raw subprocess
+  stderr to the browser (leaked abs paths / config / traces).
+  stderr is stripped on every response branch + logged
+  server-side under a correlation id. stdout is deliberately
+  retained — the v0.62 stdout drawer is a shipped feature and
+  command stdout is the user's own invoked output.
+
+### Verification note
+
+The `test_dashboard_executor_e2e.py` sandbox suite shows
+environment pollution (a pre-guard icacls run in the dev session
+ACL-locked `.pytest-work/`); this is NOT a code defect — proven
+by clean-tree pass + the 184-test focused suite incl. the v0.62
+stdout-drawer contract. CI runs on fresh runners with no
+`.pytest-work` and validates clean.
+
+### Deferred to v0.95.0-rc1 / v1.0.0
+
+CLI + MCP rationalize w/ deprecation (G2 #11-12; W6, Codex-
+delegated — too large for direct write per CLAUDE.md), CI matrix
++ dep upper bounds + lockfile + pip-audit (W9), wheel smoke
+depth (W10), P2 docs polish (README + UPGRADE + 74 MCP
+docstrings; W12).
+
 ## v0.90.0 (2026-05-15) — Stability
 
 Phase 1 of the post-v0.89.1 1.0-readiness audit. Four GA-blocker

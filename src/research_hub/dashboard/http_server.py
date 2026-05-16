@@ -503,10 +503,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
 
         response = result.to_dict()
-        if not result.ok and result.returncode == -1 and "timeout" in result.stderr.lower():
+        # G3 P2 #16: stderr leaks abs paths / partial config / stack
+        # traces, so strip it from the browser response UNCONDITIONALLY
+        # (every branch) and only surface the detail server-side under a
+        # correlation id on failure. `stdout` is intentionally KEPT — the
+        # v0.62 dashboard "stdout drawer" deliberately shows the command's
+        # own output to the user who invoked it (see
+        # test_v062_dashboard_stdout_drawer). Sanitizing stdout would
+        # break that shipped feature; its leak surface is the user's own
+        # command output, not framework internals.
+        raw_stdout = response.get("stdout", "") or ""
+        raw_stderr = response.pop("stderr", "") or ""
+        if not result.ok and result.returncode == -1 and "timeout" in raw_stderr.lower():
             response["error"] = "timeout"
-        elif not result.ok and result.stderr:
-            response["error"] = result.stderr
+        elif not result.ok and raw_stderr:
+            error_id = secrets.token_hex(4)
+            logger.warning(
+                "dashboard /api/exec failed [error_id=%s rc=%s]:\n"
+                "  stderr: %s\n  stdout: %s",
+                error_id,
+                result.returncode,
+                raw_stderr.strip()[:4000],
+                raw_stdout.strip()[:2000],
+            )
+            response["error"] = (
+                f"execution failed (server log error_id={error_id})"
+            )
 
         self._write_json(200, response)
 

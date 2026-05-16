@@ -2795,8 +2795,58 @@ def _dashboard(
     return 0
 
 
+def _resolve_api_token(args) -> str | None:
+    """Resolve the dashboard API token (G3 P2 #15).
+
+    Priority: --api-token-file (read 0600 file) > --api-token (argv,
+    discouraged — leaks to ps/tasklist) > $RESEARCH_HUB_API_TOKEN.
+    The file path is the recommended form for shared hosts; argv is
+    kept for back-compat but emits a one-line stderr nudge.
+    """
+    token_file = getattr(args, "api_token_file", None)
+    if token_file:
+        try:
+            tfp = Path(token_file).expanduser()
+            tok = tfp.read_text(encoding="utf-8").strip()
+            # G3 P2 #15 (code-review follow-up): warn if the token file
+            # is group/world-readable on POSIX — defeats the purpose of
+            # moving the token off the argv. Best-effort; Windows ACL
+            # bits don't map to st_mode so this is POSIX-only.
+            if not sys.platform.startswith("win"):
+                try:
+                    mode = tfp.stat().st_mode
+                    if mode & 0o077:
+                        print(
+                            f"  [serve] WARN {tfp} is group/world-readable "
+                            f"(mode {oct(mode & 0o777)}); chmod 600 it so "
+                            f"other users can't read the API token.",
+                            file=sys.stderr,
+                        )
+                except OSError:
+                    pass
+            return tok or None
+        except OSError as exc:
+            print(
+                f"  [serve] WARN --api-token-file {token_file} unreadable "
+                f"({type(exc).__name__}: {exc}); falling back to "
+                f"--api-token / env.",
+                file=sys.stderr,
+            )
+    argv_token = (getattr(args, "api_token", "") or "").strip()
+    if argv_token:
+        print(
+            "  [serve] NOTE --api-token on the command line is visible to "
+            "other users via ps/tasklist. Prefer --api-token-file for "
+            "shared hosts.",
+            file=sys.stderr,
+        )
+        return argv_token
+    env_token = os.environ.get("RESEARCH_HUB_API_TOKEN", "").strip()
+    return env_token or None
+
+
 def _cmd_serve(args, cfg) -> int:
-    api_token = (getattr(args, "api_token", "") or os.environ.get("RESEARCH_HUB_API_TOKEN", "")).strip() or None
+    api_token = _resolve_api_token(args)
     if args.dashboard and args.allow_external:
         print("+" + "-" * 62 + "+")
         print("| DASHBOARD BOUND TO 0.0.0.0" + " " * 34 + "|")
@@ -4488,9 +4538,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--api-token",
         default="",
         help=(
-            "Bearer token required for /api/v1/* requests. "
-            "Falls back to RESEARCH_HUB_API_TOKEN. "
+            "Bearer token for /api/v1/* requests. NOTE: visible to other "
+            "users via ps/tasklist on shared hosts — prefer "
+            "--api-token-file. Falls back to RESEARCH_HUB_API_TOKEN. "
             "Without a token, the REST API is restricted to 127.0.0.1 only."
+        ),
+    )
+    serve_parser.add_argument(
+        "--api-token-file",
+        default=None,
+        help=(
+            "Path to a file whose contents are the bearer token (G3 P2 "
+            "#15). Recommended over --api-token on shared hosts since the "
+            "token never appears in the process argument list. Store the "
+            "file mode 0600."
         ),
     )
     serve_parser.add_argument(

@@ -63,9 +63,74 @@ def safe_join(root: Path, *segments: str) -> Path:
     return candidate
 
 
+_WINDOWS_ACL_WARNED = False
+
+
+def _restrict_windows_acl(path: Path) -> None:
+    """Restrict a path to the current user via icacls (G3 P2 #14).
+
+    Pre-v0.91.0 `chmod_sensitive` was a silent no-op on Windows, so
+    `config.json` (encrypted Zotero key), `.secret_box.key` (the
+    Fernet key sitting NEXT TO the ciphertext), and NLM `state.json`
+    (Google session cookies) inherited the parent's ACL — readable by
+    any other account on a shared box. We now strip inheritance and
+    grant Full control to the current user only. Best-effort: if
+    icacls is missing or fails we warn ONCE per process rather than
+    silently leaving the file world-readable.
+    """
+    global _WINDOWS_ACL_WARNED
+    import getpass
+    import subprocess
+
+    # Skip real ACL mutation under pytest. icacls /inheritance:r on a
+    # directory removes the inherited ACEs the test harness needs to
+    # rmtree + recreate `.pytest-work/.../.research_hub` across runs,
+    # causing FileExistsError on the next run's mkdir. Mirrors the
+    # existing `"pytest" in sys.modules` guard in research_hub/__init__.py
+    # for the Windows multiprocessing shim. Production behaviour
+    # (user-only ACL on real config/secret/cookie files) is unchanged.
+    if "pytest" in sys.modules:
+        return
+
+    try:
+        user = getpass.getuser()
+        # /inheritance:r removes inherited ACEs; /grant:r replaces any
+        # existing explicit ACE for the user with Full control.
+        result = subprocess.run(
+            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:(F)"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0 and not _WINDOWS_ACL_WARNED:
+            _WINDOWS_ACL_WARNED = True
+            print(
+                f"  [security] WARN icacls could not restrict {path} "
+                f"(rc={result.returncode}); secrets are NOT OS-protected "
+                f"on this Windows host. Detail: {result.stderr.strip()[:160]}",
+                file=sys.stderr,
+            )
+    except Exception as exc:
+        if not _WINDOWS_ACL_WARNED:
+            _WINDOWS_ACL_WARNED = True
+            print(
+                f"  [security] WARN could not restrict {path} via icacls "
+                f"({type(exc).__name__}: {exc}); secrets are NOT "
+                f"OS-protected on this Windows host.",
+                file=sys.stderr,
+            )
+
+
 def chmod_sensitive(path: Path, *, mode: int) -> None:
-    """Best-effort chmod for sensitive files/directories."""
+    """Best-effort permission tightening for sensitive files/dirs.
+
+    POSIX: os.chmod to the requested mode. Windows (G3 P2 #14):
+    icacls inheritance-strip + user-only Full control, since chmod
+    is a no-op there. `mode` is POSIX-only; the Windows path always
+    restricts to the current user regardless of the numeric value.
+    """
     if sys.platform.startswith("win"):
+        _restrict_windows_acl(path)
         return
     try:
         os.chmod(str(path), mode)

@@ -289,9 +289,16 @@ def test_e2e_error_rendering(live_server, monkeypatch):
     )
     assert status == 200
     assert payload["ok"] is False
-    assert "stderr" in payload
-    assert payload["stderr"] == "rename failed"
-    assert payload["error"] == "rename failed"
+    # v0.91.0 W8 G3 P2 #16: raw subprocess stderr must NOT reach the
+    # browser (it can leak abs paths / partial config / stack traces).
+    # The browser gets only a generic message + correlation id; the
+    # full stderr is logged server-side under that id.
+    assert "stderr" not in payload
+    # stdout is intentionally retained (v0.62 stdout drawer); only stderr
+    # is the G3 #16 leak surface. Here the failed command produced no
+    # stdout, but we assert the secure stderr behaviour + no raw leak.
+    assert payload["error"].startswith("execution failed (server log error_id=")
+    assert "rename failed" not in str(payload)
 
 
 def test_e2e_timeout_handling(live_server, monkeypatch):

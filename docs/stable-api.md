@@ -60,8 +60,8 @@ v0.92, G2 #8). Until then, branch on the envelope's `command` field.
 The FastMCP server's tool **names** + input schemas are stable. The
 full list is introspectable via `research-hub describe --json`
 (`mcp_tools` key) or by starting the server. Tool consolidation
-(merging overlapping `ask_cluster*` / `*_rebind` / `list_*` tools) is
-tracked for v0.95-rc and will go through the deprecation cycle below.
+(merging overlapping `ask_cluster*` / `*_rebind` / `list_*` tools)
+started in v0.91.0 with the deprecated aliases listed below.
 
 ## Deprecation policy
 
@@ -86,6 +86,25 @@ Rules:
    "deprecation TBD" in CHANGELOG v0.89.0 are hereby declared
    **supported aliases**, not deprecated — they re-export from
    `research_hub.errors` and inherit the new base. No removal planned.
+
+### Deprecated (v0.91.0 - removed v1.0.0)
+
+| Old surface | Canonical replacement | removed_in |
+| --- | --- | --- |
+| `research-hub ask` | `research-hub notebooklm ask` | `v1.0.0` |
+| `research-hub summarize` | `research-hub paper summarize` | `v1.0.0` |
+| `research-hub cleanup` | `research-hub tidy` | `v1.0.0` |
+| `research-hub label-bulk` | `research-hub paper bulk-relabel` | `v1.0.0` |
+| MCP `ask_cluster_notebooklm` | MCP `ask_cluster(source="notebooklm")` | `v1.0.0` |
+| MCP `read_briefing` | MCP `ask_cluster(source="notebooklm", mode="briefing")` | `v1.0.0` |
+| MCP `brief_cluster` | MCP `ask_cluster(source="notebooklm", mode="brief")` | `v1.0.0` |
+| MCP `propose_cluster_rebind` | MCP `cluster_rebind(action="propose")` | `v1.0.0` |
+| MCP `apply_cluster_rebind` | MCP `cluster_rebind(action="apply")` | `v1.0.0` |
+| MCP `list_orphan_papers` | MCP `cluster_rebind(action="list_orphans")` | `v1.0.0` |
+| MCP `summarize_rebind_status` | MCP `cluster_rebind(action="status")` | `v1.0.0` |
+| MCP `list_entities` | MCP `read_cluster_memory(kind="entities")` | `v1.0.0` |
+| MCP `list_claims` | MCP `read_cluster_memory(kind="claims")` | `v1.0.0` |
+| MCP `list_methods` | MCP `read_cluster_memory(kind="methods")` | `v1.0.0` |
 
 ## See also
 

@@ -22,6 +22,7 @@ EXPECTED_MAPPINGS = {
     "apply_cluster_rebind": "clusters rebind --apply",
     "list_orphan_papers": "mcp-only",
     "summarize_rebind_status": "mcp-only",
+    "cluster_rebind": "clusters rebind",
     "export_citation": "cite",
     "build_citation": "cite --inline/--markdown",
     "run_doctor": "doctor",

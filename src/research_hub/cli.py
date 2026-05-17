@@ -19,6 +19,7 @@ from pathlib import Path
 from research_hub.clusters import ClusterRegistry
 from research_hub.config import get_config, require_config
 from research_hub.dedup import DedupIndex, build_from_obsidian, build_from_zotero
+from research_hub._deprecation import warn_deprecated
 from research_hub.errors import ResearchHubError
 from research_hub.operations import add_paper, mark_paper, move_paper, remove_paper
 from research_hub.pipeline import run_pipeline
@@ -44,6 +45,41 @@ from research_hub.writing import (
     resolve_paper_meta,
     save_quote,
 )
+
+
+_CLI_DEPRECATED_ALIASES: dict[tuple[str, ...], tuple[str, str]] = {
+    ("ask",): ("research-hub ask", "research-hub notebooklm ask"),
+    ("summarize",): ("research-hub summarize", "research-hub paper summarize"),
+    ("cleanup",): ("research-hub cleanup", "research-hub tidy"),
+    ("label-bulk",): ("research-hub label-bulk", "research-hub paper bulk-relabel"),
+}
+
+
+def _cli_deprecated_alias(argv: list[str] | tuple[str, ...]) -> tuple[str, str] | None:
+    if not argv:
+        return None
+    command = argv[0]
+    for alias, deprecation in _CLI_DEPRECATED_ALIASES.items():
+        if (command,) == alias:
+            return deprecation
+    return None
+
+
+def _warn_cli_deprecated_alias_from_argv(argv: list[str] | tuple[str, ...]) -> None:
+    deprecation = _cli_deprecated_alias(argv)
+    if deprecation is None:
+        return
+    what, replacement = deprecation
+    warn_deprecated(
+        what,
+        replacement=replacement,
+        removed_in="v1.0.0",
+        stacklevel=3,
+    )
+
+
+def _warn_cli_deprecated_alias_from_args(args: argparse.Namespace) -> None:
+    _warn_cli_deprecated_alias_from_argv([str(args.command or "")])
 
 
 def _json_safe(value):
@@ -6277,6 +6313,8 @@ def _main_dispatch(args, parser) -> int:
         parser.print_help()
         return 0
 
+    _warn_cli_deprecated_alias_from_args(args)
+
     exempt_commands = {"init", "setup", "doctor", "install", "examples", "where", "config", "package-dxt", "describe", "context"}
 
     if args.command not in exempt_commands and get_config is require_config.__globals__["get_config"]:
@@ -7112,6 +7150,9 @@ def _main_dispatch(args, parser) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if any(token in {"-h", "--help"} for token in raw_argv):
+        _warn_cli_deprecated_alias_from_argv(raw_argv)
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

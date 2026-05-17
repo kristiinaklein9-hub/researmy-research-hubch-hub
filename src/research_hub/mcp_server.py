@@ -24,7 +24,8 @@ from pathlib import Path
 import re
 from typing import Any, Callable
 
-from research_hub.config import get_config
+from research_hub._deprecation import warn_deprecated
+from research_hub.config import get_config, require_config
 from research_hub.security import ValidationError, validate_identifier, validate_slug
 
 try:
@@ -68,6 +69,15 @@ mcp = _MCP_CLS(
 
 def _tool_error(exc: Exception) -> dict[str, str]:
     return {"error": str(exc)}
+
+
+def _warn_mcp_deprecated_alias(tool_name: str, replacement: str) -> None:
+    warn_deprecated(
+        f"MCP tool {tool_name}",
+        replacement=replacement,
+        removed_in="v1.0.0",
+        stacklevel=3,
+    )
 
 
 def _entrypoint_tool_error(exc: Exception, cluster_slug: str | None = None) -> dict[str, object]:
@@ -392,9 +402,7 @@ def export_citation(
         return _tool_error(exc)
 
 
-@mcp.tool()
-def propose_cluster_rebind(cluster_slug: str = "") -> dict:
-    """Propose moves to bind orphan papers to clusters. Returns the rebind report."""
+def _cluster_rebind_propose_impl(cluster_slug: str = "") -> dict:
     try:
         if cluster_slug:
             cluster_slug = _validate_mcp_args(cluster_slug=cluster_slug)["cluster_slug"]
@@ -411,9 +419,7 @@ def propose_cluster_rebind(cluster_slug: str = "") -> dict:
         return _tool_error(exc)
 
 
-@mcp.tool()
-def apply_cluster_rebind(report_path: str, dry_run: bool = True, auto_create_new: bool = False) -> dict:
-    """Apply rebind moves from a previously emitted report file. Default: dry-run."""
+def _cluster_rebind_apply_impl(report_path: str, dry_run: bool = True, auto_create_new: bool = False) -> dict:
     try:
         from pathlib import Path
 
@@ -432,9 +438,7 @@ def apply_cluster_rebind(report_path: str, dry_run: bool = True, auto_create_new
         return _tool_error(exc)
 
 
-@mcp.tool()
-def list_orphan_papers(folder: str = "") -> dict:
-    """List paper notes in raw/ that aren't bound to any cluster. Filter by folder if given."""
+def _cluster_rebind_list_orphans_impl(folder: str = "") -> dict:
     try:
         from research_hub.clusters import ClusterRegistry
 
@@ -457,9 +461,7 @@ def list_orphan_papers(folder: str = "") -> dict:
         return _tool_error(exc)
 
 
-@mcp.tool()
-def summarize_rebind_status() -> dict:
-    """High-level rebind status: total orphans, proposed, stuck, would-create-clusters."""
+def _cluster_rebind_status_impl() -> dict:
     try:
         from research_hub.cluster_rebind import emit_rebind_prompt
 
@@ -469,8 +471,7 @@ def summarize_rebind_status() -> dict:
         proposals = json.loads(move_match.group(1)) if move_match else []
         new_cluster_match = re.search(r"new_cluster_proposals\s*```json\s*\n(.*?)\n```", report, re.DOTALL)
         new_clusters = json.loads(new_cluster_match.group(1)) if new_cluster_match else []
-        orphan_tool = list_orphan_papers
-        list_result = orphan_tool.fn() if hasattr(orphan_tool, "fn") else orphan_tool()
+        list_result = _cluster_rebind_list_orphans_impl()
         total_orphans = int(list_result.get("count", 0))
         return {
             "total_orphans": total_orphans,
@@ -480,6 +481,101 @@ def summarize_rebind_status() -> dict:
         }
     except Exception as exc:
         return _entrypoint_tool_error(exc)
+
+
+def _cluster_rebind_dispatch(
+    action: str = "propose",
+    cluster_slug: str = "",
+    report_path: str = "",
+    dry_run: bool = True,
+    auto_create_new: bool = False,
+    folder: str = "",
+) -> dict:
+    if action == "propose":
+        return _cluster_rebind_propose_impl(cluster_slug=cluster_slug)
+    if action == "apply":
+        if not report_path:
+            return {"error": "report_path is required when action='apply'"}
+        return _cluster_rebind_apply_impl(
+            report_path=report_path,
+            dry_run=dry_run,
+            auto_create_new=auto_create_new,
+        )
+    if action == "list_orphans":
+        return _cluster_rebind_list_orphans_impl(folder=folder)
+    if action == "status":
+        return _cluster_rebind_status_impl()
+    return {
+        "error": (
+            f"Invalid action: {action!r}. Expected one of "
+            "['propose', 'apply', 'list_orphans', 'status']."
+        )
+    }
+
+
+@mcp.tool()
+def cluster_rebind(
+    action: str = "propose",
+    cluster_slug: str = "",
+    report_path: str = "",
+    dry_run: bool = True,
+    auto_create_new: bool = False,
+    folder: str = "",
+) -> dict:
+    """Consolidated cluster rebind tool: propose, apply, list_orphans, or status."""
+    return _cluster_rebind_dispatch(
+        action=action,
+        cluster_slug=cluster_slug,
+        report_path=report_path,
+        dry_run=dry_run,
+        auto_create_new=auto_create_new,
+        folder=folder,
+    )
+
+
+@mcp.tool()
+def propose_cluster_rebind(cluster_slug: str = "") -> dict:
+    """Deprecated alias for cluster_rebind(action='propose')."""
+    _warn_mcp_deprecated_alias(
+        "propose_cluster_rebind",
+        "cluster_rebind(action='propose')",
+    )
+    return _cluster_rebind_dispatch(action="propose", cluster_slug=cluster_slug)
+
+
+@mcp.tool()
+def apply_cluster_rebind(report_path: str, dry_run: bool = True, auto_create_new: bool = False) -> dict:
+    """Deprecated alias for cluster_rebind(action='apply')."""
+    _warn_mcp_deprecated_alias(
+        "apply_cluster_rebind",
+        "cluster_rebind(action='apply')",
+    )
+    return _cluster_rebind_dispatch(
+        action="apply",
+        report_path=report_path,
+        dry_run=dry_run,
+        auto_create_new=auto_create_new,
+    )
+
+
+@mcp.tool()
+def list_orphan_papers(folder: str = "") -> dict:
+    """Deprecated alias for cluster_rebind(action='list_orphans')."""
+    _warn_mcp_deprecated_alias(
+        "list_orphan_papers",
+        "cluster_rebind(action='list_orphans')",
+    )
+    return _cluster_rebind_dispatch(action="list_orphans", folder=folder)
+
+
+@mcp.tool()
+def summarize_rebind_status() -> dict:
+    """Deprecated alias for cluster_rebind(action='status')."""
+    _warn_mcp_deprecated_alias(
+        "summarize_rebind_status",
+        "cluster_rebind(action='status')",
+    )
+    return _cluster_rebind_dispatch(action="status")
 
 
 @mcp.tool()
@@ -1300,9 +1396,7 @@ def check_crystal_staleness(cluster_slug: str) -> dict:
         return _tool_error(exc)
 
 
-@mcp.tool()
-def list_entities(cluster: str) -> dict:
-    """List all entities (orgs/datasets/models) in a cluster's memory registry."""
+def _memory_entities_impl(cluster: str) -> dict:
     try:
         cluster = _validate_mcp_args(cluster=cluster)["cluster"]
         from research_hub.memory import list_entities as _list
@@ -1314,9 +1408,7 @@ def list_entities(cluster: str) -> dict:
         return _tool_error(exc)
 
 
-@mcp.tool()
-def list_claims(cluster: str, min_confidence: str = "low") -> dict:
-    """List structured claims in a cluster's memory. min_confidence in {high, medium, low}."""
+def _memory_claims_impl(cluster: str, min_confidence: str = "low") -> dict:
     try:
         cluster = _validate_mcp_args(cluster=cluster)["cluster"]
         from research_hub.memory import list_claims as _list
@@ -1330,9 +1422,7 @@ def list_claims(cluster: str, min_confidence: str = "low") -> dict:
         return _tool_error(exc)
 
 
-@mcp.tool()
-def list_methods(cluster: str) -> dict:
-    """List methods (technique families) in a cluster's memory registry."""
+def _memory_methods_impl(cluster: str) -> dict:
     try:
         cluster = _validate_mcp_args(cluster=cluster)["cluster"]
         from research_hub.memory import list_methods as _list
@@ -1344,9 +1434,7 @@ def list_methods(cluster: str) -> dict:
         return _tool_error(exc)
 
 
-@mcp.tool()
-def read_cluster_memory(cluster: str) -> dict:
-    """Return the full ClusterMemory registry (entities + claims + methods) for a cluster."""
+def _memory_all_impl(cluster: str) -> dict:
     try:
         cluster = _validate_mcp_args(cluster=cluster)["cluster"]
         from research_hub.memory import read_memory
@@ -1362,6 +1450,63 @@ def read_cluster_memory(cluster: str) -> dict:
         return {"cluster": cluster, "found": True, **memory.to_dict()}
     except Exception as exc:
         return _tool_error(exc)
+
+
+def _read_cluster_memory_dispatch(cluster: str, kind: str = "all", min_confidence: str = "low") -> dict:
+    if kind == "entities":
+        return _memory_entities_impl(cluster)
+    if kind == "claims":
+        return _memory_claims_impl(cluster, min_confidence=min_confidence)
+    if kind == "methods":
+        return _memory_methods_impl(cluster)
+    if kind == "all":
+        return _memory_all_impl(cluster)
+    return {
+        "error": (
+            f"Invalid kind: {kind!r}. Expected one of "
+            "['entities', 'claims', 'methods', 'all']."
+        )
+    }
+
+
+@mcp.tool()
+def read_cluster_memory(cluster: str, kind: str = "all", min_confidence: str = "low") -> dict:
+    """Read cluster memory. kind may be entities, claims, methods, or all."""
+    return _read_cluster_memory_dispatch(cluster, kind=kind, min_confidence=min_confidence)
+
+
+@mcp.tool()
+def list_entities(cluster: str) -> dict:
+    """Deprecated alias for read_cluster_memory(kind='entities')."""
+    _warn_mcp_deprecated_alias(
+        "list_entities",
+        "read_cluster_memory(kind='entities')",
+    )
+    return _read_cluster_memory_dispatch(cluster, kind="entities")
+
+
+@mcp.tool()
+def list_claims(cluster: str, min_confidence: str = "low") -> dict:
+    """Deprecated alias for read_cluster_memory(kind='claims')."""
+    _warn_mcp_deprecated_alias(
+        "list_claims",
+        "read_cluster_memory(kind='claims')",
+    )
+    return _read_cluster_memory_dispatch(
+        cluster,
+        kind="claims",
+        min_confidence=min_confidence,
+    )
+
+
+@mcp.tool()
+def list_methods(cluster: str) -> dict:
+    """Deprecated alias for read_cluster_memory(kind='methods')."""
+    _warn_mcp_deprecated_alias(
+        "list_methods",
+        "read_cluster_memory(kind='methods')",
+    )
+    return _read_cluster_memory_dispatch(cluster, kind="methods")
 
 
 def label_paper(
@@ -1721,8 +1866,7 @@ def download_artifacts(
 _BRIEFING_MAX_CHARS = 100_000
 
 
-@mcp.tool()
-def read_briefing(cluster_slug: str, max_chars: int = _BRIEFING_MAX_CHARS) -> dict:
+def _read_briefing_impl(cluster_slug: str, max_chars: int = _BRIEFING_MAX_CHARS) -> dict:
     """Return the most recently downloaded briefing text for a cluster.
 
     Reads the latest `brief-*.txt` from
@@ -1774,6 +1918,21 @@ def read_briefing(cluster_slug: str, max_chars: int = _BRIEFING_MAX_CHARS) -> di
         return {"status": "ok", "cluster_slug": cluster_slug, "text": text}
     except Exception as exc:  # pragma: no cover
         return _tool_error(exc)
+
+
+@mcp.tool()
+def read_briefing(cluster_slug: str, max_chars: int = _BRIEFING_MAX_CHARS) -> dict:
+    """Deprecated alias for ask_cluster(source='notebooklm', mode='briefing')."""
+    _warn_mcp_deprecated_alias(
+        "read_briefing",
+        "ask_cluster(source='notebooklm', mode='briefing')",
+    )
+    return _ask_cluster_dispatch(
+        cluster=cluster_slug,
+        source="notebooklm",
+        mode="briefing",
+        max_chars=max_chars,
+    )
 
 
 @mcp.tool()
@@ -2075,8 +2234,7 @@ def notebooklm_download(
         return _tool_error(exc)
 
 
-@mcp.tool()
-def ask_cluster_notebooklm(
+def _ask_cluster_notebooklm_impl(
     cluster: str,
     question: str,
     headless: bool = True,
@@ -2119,13 +2277,33 @@ def ask_cluster_notebooklm(
         return _tool_error(exc)
 
 
+@mcp.tool()
+def ask_cluster_notebooklm(
+    cluster: str,
+    question: str,
+    headless: bool = True,
+    timeout_sec: int = 120,
+) -> dict[str, Any]:
+    """Deprecated alias for ask_cluster(source='notebooklm')."""
+    _warn_mcp_deprecated_alias(
+        "ask_cluster_notebooklm",
+        "ask_cluster(source='notebooklm')",
+    )
+    return _ask_cluster_dispatch(
+        cluster=cluster,
+        question=question,
+        source="notebooklm",
+        headless=headless,
+        timeout_sec=timeout_sec,
+    )
+
+
 # ---------------------------------------------------------------------------
 # v0.33 Task-level workflow wrappers (Codex Phase 3)
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
-def ask_cluster(
+def _ask_cluster_local_impl(
     cluster_slug: str,
     question: str | None = None,
     detail: str = "gist",
@@ -2157,8 +2335,7 @@ def ask_cluster(
         return _entrypoint_tool_error(exc, cluster_slug)
 
 
-@mcp.tool()
-def brief_cluster(cluster_slug: str, force_regenerate: bool = False) -> dict:
+def _brief_cluster_impl(cluster_slug: str, force_regenerate: bool = False) -> dict:
     """Full NotebookLM round-trip: bundle -> upload -> generate -> download -> preview.
 
     Degrades gracefully if Playwright not installed (returns partial result).
@@ -2169,6 +2346,82 @@ def brief_cluster(cluster_slug: str, force_regenerate: bool = False) -> dict:
         return _impl(cfg, cluster_slug, force_regenerate=force_regenerate)
     except Exception as exc:  # pragma: no cover
         return _tool_error(exc)
+
+
+def _ask_cluster_dispatch(
+    cluster: str | None = None,
+    question: str | None = None,
+    source: str = "local",
+    detail: str = "gist",
+    headless: bool = True,
+    timeout_sec: int = 120,
+    max_chars: int = _BRIEFING_MAX_CHARS,
+    force_regenerate: bool = False,
+    mode: str = "ask",
+    cluster_slug: str | None = None,
+) -> dict:
+    target_cluster = cluster or cluster_slug
+    if not target_cluster:
+        return {"error": "cluster is required"}
+    if source == "local":
+        return _ask_cluster_local_impl(target_cluster, question=question, detail=detail)
+    if source == "notebooklm":
+        if mode == "brief":
+            return _brief_cluster_impl(target_cluster, force_regenerate=force_regenerate)
+        if mode == "briefing":
+            return _read_briefing_impl(target_cluster, max_chars=max_chars)
+        if question:
+            return _ask_cluster_notebooklm_impl(
+                target_cluster,
+                question=question,
+                headless=headless,
+                timeout_sec=timeout_sec,
+            )
+        return _read_briefing_impl(target_cluster, max_chars=max_chars)
+    return {"error": "source must be 'local' or 'notebooklm'"}
+
+
+@mcp.tool()
+def ask_cluster(
+    cluster: str | None = None,
+    question: str | None = None,
+    source: str = "local",
+    detail: str = "gist",
+    headless: bool = True,
+    timeout_sec: int = 120,
+    max_chars: int = _BRIEFING_MAX_CHARS,
+    force_regenerate: bool = False,
+    mode: str = "ask",
+    cluster_slug: str | None = None,
+) -> dict:
+    """Ask a cluster using the local memory path or NotebookLM source."""
+    return _ask_cluster_dispatch(
+        cluster=cluster,
+        question=question,
+        source=source,
+        detail=detail,
+        headless=headless,
+        timeout_sec=timeout_sec,
+        max_chars=max_chars,
+        force_regenerate=force_regenerate,
+        mode=mode,
+        cluster_slug=cluster_slug,
+    )
+
+
+@mcp.tool()
+def brief_cluster(cluster_slug: str, force_regenerate: bool = False) -> dict:
+    """Deprecated alias for ask_cluster(source='notebooklm', mode='brief')."""
+    _warn_mcp_deprecated_alias(
+        "brief_cluster",
+        "ask_cluster(source='notebooklm', mode='brief')",
+    )
+    return _ask_cluster_dispatch(
+        cluster=cluster_slug,
+        source="notebooklm",
+        mode="brief",
+        force_regenerate=force_regenerate,
+    )
 
 
 @mcp.tool()

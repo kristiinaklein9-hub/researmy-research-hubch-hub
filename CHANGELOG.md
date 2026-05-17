@@ -85,6 +85,46 @@ quarantine*. Full statement, layer table, and triage:
   (commit `168c761`) — a judge-less fresh clone is no longer misled
   into a silent empty vault.
 
+### Fixed
+
+- **Windows ACL hardening could brick the entire vault (deny-all
+  regression in the v0.91.0 W8 work).** `_restrict_windows_acl`
+  ran `icacls <p> /inheritance:r /grant:r <bare-user>:(F)`. Two
+  latent faults combined on a live box: (1) directories got a
+  **non-inheritable** owner ACE, so files written into
+  `.research_hub/` afterwards (`clusters.yaml`, `nlm_cache.json`,
+  NLM `state.json`) were born with an **empty DACL — deny-all,
+  unreadable even by the owner**; (2) when the bare principal
+  failed to resolve under an unusual process token (observed in
+  the Playwright/Chromium subprocess of the NLM-login flow) the
+  grant silently no-opped while `/inheritance:r` still stripped
+  everything. icacls **exits 0** in both cases, so the old
+  return-code-only guard never fired and every subsequent CLI
+  command failed silently (`doctor` exited 0 with no output
+  because `ClusterRegistry(clusters.yaml)` raised `PermissionError`
+  before any print). The helper is now **fail-open, not
+  fail-closed**: directories get an inheritable `(OI)(CI)(F)`
+  owner ACE; after applying, the resulting DACL is **verified** to
+  still grant the current user, and if not (or icacls
+  failed/raised) the path is rolled back to inherited ACEs via
+  `icacls /reset` so the owner is never locked out, with a single
+  stderr warning. icacls arg order (`/inheritance:r` strictly
+  before `/grant`) is preserved — reversing it makes icacls reject
+  `/inheritance:r` as an invalid parameter. Net worst case is now
+  "secrets not OS-hardened + one warning", never "tool bricked".
+  Pure-helper regression coverage added in `test_v030_security.py`.
+
+### Security
+
+- The fail-open rollback above is a deliberate, documented
+  trade-off: on a Windows host where user-only ACL hardening
+  cannot be verified, sensitive files (`config.json` Zotero key,
+  `.secret_box.key`, NLM cookie `state.json`) fall back to
+  inherited ACLs and the operator is warned once on stderr — a
+  research vault that keeps working beats one bricked by its own
+  hardening. The `RESEARCH_HUB_SKIP_ACL_HARDENING=1` escape hatch
+  is unchanged.
+
 ## v0.95.0rc2 (2026-05-17) — v1.0 blockers cleared (RC2)
 
 Both remaining v1.0 blockers landed, each Codex-delegated and

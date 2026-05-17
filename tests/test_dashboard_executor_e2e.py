@@ -319,4 +319,10 @@ def test_e2e_timeout_handling(live_server, monkeypatch):
     assert payload["ok"] is False
     assert payload["returncode"] == -1
     assert payload.get("error") == "timeout"
-    assert "timeout after 1s" in payload["stderr"]
+    # v0.91.1: W8 G3 #16 strips raw stderr from the browser response on
+    # EVERY branch (incl. timeout). The user-facing signal is the
+    # generic `error: "timeout"`; the raw "timeout after Ns" text is no
+    # longer leaked into the payload (it stays server-side). This test
+    # previously asserted the leaky behaviour and was missed in the W8
+    # commit because the dev tree's e2e suite was icacls-polluted.
+    assert "stderr" not in payload

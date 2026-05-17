@@ -82,14 +82,26 @@ def _restrict_windows_acl(path: Path) -> None:
     import getpass
     import subprocess
 
-    # Skip real ACL mutation under pytest. icacls /inheritance:r on a
-    # directory removes the inherited ACEs the test harness needs to
-    # rmtree + recreate `.pytest-work/.../.research_hub` across runs,
-    # causing FileExistsError on the next run's mkdir. Mirrors the
-    # existing `"pytest" in sys.modules` guard in research_hub/__init__.py
-    # for the Windows multiprocessing shim. Production behaviour
-    # (user-only ACL on real config/secret/cookie files) is unchanged.
-    if "pytest" in sys.modules:
+    # Skip real ACL mutation under any test context. icacls
+    # /inheritance:r on a directory removes the inherited ACEs the test
+    # harness needs to rmtree + recreate `.pytest-work/...` across runs,
+    # causing FileExistsError / PermissionError on the next mkdir.
+    #
+    # v0.91.1 hotfix: `"pytest" in sys.modules` ALONE is insufficient —
+    # e2e tests spawn a real `python -m research_hub` SUBPROCESS where
+    # pytest is NOT imported, so the guard didn't fire and icacls locked
+    # `.pytest-work/.../clusters.yaml` on clean CI Windows runners
+    # (v0.91.0 CI failure). `PYTEST_CURRENT_TEST` IS inherited by
+    # subprocesses (pytest sets it in os.environ; subprocess.run passes
+    # the parent env by default), so it covers the spawned-CLI case.
+    # `RESEARCH_HUB_SKIP_ACL_HARDENING` is an explicit operator/CI
+    # escape hatch. Production behaviour (user-only ACL on real
+    # config/secret/cookie files) is unchanged.
+    if (
+        "pytest" in sys.modules
+        or os.environ.get("PYTEST_CURRENT_TEST")
+        or os.environ.get("RESEARCH_HUB_SKIP_ACL_HARDENING")
+    ):
         return
 
     try:

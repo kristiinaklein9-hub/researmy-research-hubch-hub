@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.91.1 (2026-05-16) — Hotfix: 2 real W8 CI regressions
+
+v0.91.0 shipped to PyPI but its CI test job was RED on clean
+ubuntu/macos/windows runners. The v0.91.0 release pytest gate had
+`--ignore`'d the entire e2e suite (because the dev tree's
+`.pytest-work` was icacls-polluted by a pre-guard W8 run) — which
+masked, not avoided, two genuine W8 regressions. Misdiagnosed at
+the time as "env pollution, CI-clean"; it was not.
+
+### Fixed
+
+- **`_restrict_windows_acl` guard was subprocess-blind.** W8 #14's
+  `if "pytest" in sys.modules` did not fire inside the real
+  `python -m research_hub` SUBPROCESS that e2e tests spawn (pytest
+  isn't imported there), so `icacls /inheritance:r` locked
+  `.pytest-work/.../clusters.yaml` → `PermissionError` on clean
+  Windows CI. Guard now also checks `PYTEST_CURRENT_TEST` (set by
+  pytest in `os.environ`, inherited by subprocesses since the
+  executor passes no `env=`) plus a `RESEARCH_HUB_SKIP_ACL_HARDENING`
+  operator/CI escape hatch.
+- **`test_e2e_timeout_handling` asserted the pre-W8 leaky contract.**
+  W8 #16 strips `stderr` from the /api/exec response on every
+  branch; `test_e2e_error_rendering` was updated for that but
+  `test_e2e_timeout_handling` was missed (it never ran locally — the
+  polluted e2e suite errored at fixture setup before reaching it).
+  Now asserts the secure behaviour (`"stderr" not in payload`,
+  `error == "timeout"`).
+
+### Process note (cost-of-skipping)
+
+This is the same class of failure as v0.89.1 (release shipped with
+a red test because the gate was weakened under time pressure). Root
+cause both times: the release pytest scope was at Claude's
+discretion and got narrowed. Verification for v0.91.1 used the
+FULL suite incl e2e (no `--ignore`) on a fresh `--basetemp`:
+**2451 passed, 0 failed**. Mechanizing the release gate so e2e
+cannot be silently excluded is tracked as the next process fix.
+
 ## v0.91.0 (2026-05-16) — API contracts + security hardening
 
 Phase 2a of the post-v0.89.1 1.0-readiness audit. Four waves

@@ -61,6 +61,8 @@ Then drive operations via CLI `--json` mode or the bundled MCP server (`research
 
 **Note**: NotebookLM upload still requires one-time human-driven `research-hub notebooklm login` browser-based Google OAuth. Headless agent completion is upstream-blocked by Google's auth flow.
 
+**Note**: `auto_research_topic` (and `research-hub auto`) runs a fail-closed relevance check. Ensure a `claude` / `codex` / `gemini` CLI is reachable on PATH, or disable the relevance check, otherwise the run stops before the search with guidance rather than returning a silently empty result.
+
 ## Human quickstart
 
 | You already have | First command |
@@ -81,6 +83,14 @@ subcommand) now prints help instead of starting the pipeline.
 Python 3.10+ is required (CI-gated 3.10–3.13; 3.14 runs in CI as an
 experimental, non-gating cell). Add `[mcp]` if you want standalone
 MCP server dependencies.
+
+**Relevance judge (read before first `auto` run).** `research-hub
+auto` runs a **fail-closed** relevance check by default. Keep a
+`claude`, `codex`, or `gemini` CLI on PATH (any one is enough), or
+pass `--no-fit-check` to skip relevance judging (papers still get
+identifier + integrity checks; they are just not relevance-filtered).
+With no judge and no flag, `auto` stops **before** the search with
+actionable guidance instead of silently producing an empty vault.
 
 | Persona | Best for | Install extra |
 |---|---|---|
@@ -124,12 +134,14 @@ research-hub is a local-first orchestration layer for research workflows:
 - **REST API:** exposes `/api/v1/*` for browser-only or HTTP-capable assistants.
 - **Dashboard:** gives humans a live view of clusters, papers, diagnostics, briefs, writing support, and management actions.
 - **Vault format:** writes normal Markdown, frontmatter, `.base` dashboards, cache files, and logs that you can inspect directly.
+- **Authenticity gate (v0.95+):** every discovered paper must resolve to a real identifier (DOI / arXiv / PMID), pass integrity and relevance checks, or it is **quarantined with a recorded reason** and never written to the vault. No fabricated references — inspect rejects with `research-hub quarantine list`.
 
 The core loop:
 
 ```text
 topic or source folder
   -> discover or import sources
+  -> verify authenticity (resolve + integrity + relevance) or quarantine
   -> enrich metadata
   -> write Zotero tags/notes when enabled
   -> write Obsidian Markdown notes and cluster dashboards
@@ -261,6 +273,7 @@ research-hub zotero backfill --tags --notes --apply
 |---|---|---|
 | One-shot setup | `research-hub setup` | init + install + optional NotebookLM login + guided sample run |
 | Lazy research pipeline | `research-hub auto "topic"` / `auto_research_topic` | Search, ingest, bundle, upload, generate, download |
+| Authenticity quarantine review | `research-hub quarantine list` / `show <id>` / `restore <id>` | Inspect and optionally restore papers the authenticity gate rejected (with the failing layer + reason) |
 | Plan before running | `research-hub plan "intent"` / `plan_research_workflow` | Suggests field, cluster slug, and max papers |
 | Zotero hygiene | `research-hub zotero backfill --tags --notes [--apply]` | Fills missing tags and notes on legacy items |
 | Cluster cascade delete | `research-hub clusters delete <slug> [--apply --force]` | Preview impact on Obsidian, Zotero, dedup, memory, and crystals |
@@ -286,7 +299,8 @@ research-hub zotero backfill --tags --notes --apply
 |---|---|---|
 | `research-hub init` reports Chrome warnings | Chrome is missing or patchright cannot find it | Install Chrome, then run `research-hub doctor` |
 | `research-hub notebooklm login` opens a browser but Google blocks login | New-device or bot challenge | Complete the visible browser sign-in and phone challenge |
-| `research-hub auto` finds 0 papers | Topic too narrow or search backend transient issue | Re-run with `--max-papers 20` or rephrase |
+| `research-hub auto` finds 0 papers / empty vault | Topic too narrow OR papers were quarantined by the authenticity gate (unresolved DOI, failed integrity, or relevance-unjudged) | Re-run with `--max-papers 20` / rephrase; run `research-hub quarantine list` to see rejected papers + reasons |
+| `research-hub auto` stops before searching: "no relevance judge on PATH" | Fail-closed relevance check and no `claude`/`codex`/`gemini` CLI found | Install a judge CLI, or re-run with `--no-fit-check` to skip relevance judging |
 | NotebookLM upload or generate fails | NotebookLM UI changed or login expired | Run `research-hub notebooklm login`; then resume with `research-hub notebooklm bundle/upload/generate/download --cluster <slug>` |
 | `auto --with-crystals` cannot find an LLM CLI | `claude`, `codex`, or `gemini` is not on PATH | Install one, or use `crystal emit` and `crystal apply` manually |
 | Claude Desktop cannot see the MCP server | MCP config is in the wrong file or host was not restarted | Check the host config path and restart Claude Desktop |

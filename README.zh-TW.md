@@ -71,6 +71,10 @@ research-hub auto "your research topic"
 research-hub auto "your research topic" --no-nlm
 ```
 
+> **第一次跑 `auto` 前請看**:`auto` 預設會做 **fail-closed** 的關聯性判斷。請確保 PATH 上有 `claude` / `codex` / `gemini` 任一個 CLI,或加 `--no-fit-check` 跳過關聯性判斷;若兩者皆無,`auto` 會在搜尋**前**停下並給出指引,而不是默默產生空的 vault。
+>
+> **真實性閘門(v0.95+)**:每篇文獻都必須能解析出真實識別碼(DOI / arXiv / PMID)並通過完整性與關聯性檢查,否則會被**隔離(quarantine)並記錄原因**、不會寫進 vault——沒有捏造的參考文獻。用 `research-hub quarantine list` 檢視被擋下的文獻。
+
 ---
 
 ## 連接 AI host

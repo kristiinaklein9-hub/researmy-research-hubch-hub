@@ -73,7 +73,7 @@ def _warn_cli_deprecated_alias_from_argv(argv: list[str] | tuple[str, ...]) -> N
     warn_deprecated(
         what,
         replacement=replacement,
-        removed_in="v1.0.0",
+        removed_in="v2.0.0",
         stacklevel=3,
     )
 

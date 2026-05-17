@@ -75,7 +75,7 @@ def _warn_mcp_deprecated_alias(tool_name: str, replacement: str) -> None:
     warn_deprecated(
         f"MCP tool {tool_name}",
         replacement=replacement,
-        removed_in="v1.0.0",
+        removed_in="v2.0.0",
         stacklevel=3,
     )
 

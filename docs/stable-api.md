@@ -1,9 +1,12 @@
 # Stable Public API
 
-> Status: **contract** as of v0.91.0. Codifies G2 audit #13 from the
-> v0.89.1 post-release scorecard. Anything documented here follows
+> Status: **contract** as of v0.91.0; **the v1.x stability
+> statement** as of v1.0.0. Codifies G2 audit #13 from the v0.89.1
+> post-release scorecard. Anything documented here follows
 > semantic-versioning guarantees; anything NOT here is internal and may
-> change in any release without a deprecation cycle.
+> change in any release without a deprecation cycle. The mechanical
+> release gate + ≥1-week RC bake precede every `v*` tag — see
+> [RELEASING.md](RELEASING.md).
 
 research-hub has three public surfaces. Only the items listed below are
 covered by the stability guarantee.
@@ -76,8 +79,9 @@ Rules:
 
 1. A deprecation always emits `DeprecationWarning` naming the
    replacement and the removal version.
-2. Minimum one **minor** version grace period. Removal only on a minor
-   bump, never a patch.
+2. Deprecated surface is retained for the **remainder of the
+   major**. Removal happens only at the next **major** bump, never
+   inside a minor or patch.
 3. Each deprecation gets a CHANGELOG entry under a `### Deprecated`
    heading (Keep-a-Changelog convention; tracked for v0.95-rc as part
    of the CHANGELOG-format rework, G4 #4).
@@ -87,27 +91,34 @@ Rules:
    **supported aliases**, not deprecated — they re-export from
    `research_hub.errors` and inherit the new base. No removal planned.
 
-### Deprecated (v0.91.0 - removed v1.0.0)
+### Deprecated (since v0.91.0 — retained through 1.x, removed no earlier than v2.0.0)
+
+> Per standard semver, deprecated surface is **not** removed inside
+> a major. The `removed_in` value was a placeholder `v1.0.0`; at
+> the v1.0.0 freeze it is corrected to the next major (`v2.0.0`).
+> Every alias below keeps working as a warning-emitting thin
+> wrapper for the entire 1.x line.
 
 | Old surface | Canonical replacement | removed_in |
 | --- | --- | --- |
-| `research-hub ask` | `research-hub notebooklm ask` | `v1.0.0` |
-| `research-hub summarize` | `research-hub paper summarize` | `v1.0.0` |
-| `research-hub cleanup` | `research-hub tidy` | `v1.0.0` |
-| `research-hub label-bulk` | `research-hub paper bulk-relabel` | `v1.0.0` |
-| MCP `ask_cluster_notebooklm` | MCP `ask_cluster(source="notebooklm")` | `v1.0.0` |
-| MCP `read_briefing` | MCP `ask_cluster(source="notebooklm", mode="briefing")` | `v1.0.0` |
-| MCP `brief_cluster` | MCP `ask_cluster(source="notebooklm", mode="brief")` | `v1.0.0` |
-| MCP `propose_cluster_rebind` | MCP `cluster_rebind(action="propose")` | `v1.0.0` |
-| MCP `apply_cluster_rebind` | MCP `cluster_rebind(action="apply")` | `v1.0.0` |
-| MCP `list_orphan_papers` | MCP `cluster_rebind(action="list_orphans")` | `v1.0.0` |
-| MCP `summarize_rebind_status` | MCP `cluster_rebind(action="status")` | `v1.0.0` |
-| MCP `list_entities` | MCP `read_cluster_memory(kind="entities")` | `v1.0.0` |
-| MCP `list_claims` | MCP `read_cluster_memory(kind="claims")` | `v1.0.0` |
-| MCP `list_methods` | MCP `read_cluster_memory(kind="methods")` | `v1.0.0` |
+| `research-hub ask` | `research-hub notebooklm ask` | `v2.0.0` |
+| `research-hub summarize` | `research-hub paper summarize` | `v2.0.0` |
+| `research-hub cleanup` | `research-hub tidy` | `v2.0.0` |
+| `research-hub label-bulk` | `research-hub paper bulk-relabel` | `v2.0.0` |
+| MCP `ask_cluster_notebooklm` | MCP `ask_cluster(source="notebooklm")` | `v2.0.0` |
+| MCP `read_briefing` | MCP `ask_cluster(source="notebooklm", mode="briefing")` | `v2.0.0` |
+| MCP `brief_cluster` | MCP `ask_cluster(source="notebooklm", mode="brief")` | `v2.0.0` |
+| MCP `propose_cluster_rebind` | MCP `cluster_rebind(action="propose")` | `v2.0.0` |
+| MCP `apply_cluster_rebind` | MCP `cluster_rebind(action="apply")` | `v2.0.0` |
+| MCP `list_orphan_papers` | MCP `cluster_rebind(action="list_orphans")` | `v2.0.0` |
+| MCP `summarize_rebind_status` | MCP `cluster_rebind(action="status")` | `v2.0.0` |
+| MCP `list_entities` | MCP `read_cluster_memory(kind="entities")` | `v2.0.0` |
+| MCP `list_claims` | MCP `read_cluster_memory(kind="claims")` | `v2.0.0` |
+| MCP `list_methods` | MCP `read_cluster_memory(kind="methods")` | `v2.0.0` |
 
 ## See also
 
 - [`file-formats.md`](file-formats.md) — hidden file format schema versions
-- v0.89.1 G2 audit: `~/.claude/plans/delegated-puzzling-umbrella.md`
+- [`authenticity.md`](authenticity.md) — the v1.0 no-fabricated-references guarantee + L0–L5 + quarantine triage
+- [`RELEASING.md`](RELEASING.md) — the mechanical release gate + RC-bake runbook
 - `research_hub.describe` — runtime capability manifest

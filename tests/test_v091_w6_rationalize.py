@@ -24,7 +24,7 @@ def _assert_deprecated(call):
         warning.category is DeprecationWarning and "deprecated" in str(warning.message)
         for warning in caught
     )
-    assert any("v1.0.0" in str(warning.message) for warning in caught)
+    assert any("v2.0.0" in str(warning.message) for warning in caught)
     return result
 
 
@@ -49,7 +49,7 @@ def test_cli_deprecated_alias_help_exits_zero_and_warns(argv):
         warning.category is DeprecationWarning and "deprecated" in str(warning.message)
         for warning in caught
     )
-    assert any("v1.0.0" in str(warning.message) for warning in caught)
+    assert any("v2.0.0" in str(warning.message) for warning in caught)
 
 
 def test_mcp_consolidated_tools_and_deprecated_aliases_registered():
@@ -330,4 +330,4 @@ def test_stable_api_deprecated_section_lists_aliases():
     assert "### Deprecated" in text
     for alias in aliases:
         assert alias in text
-    assert "v1.0.0" in text
+    assert "v2.0.0" in text

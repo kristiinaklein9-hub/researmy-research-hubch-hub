@@ -12,11 +12,35 @@
 
 ## [Unreleased]
 
-_Both v1.0 blockers (W6 API-freeze + Phase A authenticity gate) are
-landed. v1.0.0 follows a ≥1-week bake period on v0.95.0rc2. Phase C
-(below) lands in this patch-stream BEFORE the 1.0.0 tag. Phase B
-(UI 80/20 — ⌘K palette + mobile) and Phase D (Zotero metadata
-correctness) are post-1.0 (v1.1)._
+_Post-1.0. Phase B (UI 80/20 — ⌘K command palette + mobile
+breakpoints + `_HOME` wayfinding) and Phase D (Zotero metadata
+correctness — type-aware `itemType` mapping + `fit/<bucket>` tag +
+provenance child-note parity) are staged on
+`feature/v1.1-ui-80-20` for **v1.1**, to merge AFTER v1.0.0 ships.
+UI scope is capped here by decision: the dashboard stays a thin
+status-mirror + palette + onboarding demo; no 3-pane / citation-
+graph rebuild (link out to the real tools instead)._
+
+## v1.0.0 (PENDING — tag on/after 2026-05-24, post ≥1-week v0.95.0rc2 bake)
+
+> **Not yet released — staged on `release-prep/v1.0.0`.** The cut
+> replaces this header with the real date, runs the mechanical
+> release gate on `master`, then `git tag v1.0.0` → push → watch CI.
+> v1.0.0 is the **promotion of the v0.95.0rc2 line** (W6 API-freeze
+> + Phase A authenticity gate) after a ≥1-week bake, **plus** the
+> Phase C fail-closed first-run guard and README accuracy.
+> **No new breaking change beyond rc2's L4** (already in UPGRADE.md).
+
+**The v1.0 guarantee — no fabricated references.** Every paper that
+enters the vault resolved to a real identifier (DOI / arXiv /
+PMID), passed integrity and relevance checks, or was **quarantined
+with a recorded reason** and never written. Mechanical and
+fail-closed (Phase A, L0–L5; `test_authenticity_l5_invariant.py`
+fails CI if any LLM symbol enters the bibliographic path).
+Deliberately **not** an absolute "zero hallucination" claim — the
+enforceable promise is *resolve + integrity + relevance, or
+quarantine*. Full statement, layer table, and triage:
+[docs/authenticity.md](docs/authenticity.md).
 
 ### Added
 
@@ -34,6 +58,32 @@ correctness) are post-1.0 (v1.1)._
   list|show|restore` recovery commands, so a short/empty vault is
   auditable instead of a mystery. Reuses Phase A `list_quarantine`
   (no fresh directory scan).
+- `docs/authenticity.md` — the durable v1.0 guarantee statement,
+  the L0–L5 layer table, and quarantine triage (the full prose the
+  Phase 5 plan called for; README + CHANGELOG link to it).
+
+### Changed
+
+- **API surface frozen for 1.0.** `docs/stable-api.md` (the
+  contract since v0.91.0) is promoted to the v1.x stability
+  statement.
+- **W6 deprecated aliases retained through all of 1.x (schedule
+  correction — strictly more lenient, NOT breaking).** The W6
+  wrappers carried a placeholder `removed_in="v1.0.0"`. Per
+  standard semver, deprecated surface is not removed inside a
+  major, so the marker is corrected to the next major (`v2.0.0`)
+  consistently across `cli.py`, `mcp_server.py`, `_deprecation.py`,
+  `docs/stable-api.md`, `UPGRADE.md`, and the W6 tests. Every old
+  CLI alias / MCP tool keeps working as a warning-emitting wrapper
+  for the entire 1.x line; **nothing is removed at 1.0.0** — the
+  only change is the advertised removal version in the warning
+  text (v1.0.0 → v2.0.0). No code behaviour change; this widens,
+  never narrows, what keeps working — hence no BREAKING flag.
+- README + README.zh-TW now document the authenticity gate, the
+  fail-closed relevance-judge requirement (with the `--no-fit-check`
+  opt-out), and the `quarantine list|show|restore` recovery path
+  (commit `168c761`) — a judge-less fresh clone is no longer misled
+  into a silent empty vault.
 
 ## v0.95.0rc2 (2026-05-17) — v1.0 blockers cleared (RC2)
 

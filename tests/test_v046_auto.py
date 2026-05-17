@@ -19,7 +19,15 @@ def mock_deps():
          patch("research_hub.auto.download_briefing_for_cluster") as mock_download, \
          patch("research_hub.auto._run_search") as mock_run_search, \
          patch("research_hub.auto._run_fit_check_step", side_effect=lambda cfg, papers, *a, **k: papers), \
-         patch("research_hub.auto.detect_llm_cli", return_value=None):
+         patch("research_hub.auto.detect_llm_cli", return_value="claude"):
+        # NOTE: a judge IS present here on purpose. These tests verify
+        # auto_pipeline orchestration (search/ingest/NLM wiring) with
+        # _run_fit_check_step mocked to a pass-through — they are NOT
+        # the no-judge contract. Phase C's pre-flight guard (no judge +
+        # do_fit_check -> hard stop before search) is locked separately
+        # by tests/test_first_run_ux.py. Leaving detect_llm_cli=None
+        # here would make these orchestration tests bail at the
+        # pre-flight, which is exactly what test_first_run_ux asserts.
 
         mock_cfg = MagicMock()
         mock_cfg.root = MagicMock()

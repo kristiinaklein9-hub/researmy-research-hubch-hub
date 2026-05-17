@@ -462,6 +462,13 @@ def test_cross_stage_search_zero_auto_exits_cleanly(pipeline_cfg, monkeypatch):
     monkeypatch.setattr(auto_mod, "get_config", lambda: pipeline_cfg)
     monkeypatch.setattr(auto_mod, "_ensure_zotero_collection", lambda *a, **k: None)
     monkeypatch.setattr(auto_mod, "_run_search", lambda *a, **k: [])
+    # Deterministic precondition: this test exercises the SEARCH-ZERO
+    # exit path, so it must get PAST Phase C's no-judge pre-flight
+    # guard. Pin a judge present (do not rely on ambient PATH — that
+    # made this pass locally with `claude` installed but fail on
+    # judge-free CI). The no-judge pre-flight contract is locked
+    # separately by tests/test_first_run_ux.py.
+    monkeypatch.setattr(auto_mod, "detect_llm_cli", lambda: "claude")
 
     report = auto_mod.auto_pipeline("LLM agents for ABM", do_nlm=False, print_progress=False)
 

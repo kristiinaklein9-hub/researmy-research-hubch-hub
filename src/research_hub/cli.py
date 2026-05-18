@@ -4143,6 +4143,9 @@ def _discover_new(args) -> int:
     exclude_terms = _parse_negative_terms(args.exclude)
     seed_dois = _parse_seed_dois(args.seed_dois, args.seed_dois_file)
     expand_from = tuple(item.strip() for item in args.expand_from.split(",") if item.strip())
+    from research_hub.discover import _DEFAULT_PER_BACKEND_LIMIT_FACTOR as _DEFAULT_FACTOR
+
+    per_backend_factor = args.per_backend_factor if args.per_backend_factor is not None else _DEFAULT_FACTOR
     state, prompt = discover_new(
         cfg,
         args.cluster,
@@ -4160,11 +4163,14 @@ def _discover_new(args) -> int:
         min_confidence=args.min_confidence,
         rank_by=args.rank_by,
         from_variants=args.from_variants,
+        auto_variants=args.auto_variants,
         expand_auto=args.expand_auto,
         expand_from=expand_from,
         expand_hops=args.expand_hops,
+        expand_semantic=args.expand_semantic,
         seed_dois=seed_dois,
         include_existing=args.include_existing,
+        per_backend_factor=per_backend_factor,
     )
     if args.prompt_out:
         Path(args.prompt_out).write_text(prompt, encoding="utf-8")
@@ -6513,6 +6519,36 @@ def build_parser() -> argparse.ArgumentParser:
     new_p.add_argument("--limit", type=int, default=50)
     new_p.add_argument("--definition", help="Cluster definition")
     new_p.add_argument("--from-variants", help="Path to a JSON file with query variations from `discover variants`")
+    new_p.add_argument(
+        "--auto-variants",
+        action="store_true",
+        default=True,
+        help="Auto-derive query variations from cluster seed_keywords + definition (default: on; --from-variants takes precedence)",
+    )
+    new_p.add_argument(
+        "--no-auto-variants",
+        dest="auto_variants",
+        action="store_false",
+        help="Disable automatic query-variation derivation",
+    )
+    new_p.add_argument(
+        "--expand-semantic",
+        action="store_true",
+        default=True,
+        help="Expand candidates via S2 recommendations at lower confidence (default: on)",
+    )
+    new_p.add_argument(
+        "--no-expand-semantic",
+        dest="expand_semantic",
+        action="store_false",
+        help="Disable Semantic Scholar recommendations expansion",
+    )
+    new_p.add_argument(
+        "--per-backend-factor",
+        type=int,
+        default=None,
+        help="Per-backend search limit multiplier (default: 4, the module constant)",
+    )
     new_p.add_argument(
         "--expand-auto",
         action="store_true",

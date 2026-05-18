@@ -79,6 +79,38 @@ quarantine*. Full statement, layer table, and triage:
   the config default.  Idempotent: already-nested collections are skipped and
   reported.  Never deletes anything.
 
+- **Zero-cost recall improvements (Phase C): offline auto query-variations,
+  S2 recommendations expansion, raised per-backend factor.**
+  Three independent recall levers, all zero extra API cost and precision-safe
+  (merge-dedup + fail-closed fit-check backstop unchanged):
+
+  - **C1 — Auto query-variations (`--auto-variants`, default on).** When
+    `--from-variants` is not supplied, `discover new` now automatically derives
+    2–3 short query variations offline from the cluster's `seed_keywords`
+    (clusters.yaml) + key terms extracted from the cluster's `00_overview.md`
+    definition section. Variations are fed through the existing
+    `apply_variations()` path so the proven multi-variation merge and
+    multi-match confidence boost are reused. `--from-variants` always takes
+    precedence and suppresses auto-variants. No definition → seed-only;
+    no seeds → no auto-variants. Never crashes. Disable with `--no-auto-variants`.
+
+  - **C2 — Semantic Scholar recommendations expansion (`--expand-semantic`,
+    default on).** After initial search, the top-N (≤3) candidates with a
+    resolvable DOI or arXiv ID are submitted to the S2
+    `recommendations/v1/papers/forpaper/{paperId}` endpoint (free tier).
+    Up to 20 results per seed are merged at a fixed base confidence of 0.4 so
+    user-query hits always outrank recommendation-only entries. Network failure
+    or empty response → no-op, never crashes. Disable with `--no-expand-semantic`.
+    New method `SemanticScholarClient.get_recommendations()` in
+    `research_hub.search.semantic_scholar`.
+
+  - **C3 — Per-backend search limit raised 3 → 4 (`--per-backend-factor`).**
+    `_DEFAULT_PER_BACKEND_LIMIT_FACTOR` raised from 3 to 4. The floor constant
+    (`_DEFAULT_PER_BACKEND_LIMIT_FLOOR = 40`) is unchanged; the factor is
+    relevant only when `limit × 4 > 40` (i.e. limit > 10, which is always true
+    at the default limit=50). Pass `--per-backend-factor N` to override at
+    runtime.
+
 - **PDF-text abstract fallback (last-resort, fail-safe).** When all four
   online metadata sources (Crossref, Unpaywall, OpenAlex, Semantic Scholar)
   return no substantive abstract AND a local PDF is present in the vault's

@@ -113,6 +113,32 @@ quarantine*. Full statement, layer table, and triage:
   `/inheritance:r` as an invalid parameter. Net worst case is now
   "secrets not OS-hardened + one warning", never "tool bricked".
   Pure-helper regression coverage added in `test_v030_security.py`.
+- **NLM keepalive now wired: a single login survives long uploads.**
+  `_make_client()` now passes `keepalive=600` to the upstream
+  `NotebookLMClient.from_storage()` for all upload/download paths
+  (`upload_cluster`, `download_briefing_for_cluster`,
+  `download_slide_deck_for_cluster`, `generate_artifact`). The
+  background `_keepalive_loop` pokes `accounts.google.com/RotateCookies`
+  every 600 s (clamped to the upstream 60 s floor), eliciting
+  `__Secure-1PSIDTS` rotation so multi-shard uploads no longer drop
+  mid-flight when Google rotates short-lived tokens. One-RPC fast paths
+  (health probe, `notebooks.list`) keep `keepalive=None` so `doctor`
+  stays fast. Between-run cookie rotation is now **persisted reliably,
+  race-free**: the old research-hub `_save_state()` in `close()` was
+  redundant — the upstream `ClientCore.close()` already persists the
+  live jar on ALL exit paths (including exceptions) via a
+  `threading.Lock`-serialized `save_cookies()` call. Removing the
+  duplicate eliminates the race where an older in-flight keepalive save
+  could clobber freshly-rotated tokens written by `_save_state()`.
+  Net guarantee: every CLI invocation persists whatever cookies Google
+  rotated during that run, exactly once, race-free. The `state.json`
+  permission re-hardening the old `_save_state()` also performed
+  (G3 P1 #2) is preserved by an explicit `_tighten_state_file_perms()`
+  call AFTER the authoritative upstream on-close write, so cookie
+  rotation cannot silently relax the Google-auth-cookie file back to
+  0644. Note: Google can still eventually expire the underlying
+  `SID`/`PSID` cookies (typical lifetime 1–2 years); `doctor` will
+  `WARN` and prompt re-login in that case.
 - **`doctor` reported a false `[OK] nlm_session` for a server-side
   dead NotebookLM session.** The check tested only
   `state.json` existence + non-zero size, so an expired Google

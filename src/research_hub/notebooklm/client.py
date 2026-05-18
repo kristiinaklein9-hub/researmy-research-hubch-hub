@@ -124,10 +124,15 @@ class NotebookLMClient:
         *,
         headless: bool = True,
         timeout_sec: int = 120,
+        keepalive_sec: int | None = None,
     ) -> None:
         del headless
         self._state_file = Path(state_file)
         self._timeout = float(timeout_sec)
+        # keepalive_sec: None = disabled (fast single-RPC paths like health probe);
+        # positive integer = enable background cookie-rotation loop via upstream.
+        # Values below the upstream floor of 60 s are clamped up by upstream.
+        self._keepalive_sec = keepalive_sec
         self._loop = asyncio.new_event_loop()
         self._closed = False
         try:
@@ -145,11 +150,20 @@ class NotebookLMClient:
         return value
 
     async def _open_client(self):
+        # Pass keepalive through to the upstream client so the background
+        # cookie-rotation loop (which elicits __Secure-1PSIDTS refresh) runs
+        # for long sessions.  keepalive=None (the default) keeps the loop OFF
+        # for trivial one-RPC calls (health probe, notebooks.list, etc.) so
+        # check_session_health / doctor stays fast.  The upstream floor is
+        # 60 s; values below it are clamped up automatically.
+        kwargs: dict = {
+            "path": str(self._state_file),
+            "timeout": self._timeout,
+        }
+        if self._keepalive_sec is not None:
+            kwargs["keepalive"] = float(self._keepalive_sec)
         client = await self._maybe_await(
-            _UpstreamClient.from_storage(
-                path=str(self._state_file),
-                timeout=self._timeout,
-            )
+            _UpstreamClient.from_storage(**kwargs)
         )
         enter = getattr(client, "__aenter__", None)
         if enter is not None:
@@ -520,15 +534,31 @@ class NotebookLMClient:
         self._closed = True
 
         async def _go():
-            # v0.88.7: persist rotated cookies BEFORE __aexit__ tears
-            # down the underlying httpx client / patchright context.
-            try:
-                await self._save_state()
-            except Exception:
-                pass
+            # v1.0.0 Fix-3: upstream ClientCore.close() / __aexit__ always
+            # persists the live cookie jar via its own _save_lock-serialized
+            # save_cookies() call (try/finally in ClientCore.close ensures
+            # it runs on ALL exit paths, including exceptions).  The old
+            # research-hub _save_state() was redundant AND racy — it called
+            # save_cookies_to_storage() directly, bypassing the upstream
+            # threading.Lock, so it could race against an in-flight keepalive
+            # save and let an older snapshot overwrite freshly rotated tokens.
+            # Removing it here means exactly ONE lock-serialized save per
+            # close(), which is always the freshest jar.
             exit_method = getattr(self._client, "__aexit__", None)
             if exit_method is not None:
                 await self._maybe_await(exit_method(None, None, None))
+            # Preserve G3 P1 #2: upstream's on-close save_cookies() writes
+            # state.json (Google auth cookies) but does NOT restrict perms.
+            # The removed _save_state() used to re-harden after each cookie
+            # write; re-tighten here AFTER the authoritative upstream write
+            # so cookie rotation can't silently relax state.json to 0644 on
+            # some platforms. Best-effort: never poison a successful op.
+            try:
+                from research_hub.notebooklm.auth import _tighten_state_file_perms
+
+                _tighten_state_file_perms(self._state_file)
+            except Exception:
+                pass
 
         try:
             self._run(_go())

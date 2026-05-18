@@ -64,16 +64,29 @@ def test_auto_collection_reuse_skips_existing_key_already_bound_elsewhere(tmp_pa
 
     web = MagicMock(spec=["collections", "create_collections"])
     web.collections.return_value = [{"data": {"key": "SHARED1", "name": "Existing Topic"}}]
-    web.create_collections.return_value = {
-        "successful": {"0": {"key": "NEWKEY1", "data": {"key": "NEWKEY1"}}}
-    }
+    # Two creates now happen, in order: (1) the idempotent "research-hub"
+    # mother collection (find-or-create; not present in the mock listing so it
+    # is created once), then (2) the cluster collection nested under it.
+    # Distinct keys make the ordering/nesting unambiguous.
+    web.create_collections.side_effect = [
+        {"successful": {"0": {"key": "PARENT1", "data": {"key": "PARENT1"}}}},
+        {"successful": {"0": {"key": "NEWKEY1", "data": {"key": "NEWKEY1"}}}},
+    ]
     monkeypatch.setattr("research_hub.zotero.client.get_client", lambda: web)
     report = AutoReport(cluster_slug="beta", cluster_created=False)
 
     _ensure_zotero_collection(registry, cluster, "beta", report, print_progress=False)
 
+    # Core collision-prevention property: SHARED1 is already bound to "alpha",
+    # so "beta" must NOT reuse it — it gets a fresh collection instead.
     assert cluster.zotero_collection_key == "NEWKEY1"
-    web.create_collections.assert_called_once()
+    assert cluster.zotero_collection_key != "SHARED1"
+    # Mother-folder behaviour (regression lock): parent created top-level once,
+    # then the cluster collection nested under that parent key.
+    calls = web.create_collections.call_args_list
+    assert len(calls) == 2
+    assert calls[0].args[0] == [{"name": "research-hub", "parentCollection": False}]
+    assert calls[1].args[0] == [{"name": "Existing Topic", "parentCollection": "PARENT1"}]
 
 
 def test_resolve_collision_new_creates_fresh_collection_and_retags_matching_items(tmp_path, monkeypatch):

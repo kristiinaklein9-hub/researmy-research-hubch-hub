@@ -107,6 +107,26 @@ quarantine*. Full statement, layer table, and triage:
 
 ### Fixed
 
+- **Pre-upload URL error-page guard (hybrid metadata + probe).** `bundle`
+  now calls a new `classify_url_source()` classifier before setting
+  `action="url"` on each source. The classifier uses a 3-tier approach: (1)
+  `summarize_status: failed_no_abstract` in the note frontmatter →
+  `likely_error_page` immediately (no network); (2) open-access hosts
+  (`arxiv.org`, PubMed, Zenodo, etc.) → `ok` immediately (no network); (3)
+  ambiguous publisher domains → active HTTP GET with a browser User-Agent,
+  body classified by Cloudflare-403, T&F cookie-wall, Elsevier JS-redirect,
+  or generic short-body signals. Probe errors/timeouts yield quality="unknown"
+  (fail-safe — never skipped). `url_quality`, `url_quality_reason`, and
+  `url_quality_signal` are written into each manifest entry. During `upload`,
+  entries with `url_quality="likely_error_page"` and `action="url"` are
+  **skipped and recorded** in `report.errors` with type
+  `pre_upload_likely_error_page` (visible in the run report, not silent).
+  Pass `--include-suspect-urls` to upload them anyway (a warning is still
+  appended). When a local PDF exists for a `likely_error_page` URL source,
+  `bundle` auto-upgrades the entry to `action="pdf"` (composes with the
+  existing PDF-abstract fallback). The existing post-upload
+  `validate_uploaded_sources()` remains as a secondary net.
+
 - **Windows ACL hardening could brick the entire vault (deny-all
   regression in the v0.91.0 W8 work).** `_restrict_windows_acl`
   ran `icacls <p> /inheritance:r /grant:r <bare-user>:(F)`. Two

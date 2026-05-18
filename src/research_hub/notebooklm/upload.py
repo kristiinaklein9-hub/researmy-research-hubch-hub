@@ -961,6 +961,7 @@ def upload_cluster(
     over_cap_strategy: str = "fail",
     shard_size: int = 50,
     shard_strategy: str = "recent",
+    include_suspect_urls: bool = False,
 ) -> UploadReport:
     """Upload a cluster bundle to NotebookLM, resuming from ``nlm_cache.json``."""
     from research_hub.clusters import ClusterRegistry
@@ -1099,6 +1100,43 @@ def upload_cluster(
             action = entry.get("action", "skip")
             if action == "skip":
                 continue
+
+            # Pre-upload URL quality guard: skip known-bad URL sources
+            # (unless the caller opted in with include_suspect_urls=True).
+            url_quality = str(entry.get("url_quality", "") or "")
+            if url_quality == "likely_error_page" and action == "url":
+                key_for_error = str(entry.get("url") or entry.get("doi") or "")
+                if not include_suspect_urls:
+                    report.errors.append(
+                        {
+                            "source": key_for_error,
+                            "error": "pre_upload_likely_error_page",
+                            "url_quality_reason": str(entry.get("url_quality_reason", "") or ""),
+                            "doi": str(entry.get("doi", "") or ""),
+                            "title": str(entry.get("title", "") or ""),
+                        }
+                    )
+                    _log_jsonl(
+                        log_path,
+                        {
+                            "kind": "upload_skip_error_page",
+                            "key": key_for_error,
+                            "url_quality_reason": str(entry.get("url_quality_reason", "") or ""),
+                        },
+                    )
+                    continue
+                else:
+                    # include_suspect_urls=True: upload anyway, still warn
+                    report.errors.append(
+                        {
+                            "source": key_for_error,
+                            "error": "pre_upload_likely_error_page_warning",
+                            "url_quality_reason": str(entry.get("url_quality_reason", "") or ""),
+                            "doi": str(entry.get("doi", "") or ""),
+                            "title": str(entry.get("title", "") or ""),
+                        }
+                    )
+
             if uploads >= rate_limit_cap:
                 raise NotebookLMCapacityError(_capacity_error_message(cluster, source_count, rate_limit_cap))
 

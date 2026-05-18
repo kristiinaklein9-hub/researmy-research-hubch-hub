@@ -3644,6 +3644,7 @@ def _nlm_upload(
     create_if_missing: bool,
     over_cap_strategy: str = "fail",
     shard_size: int = 50,
+    include_suspect_urls: bool = False,
 ) -> int:
     from research_hub.notebooklm.upload import (
         NotebookLMCapacityError,
@@ -3672,6 +3673,7 @@ def _nlm_upload(
             create_if_missing=create_if_missing,
             over_cap_strategy=over_cap_strategy,
             shard_size=shard_size,
+            include_suspect_urls=include_suspect_urls,
         )
     except NotebookLMCapacityError as exc:
         print(str(exc), file=sys.stderr)
@@ -5992,6 +5994,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=50,
         help="Sources per NotebookLM shard when --over-cap-strategy shard is used",
     )
+    nlm_upload.add_argument(
+        "--include-suspect-urls",
+        action="store_true",
+        default=False,
+        help=(
+            "Upload URL sources even when the pre-upload quality check flags them as "
+            "likely error pages (default: skip and record in report.errors). "
+            "A warning is still appended to the report."
+        ),
+    )
     nlm_shard = nlm_sub.add_parser("shard", help="Split a cluster into NotebookLM source-cap shards")
     nlm_shard.add_argument("--cluster", required=True)
     nlm_shard.add_argument("--strategy", choices=["recent", "cited", "fit"], required=True)
@@ -7190,6 +7202,7 @@ def _main_dispatch(args, parser) -> int:
                 args.create_if_missing,
                 over_cap_strategy=args.over_cap_strategy,
                 shard_size=args.shard_size,
+                include_suspect_urls=args.include_suspect_urls,
             )
         if args.notebooklm_command == "shard":
             return _nlm_shard(

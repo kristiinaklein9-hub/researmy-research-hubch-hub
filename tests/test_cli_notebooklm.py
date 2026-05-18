@@ -180,7 +180,7 @@ def test_main_routes_notebooklm_upload_and_generate(monkeypatch, mock_require_co
     assert cli.main(["notebooklm", "generate", "--cluster", "alpha", "--type", "mind-map"]) == 0
     assert cli.main(["notebooklm", "ask", "--cluster", "alpha", "--question", "What?"]) == 0
     assert calls == [
-        ("upload", "alpha", True, False, True, {"over_cap_strategy": "fail", "shard_size": 50}),
+        ("upload", "alpha", True, False, True, {"over_cap_strategy": "fail", "shard_size": 50, "include_suspect_urls": False}),
         ("generate", "alpha", "mind-map", False),
         ("ask", "alpha", "What?", True, 120),
     ]

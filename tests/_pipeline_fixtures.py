@@ -172,7 +172,7 @@ def backend_response(name: str, url: str = "") -> FakeResponse:
     raise AssertionError(name)
 
 
-def paper_input(title: str, slug: str, doi: str, *, arxiv_id: str = "") -> dict[str, Any]:
+def paper_input(title: str, slug: str, doi: str, *, arxiv_id: str = "", citation_count: int = 1) -> dict[str, Any]:
     entry = {
         "title": title,
         "doi": doi,
@@ -188,6 +188,7 @@ def paper_input(title: str, slug: str, doi: str, *, arxiv_id: str = "") -> dict[
         "slug": slug,
         "sub_category": "llm-agents-for-abm",
         "url": f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else "",
+        "citation_count": citation_count,
     }
     if arxiv_id:
         entry["arxiv_id"] = arxiv_id

@@ -73,6 +73,9 @@ def _paper(title: str, slug: str, doi: str) -> dict:
         "category": "behavioral",
         "method_type": "qualitative",
         "citations": 3,
+        # citation_count >= 1 (default min_corroboration_citations) is required
+        # for single-source papers to pass the L2b corroboration gate.
+        "citation_count": 3,
         "pdf_url": "",
     }
 

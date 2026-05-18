@@ -19,6 +19,11 @@ def test_ingest_100_papers_no_duplicates(tmp_path, monkeypatch):
             "journal": "Stress Journal",
             "slug": f"stress-paper-{i:04d}",
             "sub_category": "stress",
+            # citation_count >= min_corroboration_citations (default 1) so the
+            # L2b corroboration gate does not quarantine these single-source
+            # synthetic papers — this test exercises dedup-at-scale, not the
+            # authenticity gate (see fix/authenticity-corroboration-gate).
+            "citation_count": 3,
             "summary": "[TODO]",
             "key_findings": ["[TODO]"],
             "methodology": "[TODO]",

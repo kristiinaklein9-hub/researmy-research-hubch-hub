@@ -36,6 +36,17 @@ QUARANTINE_DIR = "quarantine"
 _KNOWN_VENUE_STRAGGLERS = {"arxiv", "open mind"}
 _LLM_UNJUDGED_REASONS = {"relevance_unjudged"}
 
+# Curated predatory DOI registrant prefix denylist.
+# Sources: Cabell's Predatory Reports / Beall's List cross-checked against
+# CrossRef member data (2026-05). Only prefixes whose entire registrant
+# portfolio is predatory are included; single-journal exceptions are not.
+_PREDATORY_DOI_PREFIXES: frozenset[str] = frozenset(
+    {
+        "10.55041",  # Edtech Publishers (OPC) Pvt Ltd — IJSREM, IJCOPE, IJSMT
+        "10.31695",  # IJASRE (Intl Journal of Advanced Scientific Research and Engineering)
+    }
+)
+
 
 @dataclass
 class ResolveOutcome:
@@ -192,6 +203,78 @@ def verify_authenticity(
                         )
                     )
                     continue
+
+            # L2a: predatory venue denylist — fail-closed, recoverable via quarantine
+            doi_norm = normalize_doi(paper.get("doi", "") or "")
+            predatory_prefixes = _PREDATORY_DOI_PREFIXES | frozenset(
+                getattr(cfg, "predatory_doi_prefixes", None) or ()
+            )
+            # Match on the registrant boundary, not a bare string prefix:
+            # "10.550410/x" must NOT match the denylisted "10.55041" (a
+            # different, possibly legitimate registrant). A DOI is
+            # "<prefix>/<suffix>", so require exact-prefix or prefix + "/".
+            matched_prefix = next(
+                (
+                    pfx
+                    for pfx in predatory_prefixes
+                    if doi_norm == pfx or doi_norm.startswith(pfx + "/")
+                ),
+                None,
+            )
+            if matched_prefix:
+                quarantined.append(
+                    quarantine_paper(
+                        cfg,
+                        paper,
+                        cluster_slug=cluster_slug,
+                        layer="L2",
+                        reason="predatory_venue",
+                        details={"doi_prefix": matched_prefix},
+                    )
+                )
+                continue
+
+            # L2b: uncorroborated single-source gate — enforces already-computed signal
+            corro = _corroboration_label(paper)
+            if corro == "single-source":
+                # Exempt legitimate single-source cases that are inherently
+                # single-source by nature (fresh preprints, PMID-indexed papers):
+                #   - real arXiv preprint (arxiv_id truthy)
+                #   - paper has a PMID / pubmed_id
+                #   - DOI registrant is a curated preprint server (bioRxiv/medRxiv = 10.1101)
+                arxiv_id = _arxiv_id_for(paper)
+                pmid = str(paper.get("pmid", "") or paper.get("pubmed_id", "") or "").strip()
+                doi_for_preprint = normalize_doi(paper.get("doi", "") or "")
+                is_preprint_exempt = (
+                    bool(arxiv_id)
+                    or bool(pmid)
+                    # bioRxiv / medRxiv registrant — boundary match so
+                    # "10.11010/x" (a different registrant) is NOT exempted.
+                    or doi_for_preprint == "10.1101"
+                    or doi_for_preprint.startswith("10.1101/")
+                )
+                if not is_preprint_exempt:
+                    try:
+                        min_cit = int(getattr(cfg, "min_corroboration_citations", 1))
+                    except (TypeError, ValueError):
+                        min_cit = 1
+                    raw_cit = paper.get("citation_count")
+                    try:
+                        n_cit = int(raw_cit) if raw_cit is not None else 0
+                    except (TypeError, ValueError):
+                        n_cit = 0
+                    if n_cit < min_cit:
+                        quarantined.append(
+                            quarantine_paper(
+                                cfg,
+                                paper,
+                                cluster_slug=cluster_slug,
+                                layer="L2",
+                                reason="uncorroborated",
+                                details={"corroboration": corro, "citation_count": n_cit},
+                            )
+                        )
+                        continue
 
             provenance = dict(paper.get("provenance") or {})
             provenance.update(

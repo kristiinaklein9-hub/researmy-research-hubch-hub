@@ -121,20 +121,39 @@ def test_l1_request_exception_is_fail_closed(tmp_path, monkeypatch):
 
 
 def test_l2_single_source_accepts_and_two_backends_corroborate(tmp_path, monkeypatch):
+    """Corroboration gate behaviour:
+
+    - single-source with 0 citations and no arXiv/PMID → quarantined L2 uncorroborated
+      (gate added in fix/authenticity-corroboration-gate).
+    - corroborated (2+ backends) → accepted regardless of citation count.
+    - single-source with sufficient citations (>=1 default) → accepted.
+    """
     from research_hub.authenticity import verify_authenticity
 
     cfg = _cfg(tmp_path)
     _ok_head(monkeypatch)
 
+    # Will be quarantined: single-source, 0 citations, no arxiv/pmid
     single = _paper("Single Source", doi="10.1000/single", source="openalex")
+    # Will be accepted: corroborated by 2 backends
     double = _paper("Double Source", doi="10.1000/double", found_in=["openalex", "crossref"])
+    # Will be accepted: single-source but has sufficient citations (>=1)
+    cited = _paper("Cited Single Source", doi="10.1000/cited", source="openalex", citation_count=5)
 
-    accepted, quarantined = verify_authenticity([single, double], cfg, cluster_slug="agents")
+    accepted, quarantined = verify_authenticity([single, double, cited], cfg, cluster_slug="agents")
 
-    assert quarantined == []
     by_title = {paper["title"]: paper for paper in accepted}
-    assert by_title["Single Source"]["provenance"]["corroboration"] == "single-source"
+    assert "Double Source" in by_title, f"corroborated paper must be accepted; accepted={list(by_title)}"
+    assert "Cited Single Source" in by_title, f"cited single-source must be accepted; accepted={list(by_title)}"
     assert by_title["Double Source"]["provenance"]["corroboration"] == "corroborated"
+
+    quarantined_slugs = [q["slug"] for q in quarantined]
+    assert any("single-source" in slug for slug in quarantined_slugs), (
+        f"single-source/zero-citations paper must be quarantined; quarantined={quarantined_slugs}"
+    )
+    single_q = next(q for q in quarantined if "single-source" in q.get("slug", ""))
+    assert single_q["layer"] == "L2"
+    assert single_q["reason"] == "uncorroborated"
 
 
 @pytest.mark.parametrize(
@@ -210,8 +229,11 @@ def test_accepted_paper_provenance_and_pipeline_note_write(tmp_path, monkeypatch
     monkeypatch.setenv("RESEARCH_HUB_NO_ZOTERO", "1")
     monkeypatch.setattr(pipeline, "get_config", lambda: cfg)
     monkeypatch.setattr(pipeline.time, "sleep", lambda seconds: None)
+    # citation_count=3 and found_in=["openalex", "crossref"] ensure the paper
+    # passes the L2b corroboration gate (corroborated by 2 backends).
     (cfg.root / "papers_input.json").write_text(
-        json.dumps([_paper("Accepted Paper", doi="10.1000/accepted")]),
+        json.dumps([_paper("Accepted Paper", doi="10.1000/accepted",
+                           found_in=["openalex", "crossref"], citation_count=3)]),
         encoding="utf-8",
     )
 
@@ -221,7 +243,7 @@ def test_accepted_paper_provenance_and_pipeline_note_write(tmp_path, monkeypatch
     text = note.read_text(encoding="utf-8")
     assert "provenance:" in text
     assert 'resolved_via: "doi.org"' in text
-    assert 'corroboration: "single-source"' in text
+    assert 'corroboration: "corroborated"' in text
 
 
 def test_quarantine_cli_list_show_restore_round_trip(tmp_path, monkeypatch, capsys):

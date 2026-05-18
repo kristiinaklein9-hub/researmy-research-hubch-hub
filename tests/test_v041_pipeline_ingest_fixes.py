@@ -46,6 +46,8 @@ def _minimal_paper() -> list[dict]:
             "relevance": "Relevant",
             "slug": "doe2026-paper-one",
             "sub_category": "agents",
+            # citation_count >= 1 required for single-source papers to pass L2b gate
+            "citation_count": 1,
         }
     ]
 

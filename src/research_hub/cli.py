@@ -73,7 +73,7 @@ def _warn_cli_deprecated_alias_from_argv(argv: list[str] | tuple[str, ...]) -> N
     warn_deprecated(
         what,
         replacement=replacement,
-        removed_in="v1.0.0",
+        removed_in="v2.0.0",
         stacklevel=3,
     )
 
@@ -799,7 +799,15 @@ def _clusters_resolve_collision(
         return 0
 
     if new:
-        result = zot.create_collections([{"name": cluster.name, "parentCollection": False}])
+        from research_hub.zotero.client import ensure_parent_collection as _ensure_parent_cli
+        _parent_name_cli = getattr(cfg, "zotero_parent_collection", "research-hub")
+        # zot here is a raw pyzotero client from get_client(); wrap for ensure_parent_collection
+        from types import SimpleNamespace as _SN_cli
+        _dual_cli = _SN_cli(web=zot)
+        _parent_key_cli = _ensure_parent_cli(_dual_cli, _parent_name_cli) if _parent_name_cli else False
+        result = zot.create_collections(
+            [{"name": cluster.name, "parentCollection": _parent_key_cli if _parent_key_cli else False}]
+        )
         successful = (result or {}).get("successful", {}) if isinstance(result, dict) else {}
         first = next(iter(successful.values()), None) if successful else None
         new_key = (first or {}).get("key") or (first or {}).get("data", {}).get("key")
@@ -1402,7 +1410,12 @@ def _paper_enrich_existing(
     items = list_zotero_collection_items(zot, cluster.zotero_collection_key)
     if limit > 0:
         items = items[:limit]
-    plans = plan_enrichment(items)
+    pdfs_dir = cfg.root / "pdfs"
+    plans = plan_enrichment(
+        items,
+        pdfs_dir=pdfs_dir,
+        disable_pdf_fallback=getattr(cfg, "disable_pdf_fallback", False),
+    )
     if not plans:
         print("No enrichment candidates found.")
         return 0
@@ -1746,6 +1759,128 @@ def _zotero_mark_kept(
 
     print("Usage: research-hub zotero mark-kept --all-orphans | --collection KEY | --remove KEY | --list", file=sys.stderr)
     return 2
+
+
+def _zotero_reparent_clusters(*, parent: str, apply: bool) -> int:
+    """Nest existing cluster Zotero collections under a parent ("mother") collection.
+
+    DRY-RUN (default, ``--apply`` not passed): lists each cluster with its
+    current parentCollection and what action would be taken.  The parent
+    collection is NOT created in dry-run mode.
+
+    ``--apply``: ensures the parent exists (creates if missing), then calls
+    ``update_collection`` for any cluster collection not yet nested under it.
+    Already-nested collections are skipped (idempotent).  Never deletes
+    anything.
+    """
+    cfg = get_config()
+    from research_hub.zotero.client import ZoteroDualClient, ensure_parent_collection
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    clusters = [c for c in registry.list() if (c.zotero_collection_key or "").strip()]
+
+    if not clusters:
+        print("No clusters with Zotero collection keys found.")
+        return 0
+
+    if not parent:
+        print("ERROR: --parent is empty; pass a non-empty collection name.", file=sys.stderr)
+        return 2
+
+    if not apply:
+        # Dry-run: resolve parent key only if possible via listing, do NOT create
+        print(f"DRY-RUN: would reparent {len(clusters)} cluster collection(s) under '{parent}'")
+        print(f"{'cluster':<40} {'key':<12} {'current_parent':<20} {'action'}")
+        print("-" * 90)
+        # Best-effort: try to read current parent data without writes
+        try:
+            dual = ZoteroDualClient()
+            web = dual.web
+            # Build map of collection key -> data
+            coll_map: dict[str, dict] = {}
+            start = 0
+            while True:
+                chunk = web.collections(limit=100, start=start)
+                if not chunk:
+                    break
+                for c in chunk:
+                    d = c.get("data", {})
+                    coll_map[d.get("key", "")] = d
+                if len(chunk) < 100:
+                    break
+                start += 100
+            # Find parent key in existing collections
+            parent_key_dr: str | None = next(
+                (
+                    d["key"]
+                    for d in coll_map.values()
+                    if d.get("parentCollection") is False and d.get("name") == parent
+                ),
+                None,
+            )
+            for cluster in clusters:
+                key = (cluster.zotero_collection_key or "").strip()
+                d = coll_map.get(key, {})
+                current_parent = d.get("parentCollection", "?")
+                if parent_key_dr and current_parent == parent_key_dr:
+                    action = "already nested (skip)"
+                elif parent_key_dr is None:
+                    action = f"would create '{parent}' then nest"
+                else:
+                    action = f"would move under {parent_key_dr}"
+                print(f"{cluster.slug:<40} {key:<12} {str(current_parent):<20} {action}")
+        except Exception as exc:
+            print(f"(could not fetch Zotero collections for preview: {exc})")
+            for cluster in clusters:
+                key = (cluster.zotero_collection_key or "").strip()
+                print(f"{cluster.slug:<40} {key:<12} {'?':<20} would reparent")
+        print()
+        print("Re-run with --apply to execute.")
+        return 0
+
+    # --- Apply mode ---
+    dual = ZoteroDualClient()
+    parent_key = ensure_parent_collection(dual, parent)
+    if not parent_key:
+        print(f"ERROR: Could not find or create parent collection '{parent}'.", file=sys.stderr)
+        return 1
+
+    web = dual.web
+    # Build current collection data map
+    coll_map_apply: dict[str, dict] = {}
+    start = 0
+    while True:
+        chunk = web.collections(limit=100, start=start)
+        if not chunk:
+            break
+        for c in chunk:
+            d = c.get("data", {})
+            coll_map_apply[d.get("key", "")] = d
+        if len(chunk) < 100:
+            break
+        start += 100
+
+    moved = 0
+    skipped = 0
+    errors = 0
+    for cluster in clusters:
+        key = (cluster.zotero_collection_key or "").strip()
+        d = coll_map_apply.get(key, {})
+        current_parent = d.get("parentCollection")
+        if current_parent == parent_key:
+            print(f"  [skip] {cluster.slug} ({key}) already nested under {parent_key}")
+            skipped += 1
+            continue
+        try:
+            dual.update_collection(key, parent_key=parent_key)
+            print(f"  [ok]   {cluster.slug} ({key}) reparented under {parent_key}")
+            moved += 1
+        except Exception as exc:
+            print(f"  [err]  {cluster.slug} ({key}): {exc}", file=sys.stderr)
+            errors += 1
+
+    print(f"\nDone: {moved} moved, {skipped} already nested, {errors} error(s).")
+    return 0 if errors == 0 else 1
 
 
 def _zotero_gc(
@@ -3639,6 +3774,7 @@ def _nlm_upload(
     create_if_missing: bool,
     over_cap_strategy: str = "fail",
     shard_size: int = 50,
+    include_suspect_urls: bool = False,
 ) -> int:
     from research_hub.notebooklm.upload import (
         NotebookLMCapacityError,
@@ -3667,6 +3803,7 @@ def _nlm_upload(
             create_if_missing=create_if_missing,
             over_cap_strategy=over_cap_strategy,
             shard_size=shard_size,
+            include_suspect_urls=include_suspect_urls,
         )
     except NotebookLMCapacityError as exc:
         print(str(exc), file=sys.stderr)
@@ -4006,6 +4143,9 @@ def _discover_new(args) -> int:
     exclude_terms = _parse_negative_terms(args.exclude)
     seed_dois = _parse_seed_dois(args.seed_dois, args.seed_dois_file)
     expand_from = tuple(item.strip() for item in args.expand_from.split(",") if item.strip())
+    from research_hub.discover import _DEFAULT_PER_BACKEND_LIMIT_FACTOR as _DEFAULT_FACTOR
+
+    per_backend_factor = args.per_backend_factor if args.per_backend_factor is not None else _DEFAULT_FACTOR
     state, prompt = discover_new(
         cfg,
         args.cluster,
@@ -4023,11 +4163,14 @@ def _discover_new(args) -> int:
         min_confidence=args.min_confidence,
         rank_by=args.rank_by,
         from_variants=args.from_variants,
+        auto_variants=args.auto_variants,
         expand_auto=args.expand_auto,
         expand_from=expand_from,
         expand_hops=args.expand_hops,
+        expand_semantic=args.expand_semantic,
         seed_dois=seed_dois,
         include_existing=args.include_existing,
+        per_backend_factor=per_backend_factor,
     )
     if args.prompt_out:
         Path(args.prompt_out).write_text(prompt, encoding="utf-8")
@@ -4979,6 +5122,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also delete the now-empty Zotero collection container",
     )
+    delete_parser.add_argument(
+        "--purge-zotero-items",
+        action="store_true",
+        default=False,
+        help=(
+            "DESTRUCTIVE: delete each parent item from the cluster's Zotero collection "
+            "(items go to Zotero trash, recoverable until trash is emptied; Zotero "
+            "cascade-deletes child attachments incl. PDFs when the parent is trashed). "
+            "Strictly scoped to this cluster's own collection key -- parent and sibling "
+            "collections are never enumerated or touched. Requires --apply to execute; "
+            "dry-run prints the item list and totals without making any deletions."
+        ),
+    )
     merge_parser = clusters_subparsers.add_parser("merge", help="Merge two clusters")
     merge_parser.add_argument("source", help="Source cluster slug (will be removed)")
     merge_parser.add_argument("--into", required=True, dest="target", help="Target cluster slug")
@@ -5899,6 +6055,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional human note recorded with the kept list",
     )
 
+    reparent_parser = zotero_sub.add_parser(
+        "reparent-clusters",
+        help="Nest existing cluster Zotero collections under a parent ('mother') collection",
+    )
+    reparent_parser.add_argument(
+        "--parent",
+        default=None,
+        metavar="NAME",
+        help="Name of the parent collection (default: cfg.zotero_parent_collection, "
+             "i.e. 'research-hub' unless overridden in config)",
+    )
+    reparent_parser.add_argument(
+        "--apply",
+        action="store_true",
+        default=False,
+        help="Execute the reparenting (default: dry-run only)",
+    )
+
     nlm_parser = subparsers.add_parser("notebooklm", help="NotebookLM operations")
     nlm_sub = nlm_parser.add_subparsers(dest="notebooklm_command", required=True)
     nlm_login = nlm_sub.add_parser("login", help="Interactive one-time Google sign-in")
@@ -5962,6 +6136,82 @@ def build_parser() -> argparse.ArgumentParser:
              "so you can inspect the DOM with F12 DevTools. Press Enter in the "
              "terminal when finished.",
     )
+    nlm_login.add_argument(
+        "--from-browser",
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="BROWSER",
+        choices=[
+            "auto", "arc", "brave", "chrome", "chromium", "edge", "firefox",
+            "ie", "librewolf", "octo", "opera", "opera-gx", "safari",
+            "vivaldi", "zen",
+        ],
+        help=(
+            "Non-interactive login: import Google cookies from an already-logged-in "
+            "browser via rookiepy (no Playwright popup, no terminal ENTER needed). "
+            "Optionally specify a browser: chrome, firefox, edge, brave, arc, "
+            "chromium, safari, vivaldi, zen, librewolf, opera, opera-gx, ie, octo. "
+            "Omit the value (bare --from-browser) for auto-detection. "
+            "Requires: pip install 'research-hub[browser-auth]'. "
+            "Precedence: --import-from > --from-browser > interactive login."
+        ),
+    )
+    nlm_keepalive = nlm_sub.add_parser(
+        "keepalive",
+        help="Rotate and persist NLM session cookies to prevent idle expiry",
+    )
+    nlm_keepalive.add_argument(
+        "--loop",
+        action="store_true",
+        default=False,
+        help="Run continuously, sleeping --interval seconds between calls (for nohup use)",
+    )
+    nlm_keepalive.add_argument(
+        "--interval",
+        type=int,
+        default=21600,
+        metavar="SEC",
+        help=(
+            "Seconds between keepalive calls in --loop mode "
+            "(default: 21600 = 6 h; floor: 3600 = 1 h)"
+        ),
+    )
+    nlm_keepalive.add_argument(
+        "--install-windows-task",
+        action="store_true",
+        default=False,
+        help=(
+            "Build and print the schtasks command that registers a Windows Scheduled Task "
+            "running 'python -m research_hub notebooklm keepalive' every --interval-hours h. "
+            "Without --yes this is a DRY-RUN only (prints command, registers nothing)."
+        ),
+    )
+    nlm_keepalive.add_argument(
+        "--uninstall-windows-task",
+        action="store_true",
+        default=False,
+        help=(
+            "Remove the Windows Scheduled Task registered by --install-windows-task. "
+            "Without --yes this is a DRY-RUN only."
+        ),
+    )
+    nlm_keepalive.add_argument(
+        "--interval-hours",
+        type=int,
+        default=6,
+        metavar="HOURS",
+        help="Hours between task runs when registering the Scheduled Task (default: 6)",
+    )
+    nlm_keepalive.add_argument(
+        "--yes",
+        action="store_true",
+        default=False,
+        help=(
+            "Confirm system mutation for --install-windows-task / --uninstall-windows-task. "
+            "Without this flag those options only print the schtasks command."
+        ),
+    )
     nlm_bundle = nlm_sub.add_parser("bundle", help="Export a drag-drop folder for NotebookLM")
     nlm_bundle.add_argument("--cluster", required=True)
     nlm_bundle.add_argument(
@@ -5986,6 +6236,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=50,
         help="Sources per NotebookLM shard when --over-cap-strategy shard is used",
+    )
+    nlm_upload.add_argument(
+        "--include-suspect-urls",
+        action="store_true",
+        default=False,
+        help=(
+            "Upload URL sources even when the pre-upload quality check flags them as "
+            "likely error pages (default: skip and record in report.errors). "
+            "A warning is still appended to the report."
+        ),
     )
     nlm_shard = nlm_sub.add_parser("shard", help="Split a cluster into NotebookLM source-cap shards")
     nlm_shard.add_argument("--cluster", required=True)
@@ -6335,6 +6595,36 @@ def build_parser() -> argparse.ArgumentParser:
     new_p.add_argument("--limit", type=int, default=50)
     new_p.add_argument("--definition", help="Cluster definition")
     new_p.add_argument("--from-variants", help="Path to a JSON file with query variations from `discover variants`")
+    new_p.add_argument(
+        "--auto-variants",
+        action="store_true",
+        default=True,
+        help="Auto-derive query variations from cluster seed_keywords + definition (default: on; --from-variants takes precedence)",
+    )
+    new_p.add_argument(
+        "--no-auto-variants",
+        dest="auto_variants",
+        action="store_false",
+        help="Disable automatic query-variation derivation",
+    )
+    new_p.add_argument(
+        "--expand-semantic",
+        action="store_true",
+        default=True,
+        help="Expand candidates via S2 recommendations at lower confidence (default: on)",
+    )
+    new_p.add_argument(
+        "--no-expand-semantic",
+        dest="expand_semantic",
+        action="store_false",
+        help="Disable Semantic Scholar recommendations expansion",
+    )
+    new_p.add_argument(
+        "--per-backend-factor",
+        type=int,
+        default=None,
+        help="Per-backend search limit multiplier (default: 4, the module constant)",
+    )
     new_p.add_argument(
         "--expand-auto",
         action="store_true",
@@ -6698,19 +6988,43 @@ def _main_dispatch(args, parser) -> int:
         if args.clusters_command == "unarchive":
             return _clusters_unarchive(args.slug)
         if args.clusters_command == "delete":
-            from research_hub.clusters import cascade_delete_cluster
+            from research_hub.clusters import (
+                cascade_delete_cluster,
+                enumerate_collection_items_for_purge,
+            )
 
             cfg = get_config()
+            purge_items = getattr(args, "purge_zotero_items", False)
             preview = cascade_delete_cluster(
                 cfg,
                 args.slug,
                 apply=False,
                 delete_zotero_collection=args.delete_zotero_collection,
             )
+            print(preview.summary())
+            if purge_items:
+                # Enumerate the Zotero items that WOULD be purged (dry-run always safe)
+                try:
+                    items_to_purge = enumerate_collection_items_for_purge(cfg, args.slug)
+                except Exception as _exc:
+                    items_to_purge = []
+                    print(f"  (could not enumerate Zotero items: {_exc})")
+                if items_to_purge:
+                    print()
+                    print("  Zotero items that would be purged (--purge-zotero-items):")
+                    pdf_total = 0
+                    for it in items_to_purge:
+                        doi_str = f" | DOI:{it['doi']}" if it["doi"] else ""
+                        pdf_str = f" | {it['pdf_count']} PDF attachment(s)"
+                        print(f"    - {it['title']}{doi_str}{pdf_str}")
+                        pdf_total += it["pdf_count"]
+                    print(f"  Total: {len(items_to_purge)} item(s), {pdf_total} PDF attachment(s)")
+                    print("  items go to Zotero trash (recoverable until trash emptied); Zotero cascade-deletes child attachments automatically")
+                else:
+                    print("  (no Zotero items to purge, or collection key not set)")
+            print("")
             if args.apply:
                 if preview.has_data() and not args.force:
-                    print(preview.summary())
-                    print("")
                     print("Cluster is not empty. Re-run with --apply --force.")
                     return 2
                 applied = cascade_delete_cluster(
@@ -6718,11 +7032,10 @@ def _main_dispatch(args, parser) -> int:
                     args.slug,
                     apply=True,
                     delete_zotero_collection=args.delete_zotero_collection,
+                    purge_zotero_items=purge_items,
                 )
                 print(applied.summary())
                 return 0
-            print(preview.summary())
-            print("")
             if preview.has_data():
                 print("Preview only. Re-run with --apply --force to delete this non-empty cluster.")
             else:
@@ -7086,6 +7399,10 @@ def _main_dispatch(args, parser) -> int:
                 show_counts=getattr(args, "show_counts", False),
                 by_pattern=getattr(args, "by_pattern", None),
             )
+        if args.zotero_command == "reparent-clusters":
+            cfg = get_config()
+            parent = args.parent if args.parent is not None else getattr(cfg, "zotero_parent_collection", "research-hub")
+            return _zotero_reparent_clusters(parent=parent, apply=args.apply)
     if args.command == "migrate-yaml":
         return _migrate_yaml(
             assign_cluster=args.assign_cluster,
@@ -7129,6 +7446,8 @@ def _main_dispatch(args, parser) -> int:
 
             cfg = get_config()
             session_dir = default_session_dir(cfg.research_hub_dir)
+            # Precedence: --import-from > --from-browser > interactive (--cdp / default)
+            #
             # v0.70.1: --import-from short-circuits the interactive flow by
             # copying a logged-in session profile from another vault.
             if args.import_from:
@@ -7153,6 +7472,24 @@ def _main_dispatch(args, parser) -> int:
                 )
                 print("Verify with: research-hub notebooklm bundle --cluster <slug>")
                 return 0
+            # v1.0.0: --from-browser uses rookiepy to import cookies from an
+            # already-logged-in browser — no Playwright popup, no terminal ENTER.
+            if args.from_browser is not None:
+                from research_hub.notebooklm.auth import login_from_browser
+                dest_state = default_state_file(cfg.research_hub_dir)
+                browser_arg = None if args.from_browser == "auto" else args.from_browser
+                rc = login_from_browser(dest_state, browser=browser_arg)
+                if rc == 0:
+                    print("[notebooklm login --from-browser] Login successful.")
+                    print("Verify with: research-hub notebooklm keepalive")
+                else:
+                    print(
+                        "[notebooklm login --from-browser] FAILED (exit code "
+                        f"{rc}). If rookiepy is not installed, run:\n"
+                        "  pip install 'research-hub[browser-auth]'",
+                        file=sys.stderr,
+                    )
+                return rc
             if args.cdp:
                 return login_interactive_cdp(
                     session_dir,
@@ -7185,6 +7522,7 @@ def _main_dispatch(args, parser) -> int:
                 args.create_if_missing,
                 over_cap_strategy=args.over_cap_strategy,
                 shard_size=args.shard_size,
+                include_suspect_urls=args.include_suspect_urls,
             )
         if args.notebooklm_command == "shard":
             return _nlm_shard(
@@ -7213,6 +7551,23 @@ def _main_dispatch(args, parser) -> int:
                 headless=args.headless,
                 timeout_sec=args.timeout,
             )
+        if args.notebooklm_command == "keepalive":
+            from research_hub.notebooklm.keepalive import (
+                _keepalive_loop,
+                keepalive_once,
+                run_install_windows_task,
+            )
+            cfg = get_config()
+            if args.install_windows_task or args.uninstall_windows_task:
+                return run_install_windows_task(
+                    args.interval_hours,
+                    dry_run=not args.yes,
+                    uninstall=args.uninstall_windows_task,
+                    cfg=cfg,
+                )
+            if args.loop:
+                return _keepalive_loop(cfg, interval_sec=args.interval)
+            return keepalive_once(cfg)
 
     parser.error(f"Unknown command: {args.command}")
     return 2
@@ -7240,3 +7595,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
         raise
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

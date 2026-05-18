@@ -42,8 +42,10 @@ backup checklist + a historical appendix for very old releases.
   held. A genuinely unresolvable DOI / failed `doi.org` HEAD also
   now quarantines (`doi_unresolved` / `doi_check_unavailable`)
   rather than entering the vault — inspect with `quarantine show`.
-  CLI/MCP renames are non-breaking (old names warn, removed in
-  v1.0.0 — see `docs/stable-api.md`).
+  CLI/MCP renames are non-breaking: old names keep working as
+  warning-emitting wrappers and are retained for the whole 1.x
+  line — removed no earlier than the next major (v2.0.0). See
+  `docs/stable-api.md`.
 
 Older version-specific sections below are kept for anyone upgrading
 from a pre-v0.30 release; most users never need them.

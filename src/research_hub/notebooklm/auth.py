@@ -203,6 +203,51 @@ def import_session(
     return ImportResult(ok=True, files_copied=files_copied, bytes_copied=bytes_copied)
 
 
+def login_from_browser(
+    state_file: Path,
+    *,
+    browser: str | None = None,
+) -> int:
+    """Non-interactive login by importing cookies from an already-logged-in browser.
+
+    Delegates to the upstream ``notebooklm.notebooklm_cli login --browser-cookies``
+    path (which uses rookiepy to extract Google cookies without launching Playwright).
+    Requires ``rookiepy`` to be installed: ``pip install 'research-hub[browser-auth]'``.
+
+    Precedence (in CLI dispatch):
+        --import-from > --from-browser > interactive (--cdp / default)
+
+    Args:
+        state_file: Path where the storage state JSON will be written.
+        browser: Specific browser to read cookies from (e.g. ``"chrome"``,
+            ``"firefox"``, ``"edge"``). Pass ``None`` for auto-detection
+            (rookiepy tries all installed browsers). Do NOT pass ``"auto"`` —
+            that is the CLI-layer sentinel; callers should normalise it to None.
+
+    Returns:
+        The upstream subprocess return code (0 = success, non-zero = failure).
+        On failure the caller should print an actionable hint referencing
+        ``pip install 'research-hub[browser-auth]'``.
+    """
+    state_file = Path(state_file)
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        "-m", "notebooklm.notebooklm_cli",
+        "login",
+        "--storage", str(state_file),
+        "--browser-cookies",
+    ]
+    # Append the specific browser name only when one is requested; bare
+    # --browser-cookies means "auto-detect" to the upstream CLI.
+    if browser is not None:
+        cmd.append(browser)
+    rc = subprocess.run(cmd, check=False).returncode
+    if rc == 0:
+        _tighten_state_file_perms(state_file)
+    return rc
+
+
 def is_session_logged_in(state_file: Path) -> bool:
     """Compatibility helper around ``check_session_health``."""
     return bool(check_session_health(state_file).get("ok"))

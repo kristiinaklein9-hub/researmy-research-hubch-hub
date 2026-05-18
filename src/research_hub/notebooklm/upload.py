@@ -817,7 +817,7 @@ def _upload_cluster_shards(
     shard_cache = cluster_cache.setdefault("shard_uploaded_sources", {})
     report.notebook_name = notebook_name
 
-    client = _make_client(state_file, headless=headless)
+    client = _make_client(state_file, headless=headless, keepalive_sec=600)
     try:
         total = len(chunks) or 1
         for shard_index, chunk in enumerate(chunks, start=1):
@@ -961,6 +961,7 @@ def upload_cluster(
     over_cap_strategy: str = "fail",
     shard_size: int = 50,
     shard_strategy: str = "recent",
+    include_suspect_urls: bool = False,
 ) -> UploadReport:
     """Upload a cluster bundle to NotebookLM, resuming from ``nlm_cache.json``."""
     from research_hub.clusters import ClusterRegistry
@@ -1070,7 +1071,7 @@ def upload_cluster(
 
     state_file = default_state_file(cfg.research_hub_dir)
     retry_count = 0
-    client = _make_client(state_file, headless=headless)
+    client = _make_client(state_file, headless=headless, keepalive_sec=600)
     try:
         handle = (
             _find_or_create_notebook(client, notebook_name)
@@ -1099,6 +1100,43 @@ def upload_cluster(
             action = entry.get("action", "skip")
             if action == "skip":
                 continue
+
+            # Pre-upload URL quality guard: skip known-bad URL sources
+            # (unless the caller opted in with include_suspect_urls=True).
+            url_quality = str(entry.get("url_quality", "") or "")
+            if url_quality == "likely_error_page" and action == "url":
+                key_for_error = str(entry.get("url") or entry.get("doi") or "")
+                if not include_suspect_urls:
+                    report.errors.append(
+                        {
+                            "source": key_for_error,
+                            "error": "pre_upload_likely_error_page",
+                            "url_quality_reason": str(entry.get("url_quality_reason", "") or ""),
+                            "doi": str(entry.get("doi", "") or ""),
+                            "title": str(entry.get("title", "") or ""),
+                        }
+                    )
+                    _log_jsonl(
+                        log_path,
+                        {
+                            "kind": "upload_skip_error_page",
+                            "key": key_for_error,
+                            "url_quality_reason": str(entry.get("url_quality_reason", "") or ""),
+                        },
+                    )
+                    continue
+                else:
+                    # include_suspect_urls=True: upload anyway, still warn
+                    report.errors.append(
+                        {
+                            "source": key_for_error,
+                            "error": "pre_upload_likely_error_page_warning",
+                            "url_quality_reason": str(entry.get("url_quality_reason", "") or ""),
+                            "doi": str(entry.get("doi", "") or ""),
+                            "title": str(entry.get("title", "") or ""),
+                        }
+                    )
+
             if uploads >= rate_limit_cap:
                 raise NotebookLMCapacityError(_capacity_error_message(cluster, source_count, rate_limit_cap))
 
@@ -1218,7 +1256,7 @@ def download_briefing_for_cluster(
     cluster_cache = cache.setdefault(cluster.slug, {})
 
     state_file = default_state_file(cfg.research_hub_dir)
-    client = _make_client(state_file, headless=headless)
+    client = _make_client(state_file, headless=headless, keepalive_sec=600)
     try:
         handle = _resolve_notebook_handle(client, cluster, cluster_cache, create_if_missing=False)
         _log_jsonl(log_path, {"kind": "download_navigate", "notebook_url": handle.url})
@@ -1312,7 +1350,7 @@ def download_slide_deck_for_cluster(
     out_path = artifacts_dir / f"slide-deck-{timestamp}.{suffix}"
 
     state_file = default_state_file(cfg.research_hub_dir)
-    client = _make_client(state_file, headless=headless)
+    client = _make_client(state_file, headless=headless, keepalive_sec=600)
     try:
         handle = _resolve_notebook_handle(client, cluster, cluster_cache, create_if_missing=False)
         _log_jsonl(log_path, {"kind": "download_navigate", "notebook_url": handle.url})
@@ -1383,7 +1421,7 @@ def generate_artifact(
     cache = _load_nlm_cache(cache_path)
     cluster_cache = cache.setdefault(cluster.slug, {})
     state_file = default_state_file(cfg.research_hub_dir)
-    client = _make_client(state_file, headless=headless)
+    client = _make_client(state_file, headless=headless, keepalive_sec=600)
     try:
         handle = _resolve_notebook_handle(client, cluster, cluster_cache, create_if_missing=True)
         _set_active_notebook(client, handle.notebook_id)
@@ -1457,9 +1495,13 @@ def _call_trigger(method, notebook_id: str):
         return method()
 
 
-def _make_client(state_file: Path, *, headless: bool):
+def _make_client(state_file: Path, *, headless: bool, keepalive_sec: int | None = None):
+    # keepalive_sec=600 for long upload/download sessions so the upstream
+    # background loop keeps __Secure-1PSIDTS fresh mid-flight.  Default None
+    # for trivial one-RPC callers (health probe, notebooks.list) so they stay
+    # fast.  The upstream floor is 60 s; 600 is safely above it.
     try:
-        return NotebookLMClient(state_file, headless=headless)
+        return NotebookLMClient(state_file, headless=headless, keepalive_sec=keepalive_sec)
     except TypeError:
         legacy_page = type(
             "_LegacyNotebookLMPage",

@@ -170,3 +170,59 @@ class SemanticScholarClient:
             return SearchResult.from_s2_json(response.json())
         except ValueError:
             return None
+
+    def get_recommendations(
+        self,
+        paper_id: str,
+        limit: int = 20,
+    ) -> list[SearchResult]:
+        """Fetch paper recommendations for a given Semantic Scholar paper ID.
+
+        Uses the free S2 recommendations/v1 endpoint.  The ``paper_id`` may be
+        a Semantic Scholar corpus ID, a DOI (``DOI:<doi>``), or an arXiv ID
+        (``arXiv:<arxiv_id>``).  Returns an empty list on any network or API
+        failure (never raises).
+        """
+        self._throttle()
+        url = (
+            f"https://api.semanticscholar.org/recommendations/v1"
+            f"/papers/forpaper/{paper_id}"
+        )
+        params: dict[str, str | int] = {
+            "limit": min(limit, 500),
+            "fields": DEFAULT_FIELDS,
+        }
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                timeout=self.timeout,
+                headers=self._headers(),
+            )
+        except requests.exceptions.RequestException as exc:
+            logger.warning("S2 recommendations network error for %s: %s", paper_id, exc)
+            return []
+        if response.status_code == 429:
+            logger.warning(
+                "semantic-scholar recommendations rate-limited (HTTP 429) for %s", paper_id
+            )
+            time.sleep(self.delay * 2)
+            return []
+        if response.status_code != 200:
+            logger.debug(
+                "S2 recommendations non-200 (%s) for %s", response.status_code, paper_id
+            )
+            return []
+        try:
+            data = response.json()
+        except ValueError as exc:
+            logger.warning("S2 recommendations invalid JSON for %s: %s", paper_id, exc)
+            return []
+        items = data.get("recommendedPapers", [])
+        results = []
+        for item in items:
+            try:
+                results.append(SearchResult.from_s2_json(item))
+            except Exception:
+                pass
+        return results

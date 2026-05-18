@@ -106,7 +106,9 @@ class HubConfig:
         config_zotero_collections: dict[str, dict] = {}
         config_persona: str | None = None
         config_no_zotero: bool = False
+        config_disable_pdf_fallback: bool = False
         config_unpaywall_email: str | None = None
+        config_zotero_parent_collection: str | None = None
         zotero: dict = {}
 
         config_path = _resolve_config_path()
@@ -125,6 +127,7 @@ class HubConfig:
             config_clusters_file = data.get("clusters_file")
             config_persona = data.get("persona")
             config_no_zotero = bool(data.get("no_zotero", False))
+            config_disable_pdf_fallback = bool(data.get("disable_pdf_fallback", False))
             zotero = data.get("zotero", {})
             config_unpaywall_email = data.get("unpaywall_email")
             config_zotero_api_key = zotero.get("api_key")
@@ -134,6 +137,10 @@ class HubConfig:
             config_zotero_collections = zotero.get("collections", {})
             if not config_unpaywall_email:
                 config_unpaywall_email = zotero.get("unpaywall_email")
+            # zotero.parent_collection (nested) or top-level zotero_parent_collection
+            config_zotero_parent_collection = zotero.get("parent_collection") or data.get(
+                "zotero_parent_collection"
+            )
 
         raw_root = config_root or os.environ.get("RESEARCH_HUB_ROOT")
         raw_path = config_raw or os.environ.get("RESEARCH_HUB_RAW")
@@ -179,9 +186,22 @@ class HubConfig:
             config_zotero_collections, dict
         ) else {}
         self.zotero = zotero if isinstance(zotero, dict) else {}
+        # zotero_parent_collection: name of the "mother" collection under which
+        # new cluster collections are nested.  Default "research-hub" (works out
+        # of the box); empty string / None disables nesting (legacy top-level).
+        _env_parent = os.environ.get("RESEARCH_HUB_ZOTERO_PARENT_COLLECTION")
+        if _env_parent is not None:
+            self.zotero_parent_collection: str = _env_parent
+        elif config_zotero_parent_collection is not None:
+            self.zotero_parent_collection = str(config_zotero_parent_collection)
+        else:
+            self.zotero_parent_collection = "research-hub"
         self.persona = str(config_persona or os.environ.get("RESEARCH_HUB_PERSONA", "")).strip().lower()
         self.no_zotero = config_no_zotero or (
             os.environ.get("RESEARCH_HUB_NO_ZOTERO", "").lower() in {"1", "true", "yes"}
+        )
+        self.disable_pdf_fallback = config_disable_pdf_fallback or (
+            os.environ.get("RESEARCH_HUB_DISABLE_PDF_FALLBACK", "").lower() in {"1", "true", "yes"}
         )
         self.unpaywall_email = str(
             config_unpaywall_email or os.environ.get("UNPAYWALL_EMAIL", "")

@@ -583,3 +583,63 @@ def test_init_chmods_research_hub_dir_to_700(tmp_path, monkeypatch):
 
     assert cfg.research_hub_dir == vault_root / ".research_hub"
     assert os.stat(cfg.research_hub_dir).st_mode & 0o777 == 0o700
+
+
+# --- Windows ACL deny-all regression (v1.0.0 incident) -----------------
+# The pre-v1.0 helper ran `icacls <p> /inheritance:r /grant:r
+# <bare-user>:(F)`. On the live box this bricked the whole vault: the
+# directory got a NON-inheritable ACE so `clusters.yaml` (written into
+# it afterwards) was born with an EMPTY DACL — deny-all, unreadable
+# even by the owner — and icacls exited 0 so the rc-only guard never
+# fired. These lock in the three fixes: mandatory arg order, inheritable
+# directory ACE, and empty-DACL detection driving a fail-open rollback.
+
+
+def test_acl_grant_argv_order_is_inheritance_before_grant():
+    from research_hub.security import _acl_grant_argv
+
+    argv = _acl_grant_argv(Path("X"), "DOM\\u", is_dir=False)
+    # icacls rejects /inheritance:r if it does not precede /grant.
+    assert argv.index("/inheritance:r") < argv.index("/grant:r")
+
+
+def test_acl_grant_argv_directory_is_inheritable():
+    from research_hub.security import _acl_grant_argv
+
+    file_argv = _acl_grant_argv(Path("f"), "DOM\\u", is_dir=False)
+    dir_argv = _acl_grant_argv(Path("d"), "DOM\\u", is_dir=True)
+    # File: plain Full. Directory: (OI)(CI) so children born inside it
+    # inherit owner access instead of an empty DACL.
+    assert file_argv[-1] == "DOM\\u:(F)"
+    assert dir_argv[-1] == "DOM\\u:(OI)(CI)(F)"
+
+
+def test_acl_reset_argv_recurses_only_for_directories():
+    from research_hub.security import _acl_reset_argv
+
+    assert "/T" not in _acl_reset_argv(Path("f"), is_dir=False)
+    assert _acl_reset_argv(Path("f"), is_dir=False)[-1] == "/reset"
+    assert "/T" in _acl_reset_argv(Path("d"), is_dir=True)
+
+
+def test_acl_grant_present_detects_empty_dacl_deny_all():
+    from research_hub.security import _acl_grant_present
+
+    # Real incident shape: sensitive files live under C:\Users\<name>\,
+    # so the username is ALWAYS in the path icacls echoes. A bricked
+    # file has ZERO ACEs and MUST still be detected as "not granted" —
+    # a loose `name in stdout` would false-match the path and defeat
+    # the fail-open rollback (the P0 that bricked the vault).
+    empty_listing = "C:\\Users\\wenyu\\knowledge-base\\.research_hub\\clusters.yaml \n"
+    assert _acl_grant_present(empty_listing, "PC-HOST\\wenyu") is False
+    # Healthy: a real owner ACE (the `name:(` token) is present.
+    ok_listing = "C:\\Users\\wenyu\\config.json PC-HOST\\wenyu:(F)\n"
+    assert _acl_grant_present(ok_listing, "PC-HOST\\wenyu") is True
+
+
+def test_acl_is_dir_infers_from_mode_when_path_absent(tmp_path):
+    from research_hub.security import _acl_is_dir
+
+    missing = tmp_path / "nope"
+    assert _acl_is_dir(missing, 0o700) is True   # dir intent
+    assert _acl_is_dir(missing, 0o600) is False  # file intent

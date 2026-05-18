@@ -12,14 +12,163 @@
 
 ## [Unreleased]
 
-_Both v1.0 blockers (W6 API-freeze + Phase A authenticity gate) are
-landed. v1.0.0 follows a ≥1-week bake period on v0.95.0rc2. Phase C
-(below) lands in this patch-stream BEFORE the 1.0.0 tag. Phase B
-(UI 80/20 — ⌘K palette + mobile) and Phase D (Zotero metadata
-correctness) are post-1.0 (v1.1)._
+_Post-1.0. Phase B (UI 80/20 — ⌘K command palette + mobile
+breakpoints + `_HOME` wayfinding) and Phase D (Zotero metadata
+correctness — type-aware `itemType` mapping + `fit/<bucket>` tag +
+provenance child-note parity) are staged on
+`feature/v1.1-ui-80-20` for **v1.1**, to merge AFTER v1.0.0 ships.
+UI scope is capped here by decision: the dashboard stays a thin
+status-mirror + palette + onboarding demo; no 3-pane / citation-
+graph rebuild (link out to the real tools instead)._
+
+## v1.0.0 (PENDING — tag on/after 2026-05-24, post ≥1-week v0.95.0rc2 bake)
+
+> **Not yet released — staged on `release-prep/v1.0.0`.** The cut
+> replaces this header with the real date, runs the mechanical
+> release gate on `master`, then `git tag v1.0.0` → push → watch CI.
+> v1.0.0 is the **promotion of the v0.95.0rc2 line** (W6 API-freeze
+> + Phase A authenticity gate) after a ≥1-week bake, **plus** the
+> Phase C fail-closed first-run guard and README accuracy.
+> **No new breaking change beyond rc2's L4** (already in UPGRADE.md).
+
+**The v1.0 guarantee — no fabricated references.** Every paper that
+enters the vault resolved to a real identifier (DOI / arXiv /
+PMID), passed integrity and relevance checks, or was **quarantined
+with a recorded reason** and never written. Mechanical and
+fail-closed (Phase A, L0–L5; `test_authenticity_l5_invariant.py`
+fails CI if any LLM symbol enters the bibliographic path).
+Deliberately **not** an absolute "zero hallucination" claim — the
+enforceable promise is *resolve + integrity + relevance, or
+quarantine*. Full statement, layer table, and triage:
+[docs/authenticity.md](docs/authenticity.md).
 
 ### Added
 
+- **`notebooklm keepalive` — durable idle keepalive.**
+  New `src/research_hub/notebooklm/keepalive.py` module + `notebooklm keepalive`
+  CLI subcommand. Rotates and persists the stored session cookies
+  (`notebooklm.auth._rotate_cookies` → `save_cookies_to_storage`) so a single
+  Google login survives idle periods (Google revokes idle sessions in ~12–24 h
+  without this). Default one-shot invocation is safe for any scheduler; `--loop
+  --interval <sec>` (floor 3600 s, default 21600 s = 6 h) for long-running
+  `nohup` supervision. Windows Scheduled Task registration via
+  `--install-windows-task [--interval-hours N]` is available but **opt-in** and
+  gated behind an explicit `--yes` flag; without `--yes` the exact `schtasks`
+  command is only printed (dry-run, nothing registered — no wrapper file written
+  either). `--uninstall-windows-task` removes the task. The task command is
+  resolved at install time: if the `research-hub` console-script is on PATH
+  (pip-installed), it is used directly; otherwise a `nlm_keepalive.cmd` wrapper
+  is generated in `.research_hub/` that sets `PYTHONPATH=src` and `cd`s to the
+  repo root before invoking `python -m research_hub notebooklm keepalive` — so
+  source-checkout installs work correctly from Task Scheduler. No elevated
+  privileges (`/RL HIGHEST`) are requested; the task runs as the current user.
+  Honest scope: keepalive extends session lifetime by preventing idle revocation;
+  Google's own long-lived cookie hard-expiry (~1 year) or a security event can
+  still terminate the session. `doctor nlm_session` remains the backstop.
+
+- **`notebooklm login --from-browser [BROWSER]` — non-interactive browser-cookie login.**
+  New `login_from_browser` function in `src/research_hub/notebooklm/auth.py`.
+  Imports the user's already-logged-in normal-browser Google session via the
+  upstream `notebooklm-py --browser-cookies` (rookiepy) path: no Playwright
+  popup, no terminal ENTER — one short command instead of the browser+ENTER
+  dance. Requires `pip install 'research-hub[browser-auth]'` (new optional extra
+  `browser-auth = ["rookiepy>=0.1.0"]`). Supported browsers: auto-detect (bare
+  `--from-browser`), chrome, firefox, edge, brave, arc, chromium, safari,
+  vivaldi, zen, librewolf, opera, opera-gx, ie, octo. Precedence: `--import-from`
+  > `--from-browser` > interactive login.
+
+- **`[browser-auth]` optional extra** (`pyproject.toml`).
+  Declares `rookiepy>=0.1.0` as an installable extra consistent with the project's
+  other optional dependency pattern. Referenced in `--from-browser` help text and
+  error messages.
+
+- **`clusters delete --purge-zotero-items` (destructive flag).** Moves all
+  parent items in the cluster's Zotero collection to the Zotero trash
+  (recoverable until the user empties trash) and then deletes the now-empty
+  collection. Dry-run by default; pass `--apply` to execute. Zotero
+  cascade-deletes child attachments (incl. PDFs) when the parent item is
+  trashed — child keys are NOT submitted explicitly (avoids false 404 failures
+  in the summary). Scoping is structural: all enumeration and deletion operate
+  strictly on the cluster's own `zotero_collection_key`; an empty key is a
+  no-op; parent and sibling collections are never enumerated or touched. A
+  defense-in-depth guard refuses the operation if the cluster's own collection
+  key matches the configured `zotero_parent_collection` (resolved read-only).
+- **`clusters archive` (hub/_archived move).** `ClusterRegistry.archive(slug)`
+  moves `hub/<slug>/` to `hub/_archived/<slug>/` and sets `status: archived`.
+  `_HOME.md` and all MOC pages automatically omit archived clusters. Idempotent.
+  `clusters unarchive` reverses the move.
+
+- **Configurable Zotero parent ("mother") collection (`zotero_parent_collection`,
+  default `"research-hub"`).** New cluster Zotero collections are now
+  automatically nested under a single top-level parent collection instead of
+  being created at the library root.  Configure via `zotero.parent_collection`
+  (nested) or top-level `zotero_parent_collection` in `config.json`, or via the
+  `RESEARCH_HUB_ZOTERO_PARENT_COLLECTION` env var.  Set to empty string or
+  `""` to disable nesting and preserve legacy top-level behavior (backward
+  compatible).  The parent collection is created automatically on first use
+  (idempotent).  New helper `ensure_parent_collection(client, name)` in
+  `research_hub.zotero.client` is used by all three cluster-collection creation
+  paths (`clusters.py`, `auto.py`, `cli.py clusters rebind --new`).
+
+- **`research-hub zotero reparent-clusters`** — one-shot command to migrate
+  existing top-level cluster collections under the parent collection.
+  Dry-run by default (shows cluster slug, Zotero key, current parent, and
+  proposed action); pass `--apply` to execute.  `--parent <name>` overrides
+  the config default.  Idempotent: already-nested collections are skipped and
+  reported.  Never deletes anything.
+
+- **Zero-cost recall improvements (Phase C): offline auto query-variations,
+  S2 recommendations expansion, raised per-backend factor.**
+  Three independent recall levers, all zero extra API cost and precision-safe
+  (merge-dedup + fail-closed fit-check backstop unchanged):
+
+  - **C1 — Auto query-variations (`--auto-variants`, default on).** When
+    `--from-variants` is not supplied, `discover new` now automatically derives
+    2–3 short query variations offline from the cluster's `seed_keywords`
+    (clusters.yaml) + key terms extracted from the cluster's `00_overview.md`
+    definition section. Variations are fed through the existing
+    `apply_variations()` path so the proven multi-variation merge and
+    multi-match confidence boost are reused. `--from-variants` always takes
+    precedence and suppresses auto-variants. No definition → seed-only;
+    no seeds → no auto-variants. Never crashes. Disable with `--no-auto-variants`.
+
+  - **C2 — Semantic Scholar recommendations expansion (`--expand-semantic`,
+    default on).** After initial search, the top-N (≤3) candidates with a
+    resolvable DOI or arXiv ID are submitted to the S2
+    `recommendations/v1/papers/forpaper/{paperId}` endpoint (free tier).
+    Up to 20 results per seed are merged at a fixed base confidence of 0.4 so
+    user-query hits always outrank recommendation-only entries. Network failure
+    or empty response → no-op, never crashes. Disable with `--no-expand-semantic`.
+    New method `SemanticScholarClient.get_recommendations()` in
+    `research_hub.search.semantic_scholar`.
+
+  - **C3 — Per-backend search limit raised 3 → 4 (`--per-backend-factor`).**
+    `_DEFAULT_PER_BACKEND_LIMIT_FACTOR` raised from 3 to 4. The floor constant
+    (`_DEFAULT_PER_BACKEND_LIMIT_FLOOR = 40`) is unchanged; the factor is
+    relevant only when `limit × 4 > 40` (i.e. limit > 10, which is always true
+    at the default limit=50). Pass `--per-backend-factor N` to override at
+    runtime.
+
+- **PDF-text abstract fallback (last-resort, fail-safe).** When all four
+  online metadata sources (Crossref, Unpaywall, OpenAlex, Semantic Scholar)
+  return no substantive abstract AND a local PDF is present in the vault's
+  `pdfs/` directory, `recover_abstract` now extracts the abstract from the
+  PDF text as a final link in the chain. The extraction heuristic locates
+  an "Abstract" section header, captures until the next section stop, and
+  falls back to the second double-newline-separated paragraph. Extracted
+  text is rejected if shorter than 200 chars, matches a boilerplate pattern
+  (copyright, DOI stamp, etc.), or appears column-interleaved/garbled
+  (space ratio < 0.08 or > 30% single-char "words") — the extractor returns
+  nothing rather than writing garbage (`failed_no_abstract` is preserved).
+  Provenance is written as `abstract_source: local-pdf` via the existing
+  `recovered.source` write-back. Opt-out: set `disable_pdf_fallback: true`
+  in `config.json` or `RESEARCH_HUB_DISABLE_PDF_FALLBACK=1`. Wired at the
+  `paper enrich-existing` re-run path (`zotero/enrich.py`) and the
+  `discover_continue` ingest path (`discover.py`). **Scope note:** this
+  feature does NOT retroactively fix papers whose PDFs are not present; for
+  paywalled papers, place PDFs in `~/knowledge-base/pdfs/` named by DOI
+  then run `paper enrich-existing <cluster> --apply` followed by
+  `paper summarize --pending --cluster <cluster> --cli claude`.
 - **Fail-closed first-run guard (Phase C).** With relevance
   checking on (the default) and no `claude`/`codex`/`gemini` judge
   on PATH, `research-hub auto` now exits BEFORE the slow
@@ -34,6 +183,150 @@ correctness) are post-1.0 (v1.1)._
   list|show|restore` recovery commands, so a short/empty vault is
   auditable instead of a mystery. Reuses Phase A `list_quarantine`
   (no fresh directory scan).
+- `docs/authenticity.md` — the durable v1.0 guarantee statement,
+  the L0–L5 layer table, and quarantine triage (the full prose the
+  Phase 5 plan called for; README + CHANGELOG link to it).
+
+### Changed
+
+- **`clusters delete --apply` now removes all local data for the cluster.**
+  In addition to unbinding notes from the registry, `--apply` now also removes
+  `hub/<slug>/` (overview, crystals, memory.json, briefs), all
+  `.research_hub/bundles/<slug>-*` directories, `.research_hub/artifacts/<slug>/`,
+  and prunes all lines for the cluster from `.research_hub/manifest.jsonl`.
+  The cluster's `raw/<slug>/` folder is soft-deleted (moved to
+  `raw/_deleted_<slug>/`) rather than hard-deleted. `_HOME.md` and MOC pages
+  automatically skip archived (`status: archived`) clusters on next regeneration.
+- **Zotero item safety guard is structural, not key-specific.** The previous
+  hardcoded guard (`_PROTECTED_COLLECTION_KEY = "EIASV65T"`) is removed in
+  favor of a structural guarantee: all Zotero operations are strictly scoped to
+  the cluster's own `zotero_collection_key` (an empty key ⇒ no-op). A
+  defense-in-depth parent-collection guard resolves the configured parent key at
+  runtime (read-only) instead of relying on a hardcoded value.
+
+- **API surface frozen for 1.0.** `docs/stable-api.md` (the
+  contract since v0.91.0) is promoted to the v1.x stability
+  statement.
+- **W6 deprecated aliases retained through all of 1.x (schedule
+  correction — strictly more lenient, NOT breaking).** The W6
+  wrappers carried a placeholder `removed_in="v1.0.0"`. Per
+  standard semver, deprecated surface is not removed inside a
+  major, so the marker is corrected to the next major (`v2.0.0`)
+  consistently across `cli.py`, `mcp_server.py`, `_deprecation.py`,
+  `docs/stable-api.md`, `UPGRADE.md`, and the W6 tests. Every old
+  CLI alias / MCP tool keeps working as a warning-emitting wrapper
+  for the entire 1.x line; **nothing is removed at 1.0.0** — the
+  only change is the advertised removal version in the warning
+  text (v1.0.0 → v2.0.0). No code behaviour change; this widens,
+  never narrows, what keeps working — hence no BREAKING flag.
+- README + README.zh-TW now document the authenticity gate, the
+  fail-closed relevance-judge requirement (with the `--no-fit-check`
+  opt-out), and the `quarantine list|show|restore` recovery path
+  (commit `168c761`) — a judge-less fresh clone is no longer misled
+  into a silent empty vault.
+
+### Fixed
+
+- **Pre-upload URL error-page guard (hybrid metadata + probe).** `bundle`
+  now calls a new `classify_url_source()` classifier before setting
+  `action="url"` on each source. The classifier uses a 3-tier approach: (1)
+  `summarize_status: failed_no_abstract` in the note frontmatter →
+  `likely_error_page` immediately (no network); (2) open-access hosts
+  (`arxiv.org`, PubMed, Zenodo, etc.) → `ok` immediately (no network); (3)
+  ambiguous publisher domains → active HTTP GET with a browser User-Agent,
+  body classified by Cloudflare-403, T&F cookie-wall, Elsevier JS-redirect,
+  or generic short-body signals. Probe errors/timeouts yield quality="unknown"
+  (fail-safe — never skipped). `url_quality`, `url_quality_reason`, and
+  `url_quality_signal` are written into each manifest entry. During `upload`,
+  entries with `url_quality="likely_error_page"` and `action="url"` are
+  **skipped and recorded** in `report.errors` with type
+  `pre_upload_likely_error_page` (visible in the run report, not silent).
+  Pass `--include-suspect-urls` to upload them anyway (a warning is still
+  appended). When a local PDF exists for a `likely_error_page` URL source,
+  `bundle` auto-upgrades the entry to `action="pdf"` (composes with the
+  existing PDF-abstract fallback). The existing post-upload
+  `validate_uploaded_sources()` remains as a secondary net.
+
+- **Windows ACL hardening could brick the entire vault (deny-all
+  regression in the v0.91.0 W8 work).** `_restrict_windows_acl`
+  ran `icacls <p> /inheritance:r /grant:r <bare-user>:(F)`. Two
+  latent faults combined on a live box: (1) directories got a
+  **non-inheritable** owner ACE, so files written into
+  `.research_hub/` afterwards (`clusters.yaml`, `nlm_cache.json`,
+  NLM `state.json`) were born with an **empty DACL — deny-all,
+  unreadable even by the owner**; (2) when the bare principal
+  failed to resolve under an unusual process token (observed in
+  the Playwright/Chromium subprocess of the NLM-login flow) the
+  grant silently no-opped while `/inheritance:r` still stripped
+  everything. icacls **exits 0** in both cases, so the old
+  return-code-only guard never fired and every subsequent CLI
+  command failed silently (`doctor` exited 0 with no output
+  because `ClusterRegistry(clusters.yaml)` raised `PermissionError`
+  before any print). The helper is now **fail-open, not
+  fail-closed**: directories get an inheritable `(OI)(CI)(F)`
+  owner ACE; after applying, the resulting DACL is **verified** to
+  still grant the current user, and if not (or icacls
+  failed/raised) the path is rolled back to inherited ACEs via
+  `icacls /reset` so the owner is never locked out, with a single
+  stderr warning. icacls arg order (`/inheritance:r` strictly
+  before `/grant`) is preserved — reversing it makes icacls reject
+  `/inheritance:r` as an invalid parameter. Net worst case is now
+  "secrets not OS-hardened + one warning", never "tool bricked".
+  Pure-helper regression coverage added in `test_v030_security.py`.
+- **NLM keepalive now wired: a single login survives long uploads.**
+  `_make_client()` now passes `keepalive=600` to the upstream
+  `NotebookLMClient.from_storage()` for all upload/download paths
+  (`upload_cluster`, `download_briefing_for_cluster`,
+  `download_slide_deck_for_cluster`, `generate_artifact`). The
+  background `_keepalive_loop` pokes `accounts.google.com/RotateCookies`
+  every 600 s (clamped to the upstream 60 s floor), eliciting
+  `__Secure-1PSIDTS` rotation so multi-shard uploads no longer drop
+  mid-flight when Google rotates short-lived tokens. One-RPC fast paths
+  (health probe, `notebooks.list`) keep `keepalive=None` so `doctor`
+  stays fast. Between-run cookie rotation is now **persisted reliably,
+  race-free**: the old research-hub `_save_state()` in `close()` was
+  redundant — the upstream `ClientCore.close()` already persists the
+  live jar on ALL exit paths (including exceptions) via a
+  `threading.Lock`-serialized `save_cookies()` call. Removing the
+  duplicate eliminates the race where an older in-flight keepalive save
+  could clobber freshly-rotated tokens written by `_save_state()`.
+  Net guarantee: every CLI invocation persists whatever cookies Google
+  rotated during that run, exactly once, race-free. The `state.json`
+  permission re-hardening the old `_save_state()` also performed
+  (G3 P1 #2) is preserved by an explicit `_tighten_state_file_perms()`
+  call AFTER the authoritative upstream on-close write, so cookie
+  rotation cannot silently relax the Google-auth-cookie file back to
+  0644. Note: Google can still eventually expire the underlying
+  `SID`/`PSID` cookies (typical lifetime 1–2 years); `doctor` will
+  `WARN` and prompt re-login in that case.
+- **`doctor` reported a false `[OK] nlm_session` for a server-side
+  dead NotebookLM session.** The check tested only
+  `state.json` existence + non-zero size, so an expired Google
+  session showed healthy in `doctor` while every real NLM
+  operation failed at the preflight probe — the operator had no
+  way to learn the session was dead short of attempting an upload.
+  The file-present branch now calls the same already-proven
+  `check_session_health()` probe the CLI preflight uses: live →
+  `OK`; Google-rejected (auth) → `WARN` with a
+  `research-hub notebooklm login` remedy; probe could not complete
+  (offline / timeout / unexpected) → `WARN "liveness unverified"`
+  with NO remedy, so an offline `doctor` run is not misled into
+  claiming the session is dead. File-missing/empty, the outer
+  "Could not check" guard, and the no-config branch are unchanged.
+  3 regression tests added in `test_doctor.py`. Full auto-Google
+  re-login is out of scope (Google 2FA / bot-detection makes
+  headless login infeasible); this makes the *detection* honest.
+
+### Security
+
+- The fail-open rollback above is a deliberate, documented
+  trade-off: on a Windows host where user-only ACL hardening
+  cannot be verified, sensitive files (`config.json` Zotero key,
+  `.secret_box.key`, NLM cookie `state.json`) fall back to
+  inherited ACLs and the operator is warned once on stderr — a
+  research vault that keeps working beats one bricked by its own
+  hardening. The `RESEARCH_HUB_SKIP_ACL_HARDENING=1` escape hatch
+  is unchanged.
 
 ## v0.95.0rc2 (2026-05-17) — v1.0 blockers cleared (RC2)
 

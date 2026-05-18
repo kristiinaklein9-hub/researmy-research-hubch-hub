@@ -22,7 +22,7 @@ ACCEPTED_FILENAME = "accepted.json"
 PAPERS_INPUT_FILENAME = "papers_input.json"
 
 _DEFAULT_LIMIT = 50
-_DEFAULT_PER_BACKEND_LIMIT_FACTOR = 3
+_DEFAULT_PER_BACKEND_LIMIT_FACTOR = 4
 _DEFAULT_PER_BACKEND_LIMIT_FLOOR = 40
 
 
@@ -159,6 +159,75 @@ def _coerce_variations(variations: list[QueryVariation | dict] | None) -> list[Q
     return out
 
 
+def _derive_auto_variants(
+    cfg,
+    cluster_slug: str,
+    seed_keywords: list[str],
+) -> list[QueryVariation]:
+    """Derive 2-3 offline query variations from seed_keywords + cluster definition.
+
+    C1: deterministic, no LLM, no network.  Strategy:
+    - Variation 1: join all seed_keywords (up to 5) into a single phrase.
+    - Variation 2: definition-term subset — pick up to 4 key terms from the
+      cluster overview/definition not already present in the seed keywords.
+    - Variation 3: combination — first 2 seed keywords + top 2 new def terms.
+
+    Returns 0–3 QueryVariation objects.  Never crashes: missing overview/
+    definition just skips the definition-derived slots.
+    """
+    from research_hub.fit_check import _extract_key_terms, _read_definition_from_overview
+
+    # Filter out empty/whitespace seeds
+    clean_seeds = [kw.strip() for kw in (seed_keywords or []) if kw.strip()]
+
+    variations: list[QueryVariation] = []
+
+    # Variation 1: seed phrase (≤5 seeds joined)
+    seed_phrase = clean_seeds[:5]
+    if seed_phrase:
+        variations.append(
+            QueryVariation(
+                query=" ".join(seed_phrase),
+                rationale="auto: seed_keywords joined",
+            )
+        )
+
+    # Extract definition key terms (offline read of overview)
+    def_terms: list[str] = []
+    try:
+        definition = _read_definition_from_overview(cfg, cluster_slug)
+        if definition:
+            seed_set = {kw.lower() for kw in clean_seeds}
+            for term in _extract_key_terms(definition):
+                if term.lower() not in seed_set and term.lower() not in {t.lower() for t in def_terms}:
+                    def_terms.append(term)
+                    if len(def_terms) >= 4:
+                        break
+    except Exception:
+        pass  # no overview file or parse error — graceful no-op
+
+    # Variation 2: top 4 definition terms only
+    if def_terms:
+        variations.append(
+            QueryVariation(
+                query=" ".join(def_terms[:4]),
+                rationale="auto: top definition key terms",
+            )
+        )
+
+    # Variation 3: combo (2 seeds + 2 def terms), only if both sources available
+    combo_parts = clean_seeds[:2] + def_terms[:2]
+    if len(combo_parts) >= 3 and len(variations) >= 2:
+        variations.append(
+            QueryVariation(
+                query=" ".join(combo_parts[:4]),
+                rationale="auto: seed + definition combo",
+            )
+        )
+
+    return variations[:3]
+
+
 def apply_variations(
     cfg,
     cluster_slug: str,
@@ -173,6 +242,7 @@ def apply_variations(
     exclude_terms: tuple[str, ...] = (),
     min_confidence: float = 0.0,
     rank_by: str = "smart",
+    per_backend_factor: int = _DEFAULT_PER_BACKEND_LIMIT_FACTOR,
 ) -> list[dict]:
     """Run search for each variation, merge by DOI, add _discover_meta."""
     from research_hub.search import search_papers
@@ -182,7 +252,7 @@ def apply_variations(
     per_variation = {}
     base_confidence_by_key: dict[str, float] = {}
     per_backend_limit = max(
-        limit * _DEFAULT_PER_BACKEND_LIMIT_FACTOR,
+        limit * per_backend_factor,
         _DEFAULT_PER_BACKEND_LIMIT_FLOOR,
     )
     for variation in normalized_variations:
@@ -293,6 +363,63 @@ def _pick_auto_seeds(candidates: list[dict], count: int = 3) -> list[str]:
         reverse=True,
     )
     return [str(candidate["doi"]) for candidate in ranked[:count]]
+
+
+def _expand_semantic_recommendations(
+    candidates: list[dict],
+    *,
+    top_n: int = 3,
+    per_seed_limit: int = 20,
+    base_confidence: float = 0.4,
+) -> list[dict]:
+    """Fetch S2 recommendations for the top-N candidates and return merged results.
+
+    C2: mirrors _expand_citations error-handling — network failure / empty
+    response / missing S2 id all produce an empty list, never crash.
+    Results are assigned ``base_confidence`` (default 0.4) so user-query hits
+    always outrank recommendation-only entries.
+    """
+    from research_hub.search.semantic_scholar import SemanticScholarClient
+
+    client = SemanticScholarClient()
+    seen: set[str] = set()
+    expanded: list[dict] = []
+
+    # Build the seed list: prefer DOI, fall back to arXiv
+    seeds: list[str] = []
+    ranked = sorted(
+        [c for c in candidates if c.get("doi") or c.get("arxiv_id")],
+        key=lambda c: (c.get("confidence", 0.5), c.get("citation_count", 0)),
+        reverse=True,
+    )
+    for candidate in ranked[:top_n]:
+        if candidate.get("doi"):
+            seeds.append(f"DOI:{candidate['doi']}")
+        elif candidate.get("arxiv_id"):
+            seeds.append(f"arXiv:{candidate['arxiv_id']}")
+
+    for seed_id in seeds:
+        try:
+            results = client.get_recommendations(seed_id, limit=per_seed_limit)
+        except Exception as exc:
+            logger.warning("S2 recommendations failed for %s: %s", seed_id, exc)
+            results = []
+        for result in results:
+            doi_key = _normalize_doi(result.doi or "")
+            dedup_key = doi_key or result.arxiv_id or result.title.lower()[:60]
+            if not dedup_key or dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            entry = _search_result_to_candidate(result)
+            entry["confidence"] = base_confidence
+            entry["source"] = "s2-recommendations"
+            entry["_discover_meta"] = {
+                "matched_variations": [],
+                "source_tags": ["s2-recommendations"],
+                "is_seed": False,
+            }
+            expanded.append(entry)
+    return expanded
 
 
 def _load_cluster_doi_set(cfg, cluster_slug: str) -> set[str]:
@@ -492,11 +619,14 @@ def discover_new(
     min_confidence: float = 0.0,
     rank_by: str = "smart",
     from_variants: str | Path | None = None,
+    auto_variants: bool = True,
     expand_auto: bool = False,
     expand_from: tuple[str, ...] = (),
     expand_hops: int = 1,
+    expand_semantic: bool = True,
     seed_dois: tuple[str, ...] = (),
     include_existing: bool = False,
+    per_backend_factor: int = _DEFAULT_PER_BACKEND_LIMIT_FACTOR,
 ) -> tuple[DiscoverState, str]:
     """Run search, stash candidates, and build a fit-check prompt."""
     from research_hub.fit_check import emit_prompt
@@ -520,7 +650,7 @@ def discover_new(
         resolved_backends = DEFAULT_BACKENDS
 
     per_backend_limit = max(
-        limit * _DEFAULT_PER_BACKEND_LIMIT_FACTOR,
+        limit * per_backend_factor,
         _DEFAULT_PER_BACKEND_LIMIT_FLOOR,
     )
     results = search_papers(
@@ -545,7 +675,26 @@ def discover_new(
             "is_seed": False,
         }
 
+    # C1: resolve variations — --from-variants takes precedence; auto_variants
+    # fires only when --from-variants is absent.
     variations = _load_variations_file(from_variants)
+    if not variations and auto_variants:
+        # Offline derivation: seed_keywords + definition key terms
+        cluster_seeds: list[str] = []
+        try:
+            from research_hub.clusters import ClusterRegistry
+
+            registry = ClusterRegistry(cfg.clusters_file)
+            cluster_obj = registry.get(cluster_slug)
+            if cluster_obj is not None:
+                cluster_seeds = list(cluster_obj.seed_keywords or [])
+        except Exception:
+            pass
+        try:
+            variations = _derive_auto_variants(cfg, cluster_slug, cluster_seeds)
+        except Exception:
+            variations = []
+
     if variations:
         candidates.extend(
             apply_variations(
@@ -561,6 +710,7 @@ def discover_new(
                 exclude_terms=exclude_terms,
                 min_confidence=min_confidence,
                 rank_by=rank_by,
+                per_backend_factor=per_backend_factor,
             )
         )
         candidates = _merge_search_dict_candidates(candidates)
@@ -600,6 +750,35 @@ def discover_new(
             candidates.append(entry)
             if normalized:
                 existing_dois.add(normalized)
+
+    # C2: S2 recommendations expansion — lower-confidence merge so user-query
+    # hits always outrank recommendation-only entries.
+    if expand_semantic:
+        try:
+            s2_entries = _expand_semantic_recommendations(candidates)
+        except Exception as exc:
+            logger.warning("S2 recommendations expansion failed: %s", exc)
+            s2_entries = []
+        if s2_entries:
+            existing_dois_s2 = {
+                _normalize_doi(c.get("doi", ""))
+                for c in candidates
+                if c.get("doi")
+            }
+            for entry in s2_entries:
+                normalized = _normalize_doi(entry.get("doi", ""))
+                if normalized and normalized in existing_dois_s2:
+                    # Already present: tag the source without lowering confidence
+                    for candidate in candidates:
+                        if _normalize_doi(candidate.get("doi", "")) == normalized:
+                            meta = _ensure_discover_meta(candidate)
+                            _append_unique(meta["source_tags"], "s2-recommendations")
+                            break
+                    continue
+                candidates.append(entry)
+                if normalized:
+                    existing_dois_s2.add(normalized)
+            candidates = _merge_search_dict_candidates(candidates)
 
     normalized_seed_dois = tuple(
         doi for doi in (_normalize_doi(item) for item in seed_dois) if doi
@@ -716,7 +895,14 @@ def discover_continue(
         )
         in accepted_keys
     ]
-    papers_input = _to_papers_input(accepted_candidates, cluster_slug)
+    pdfs_dir = getattr(cfg, "root", None)
+    pdfs_dir = (Path(pdfs_dir) / "pdfs") if pdfs_dir is not None else None
+    papers_input = _to_papers_input(
+        accepted_candidates,
+        cluster_slug,
+        pdfs_dir=pdfs_dir,
+        disable_pdf_fallback=getattr(cfg, "disable_pdf_fallback", False),
+    )
 
     target = out_path if out_path is not None else (dest / PAPERS_INPUT_FILENAME)
     target.write_text(json.dumps(papers_input, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -791,7 +977,13 @@ def _smart_journal_fallback(candidate: dict) -> str:
     return ""
 
 
-def _to_papers_input(candidates: list[dict], cluster_slug: str | None) -> list[dict]:
+def _to_papers_input(
+    candidates: list[dict],
+    cluster_slug: str | None,
+    *,
+    pdfs_dir: Path | None = None,
+    disable_pdf_fallback: bool = False,
+) -> list[dict]:
     """Convert search candidates to flat papers_input.json shape.
 
     v0.49.4: derive a synthetic ``10.48550/arXiv.<id>`` DOI for arxiv hits
@@ -842,8 +1034,27 @@ def _to_papers_input(candidates: list[dict], cluster_slug: str | None) -> list[d
         if not abstract_final and doi:
             try:
                 from research_hub.search.abstract_recovery import recover_abstract
+                from research_hub.notebooklm.pdf_fetcher import _filename_from_doi
+                from research_hub.utils.doi import normalize_doi
 
-                recovered = recover_abstract(doi, timeout=10)
+                pdf_path: Path | None = None
+                if pdfs_dir is not None and not disable_pdf_fallback:
+                    normalized = normalize_doi(doi) if doi else ""
+                    if normalized:
+                        candidate_path = pdfs_dir / f"{_filename_from_doi(normalized)}.pdf"
+                        if candidate_path.exists():
+                            pdf_path = candidate_path
+                        else:
+                            # Secondary: slug-based <slug>.pdf convention.
+                            cand_slug = slug  # already computed above in this loop
+                            slug_path = pdfs_dir / f"{cand_slug}.pdf"
+                            if slug_path.exists():
+                                pdf_path = slug_path
+
+                if pdf_path is not None:
+                    recovered = recover_abstract(doi, timeout=10, pdf_path=pdf_path)
+                else:
+                    recovered = recover_abstract(doi, timeout=10)
                 if recovered.text:
                     abstract_final = recovered.text
                     if not candidate.get("abstract_source"):

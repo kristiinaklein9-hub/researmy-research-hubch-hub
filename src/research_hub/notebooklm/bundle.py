@@ -25,6 +25,9 @@ class BundleEntry:
     pdf_source: str = ""
     url: str = ""
     skip_reason: str = ""
+    url_quality: str = ""
+    url_quality_reason: str = ""
+    url_quality_signal: str = ""
 
 
 @dataclass
@@ -61,12 +64,12 @@ def _read_frontmatter(md_path: Path) -> str:
 
 
 def _parse_note_metadata(md_path: Path) -> dict[str, str]:
-    """Extract title, doi, url, authors, year from note YAML frontmatter."""
-    meta = {"title": "", "doi": "", "url": "", "authors": "", "year": ""}
+    """Extract title, doi, url, authors, year, summarize_status from note YAML frontmatter."""
+    meta = {"title": "", "doi": "", "url": "", "authors": "", "year": "", "summarize_status": ""}
     frontmatter = _read_frontmatter(md_path)
     if not frontmatter:
         return meta
-    for key in ("title", "doi", "url", "authors", "year"):
+    for key in ("title", "doi", "url", "authors", "year", "summarize_status"):
         pattern = rf'^{key}:\s*[\'"]?([^\'"\n]*)[\'"]?'
         match = re.search(pattern, frontmatter, re.MULTILINE)
         if match:
@@ -234,6 +237,41 @@ def bundle_cluster(
             else:
                 logger.info("pdf_fetch failed for %s: %s", entry.doi or note_path.stem, fetch_result.error)
 
+        # Classify the URL quality so the field is always written into the
+        # manifest entry (even when the entry ends up taking the pdf path).
+        # When a local PDF is already present (pdf is not None) the URL will
+        # never be uploaded, so we skip the network probe to avoid wasted
+        # traffic — classify with probe=False in that case.
+        url = _pick_url(meta)
+        if url:
+            from research_hub.notebooklm.url_quality import classify_url_source
+
+            summarize_status = meta.get("summarize_status", "")
+            # Only probe when there is no local PDF (pdf is None); a PDF-backed
+            # entry will take action="pdf" and the URL is never uploaded.
+            quality_result = classify_url_source(
+                url, summarize_status, probe=(pdf is None)
+            )
+            entry.url_quality = quality_result.quality
+            entry.url_quality_reason = quality_result.reason
+            entry.url_quality_signal = quality_result.signal
+
+            # Auto-prefer local PDF when the URL is known to be a likely error
+            # page but no local PDF was found in the initial scan.  If a PDF
+            # is already present (pdf is not None) it is handled below.
+            if quality_result.quality == "likely_error_page" and pdf is None:
+                pdf_retry = _find_pdf_for_doi(pdfs_dir, entry.doi, pdf_index=pdf_index)
+                if pdf_retry is None and meta.get("authors"):
+                    pdf_retry = _find_pdf_by_author_year(
+                        pdfs_dir,
+                        meta.get("authors", ""),
+                        meta.get("year", ""),
+                        pdf_index=pdf_index,
+                    )
+                if pdf_retry is not None:
+                    pdf = pdf_retry
+                    entry.pdf_source = entry.pdf_source or "local-doi"
+
         if pdf is not None:
             destination = bundle_pdfs / pdf.name
             shutil.copy2(pdf, destination)
@@ -242,7 +280,6 @@ def bundle_cluster(
             report.entries.append(entry)
             continue
 
-        url = _pick_url(meta)
         if url:
             entry.action = "url"
             entry.url = url

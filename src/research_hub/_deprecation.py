@@ -45,7 +45,9 @@ def warn_deprecated(
         What the caller should use instead.
     removed_in:
         Version string the shim is scheduled to be removed in
-        (e.g. ``"v1.0.0"``).
+        (e.g. ``"v2.0.0"``). Per semver, deprecated surface is
+        retained for the remainder of the major and removed only at
+        the next major.
     stacklevel:
         Passed through to ``warnings.warn``. Default 2 points at the
         caller of the deprecated thing, not this helper.

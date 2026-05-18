@@ -44,6 +44,44 @@ quarantine*. Full statement, layer table, and triage:
 
 ### Added
 
+- **`notebooklm keepalive` — durable idle keepalive.**
+  New `src/research_hub/notebooklm/keepalive.py` module + `notebooklm keepalive`
+  CLI subcommand. Rotates and persists the stored session cookies
+  (`notebooklm.auth._rotate_cookies` → `save_cookies_to_storage`) so a single
+  Google login survives idle periods (Google revokes idle sessions in ~12–24 h
+  without this). Default one-shot invocation is safe for any scheduler; `--loop
+  --interval <sec>` (floor 3600 s, default 21600 s = 6 h) for long-running
+  `nohup` supervision. Windows Scheduled Task registration via
+  `--install-windows-task [--interval-hours N]` is available but **opt-in** and
+  gated behind an explicit `--yes` flag; without `--yes` the exact `schtasks`
+  command is only printed (dry-run, nothing registered — no wrapper file written
+  either). `--uninstall-windows-task` removes the task. The task command is
+  resolved at install time: if the `research-hub` console-script is on PATH
+  (pip-installed), it is used directly; otherwise a `nlm_keepalive.cmd` wrapper
+  is generated in `.research_hub/` that sets `PYTHONPATH=src` and `cd`s to the
+  repo root before invoking `python -m research_hub notebooklm keepalive` — so
+  source-checkout installs work correctly from Task Scheduler. No elevated
+  privileges (`/RL HIGHEST`) are requested; the task runs as the current user.
+  Honest scope: keepalive extends session lifetime by preventing idle revocation;
+  Google's own long-lived cookie hard-expiry (~1 year) or a security event can
+  still terminate the session. `doctor nlm_session` remains the backstop.
+
+- **`notebooklm login --from-browser [BROWSER]` — non-interactive browser-cookie login.**
+  New `login_from_browser` function in `src/research_hub/notebooklm/auth.py`.
+  Imports the user's already-logged-in normal-browser Google session via the
+  upstream `notebooklm-py --browser-cookies` (rookiepy) path: no Playwright
+  popup, no terminal ENTER — one short command instead of the browser+ENTER
+  dance. Requires `pip install 'research-hub[browser-auth]'` (new optional extra
+  `browser-auth = ["rookiepy>=0.1.0"]`). Supported browsers: auto-detect (bare
+  `--from-browser`), chrome, firefox, edge, brave, arc, chromium, safari,
+  vivaldi, zen, librewolf, opera, opera-gx, ie, octo. Precedence: `--import-from`
+  > `--from-browser` > interactive login.
+
+- **`[browser-auth]` optional extra** (`pyproject.toml`).
+  Declares `rookiepy>=0.1.0` as an installable extra consistent with the project's
+  other optional dependency pattern. Referenced in `--from-browser` help text and
+  error messages.
+
 - **`clusters delete --purge-zotero-items` (destructive flag).** Moves all
   parent items in the cluster's Zotero collection to the Zotero trash
   (recoverable until the user empties trash) and then deletes the now-empty

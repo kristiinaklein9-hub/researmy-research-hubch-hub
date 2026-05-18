@@ -6136,6 +6136,82 @@ def build_parser() -> argparse.ArgumentParser:
              "so you can inspect the DOM with F12 DevTools. Press Enter in the "
              "terminal when finished.",
     )
+    nlm_login.add_argument(
+        "--from-browser",
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="BROWSER",
+        choices=[
+            "auto", "arc", "brave", "chrome", "chromium", "edge", "firefox",
+            "ie", "librewolf", "octo", "opera", "opera-gx", "safari",
+            "vivaldi", "zen",
+        ],
+        help=(
+            "Non-interactive login: import Google cookies from an already-logged-in "
+            "browser via rookiepy (no Playwright popup, no terminal ENTER needed). "
+            "Optionally specify a browser: chrome, firefox, edge, brave, arc, "
+            "chromium, safari, vivaldi, zen, librewolf, opera, opera-gx, ie, octo. "
+            "Omit the value (bare --from-browser) for auto-detection. "
+            "Requires: pip install 'research-hub[browser-auth]'. "
+            "Precedence: --import-from > --from-browser > interactive login."
+        ),
+    )
+    nlm_keepalive = nlm_sub.add_parser(
+        "keepalive",
+        help="Rotate and persist NLM session cookies to prevent idle expiry",
+    )
+    nlm_keepalive.add_argument(
+        "--loop",
+        action="store_true",
+        default=False,
+        help="Run continuously, sleeping --interval seconds between calls (for nohup use)",
+    )
+    nlm_keepalive.add_argument(
+        "--interval",
+        type=int,
+        default=21600,
+        metavar="SEC",
+        help=(
+            "Seconds between keepalive calls in --loop mode "
+            "(default: 21600 = 6 h; floor: 3600 = 1 h)"
+        ),
+    )
+    nlm_keepalive.add_argument(
+        "--install-windows-task",
+        action="store_true",
+        default=False,
+        help=(
+            "Build and print the schtasks command that registers a Windows Scheduled Task "
+            "running 'python -m research_hub notebooklm keepalive' every --interval-hours h. "
+            "Without --yes this is a DRY-RUN only (prints command, registers nothing)."
+        ),
+    )
+    nlm_keepalive.add_argument(
+        "--uninstall-windows-task",
+        action="store_true",
+        default=False,
+        help=(
+            "Remove the Windows Scheduled Task registered by --install-windows-task. "
+            "Without --yes this is a DRY-RUN only."
+        ),
+    )
+    nlm_keepalive.add_argument(
+        "--interval-hours",
+        type=int,
+        default=6,
+        metavar="HOURS",
+        help="Hours between task runs when registering the Scheduled Task (default: 6)",
+    )
+    nlm_keepalive.add_argument(
+        "--yes",
+        action="store_true",
+        default=False,
+        help=(
+            "Confirm system mutation for --install-windows-task / --uninstall-windows-task. "
+            "Without this flag those options only print the schtasks command."
+        ),
+    )
     nlm_bundle = nlm_sub.add_parser("bundle", help="Export a drag-drop folder for NotebookLM")
     nlm_bundle.add_argument("--cluster", required=True)
     nlm_bundle.add_argument(
@@ -7370,6 +7446,8 @@ def _main_dispatch(args, parser) -> int:
 
             cfg = get_config()
             session_dir = default_session_dir(cfg.research_hub_dir)
+            # Precedence: --import-from > --from-browser > interactive (--cdp / default)
+            #
             # v0.70.1: --import-from short-circuits the interactive flow by
             # copying a logged-in session profile from another vault.
             if args.import_from:
@@ -7394,6 +7472,24 @@ def _main_dispatch(args, parser) -> int:
                 )
                 print("Verify with: research-hub notebooklm bundle --cluster <slug>")
                 return 0
+            # v1.0.0: --from-browser uses rookiepy to import cookies from an
+            # already-logged-in browser — no Playwright popup, no terminal ENTER.
+            if args.from_browser is not None:
+                from research_hub.notebooklm.auth import login_from_browser
+                dest_state = default_state_file(cfg.research_hub_dir)
+                browser_arg = None if args.from_browser == "auto" else args.from_browser
+                rc = login_from_browser(dest_state, browser=browser_arg)
+                if rc == 0:
+                    print("[notebooklm login --from-browser] Login successful.")
+                    print("Verify with: research-hub notebooklm keepalive")
+                else:
+                    print(
+                        "[notebooklm login --from-browser] FAILED (exit code "
+                        f"{rc}). If rookiepy is not installed, run:\n"
+                        "  pip install 'research-hub[browser-auth]'",
+                        file=sys.stderr,
+                    )
+                return rc
             if args.cdp:
                 return login_interactive_cdp(
                     session_dir,
@@ -7455,6 +7551,23 @@ def _main_dispatch(args, parser) -> int:
                 headless=args.headless,
                 timeout_sec=args.timeout,
             )
+        if args.notebooklm_command == "keepalive":
+            from research_hub.notebooklm.keepalive import (
+                _keepalive_loop,
+                keepalive_once,
+                run_install_windows_task,
+            )
+            cfg = get_config()
+            if args.install_windows_task or args.uninstall_windows_task:
+                return run_install_windows_task(
+                    args.interval_hours,
+                    dry_run=not args.yes,
+                    uninstall=args.uninstall_windows_task,
+                    cfg=cfg,
+                )
+            if args.loop:
+                return _keepalive_loop(cfg, interval_sec=args.interval)
+            return keepalive_once(cfg)
 
     parser.error(f"Unknown command: {args.command}")
     return 2

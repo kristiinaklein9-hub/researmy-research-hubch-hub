@@ -5116,6 +5116,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also delete the now-empty Zotero collection container",
     )
+    delete_parser.add_argument(
+        "--purge-zotero-items",
+        action="store_true",
+        default=False,
+        help=(
+            "DESTRUCTIVE: delete each parent item from the cluster's Zotero collection "
+            "(items go to Zotero trash, recoverable until trash is emptied; Zotero "
+            "cascade-deletes child attachments incl. PDFs when the parent is trashed). "
+            "Strictly scoped to this cluster's own collection key -- parent and sibling "
+            "collections are never enumerated or touched. Requires --apply to execute; "
+            "dry-run prints the item list and totals without making any deletions."
+        ),
+    )
     merge_parser = clusters_subparsers.add_parser("merge", help="Merge two clusters")
     merge_parser.add_argument("source", help="Source cluster slug (will be removed)")
     merge_parser.add_argument("--into", required=True, dest="target", help="Target cluster slug")
@@ -6863,19 +6876,43 @@ def _main_dispatch(args, parser) -> int:
         if args.clusters_command == "unarchive":
             return _clusters_unarchive(args.slug)
         if args.clusters_command == "delete":
-            from research_hub.clusters import cascade_delete_cluster
+            from research_hub.clusters import (
+                cascade_delete_cluster,
+                enumerate_collection_items_for_purge,
+            )
 
             cfg = get_config()
+            purge_items = getattr(args, "purge_zotero_items", False)
             preview = cascade_delete_cluster(
                 cfg,
                 args.slug,
                 apply=False,
                 delete_zotero_collection=args.delete_zotero_collection,
             )
+            print(preview.summary())
+            if purge_items:
+                # Enumerate the Zotero items that WOULD be purged (dry-run always safe)
+                try:
+                    items_to_purge = enumerate_collection_items_for_purge(cfg, args.slug)
+                except Exception as _exc:
+                    items_to_purge = []
+                    print(f"  (could not enumerate Zotero items: {_exc})")
+                if items_to_purge:
+                    print()
+                    print("  Zotero items that would be purged (--purge-zotero-items):")
+                    pdf_total = 0
+                    for it in items_to_purge:
+                        doi_str = f" | DOI:{it['doi']}" if it["doi"] else ""
+                        pdf_str = f" | {it['pdf_count']} PDF attachment(s)"
+                        print(f"    - {it['title']}{doi_str}{pdf_str}")
+                        pdf_total += it["pdf_count"]
+                    print(f"  Total: {len(items_to_purge)} item(s), {pdf_total} PDF attachment(s)")
+                    print("  items go to Zotero trash (recoverable until trash emptied); Zotero cascade-deletes child attachments automatically")
+                else:
+                    print("  (no Zotero items to purge, or collection key not set)")
+            print("")
             if args.apply:
                 if preview.has_data() and not args.force:
-                    print(preview.summary())
-                    print("")
                     print("Cluster is not empty. Re-run with --apply --force.")
                     return 2
                 applied = cascade_delete_cluster(
@@ -6883,11 +6920,10 @@ def _main_dispatch(args, parser) -> int:
                     args.slug,
                     apply=True,
                     delete_zotero_collection=args.delete_zotero_collection,
+                    purge_zotero_items=purge_items,
                 )
                 print(applied.summary())
                 return 0
-            print(preview.summary())
-            print("")
             if preview.has_data():
                 print("Preview only. Re-run with --apply --force to delete this non-empty cluster.")
             else:

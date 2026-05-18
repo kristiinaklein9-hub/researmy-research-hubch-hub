@@ -44,6 +44,22 @@ quarantine*. Full statement, layer table, and triage:
 
 ### Added
 
+- **`clusters delete --purge-zotero-items` (destructive flag).** Moves all
+  parent items in the cluster's Zotero collection to the Zotero trash
+  (recoverable until the user empties trash) and then deletes the now-empty
+  collection. Dry-run by default; pass `--apply` to execute. Zotero
+  cascade-deletes child attachments (incl. PDFs) when the parent item is
+  trashed — child keys are NOT submitted explicitly (avoids false 404 failures
+  in the summary). Scoping is structural: all enumeration and deletion operate
+  strictly on the cluster's own `zotero_collection_key`; an empty key is a
+  no-op; parent and sibling collections are never enumerated or touched. A
+  defense-in-depth guard refuses the operation if the cluster's own collection
+  key matches the configured `zotero_parent_collection` (resolved read-only).
+- **`clusters archive` (hub/_archived move).** `ClusterRegistry.archive(slug)`
+  moves `hub/<slug>/` to `hub/_archived/<slug>/` and sets `status: archived`.
+  `_HOME.md` and all MOC pages automatically omit archived clusters. Idempotent.
+  `clusters unarchive` reverses the move.
+
 - **Configurable Zotero parent ("mother") collection (`zotero_parent_collection`,
   default `"research-hub"`).** New cluster Zotero collections are now
   automatically nested under a single top-level parent collection instead of
@@ -102,6 +118,21 @@ quarantine*. Full statement, layer table, and triage:
   Phase 5 plan called for; README + CHANGELOG link to it).
 
 ### Changed
+
+- **`clusters delete --apply` now removes all local data for the cluster.**
+  In addition to unbinding notes from the registry, `--apply` now also removes
+  `hub/<slug>/` (overview, crystals, memory.json, briefs), all
+  `.research_hub/bundles/<slug>-*` directories, `.research_hub/artifacts/<slug>/`,
+  and prunes all lines for the cluster from `.research_hub/manifest.jsonl`.
+  The cluster's `raw/<slug>/` folder is soft-deleted (moved to
+  `raw/_deleted_<slug>/`) rather than hard-deleted. `_HOME.md` and MOC pages
+  automatically skip archived (`status: archived`) clusters on next regeneration.
+- **Zotero item safety guard is structural, not key-specific.** The previous
+  hardcoded guard (`_PROTECTED_COLLECTION_KEY = "EIASV65T"`) is removed in
+  favor of a structural guarantee: all Zotero operations are strictly scoped to
+  the cluster's own `zotero_collection_key` (an empty key ⇒ no-op). A
+  defense-in-depth parent-collection guard resolves the configured parent key at
+  runtime (read-only) instead of relying on a hardcoded value.
 
 - **API surface frozen for 1.0.** `docs/stable-api.md` (the
   contract since v0.91.0) is promoted to the v1.x stability

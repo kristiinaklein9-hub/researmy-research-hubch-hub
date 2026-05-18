@@ -189,6 +189,10 @@ def populate_home(cfg) -> Path:
         slug = (cluster.slug or "").strip()
         if not slug:
             continue
+        # Skip archived clusters — their notes live under hub/_archived/<slug>/
+        # and should not appear in the reading queue or Clusters section.
+        if getattr(cluster, "status", "active") == "archived":
+            continue
         name = (cluster.name or slug).strip()
         paper_count = _count_papers(vault_root, slug)
         cluster_queries = [str(getattr(cluster, "first_query", "") or "")]
@@ -400,6 +404,9 @@ def populate_all_mocs(cfg) -> list[tuple[str, Path]]:
     for cluster in registry.list():
         slug = (cluster.slug or "").strip()
         if not slug:
+            continue
+        # Skip archived clusters — do not include them in MOC pages.
+        if getattr(cluster, "status", "active") == "archived":
             continue
         moc_links = derive_moc_links(
             slug,

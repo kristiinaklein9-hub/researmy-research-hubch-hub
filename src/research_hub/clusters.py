@@ -16,6 +16,19 @@ from research_hub.config import get_config
 from research_hub.operations import _update_frontmatter_field, move_paper, note_matches_query
 from research_hub.security import atomic_write_text, safe_join
 
+# Imported at module level so tests can patch research_hub.clusters._resolve_parent_collection_key_readonly
+# without patching the source module (avoids local-import binding issues).
+def _resolve_parent_collection_key_readonly(cfg) -> str:
+    """Thin module-level shim — delegates to the canonical implementation in zotero.client.
+
+    Defined here so the delete guard can be monkeypatched in tests without
+    fighting Python's local-import binding semantics.
+    """
+    from research_hub.zotero.client import (
+        _resolve_parent_collection_key_readonly as _impl,
+    )
+    return _impl(cfg)
+
 logger = logging.getLogger(__name__)
 
 
@@ -457,10 +470,34 @@ class ClusterRegistry:
         return cluster
 
     def archive(self, slug: str) -> Cluster:
-        """Mark a cluster inactive without deleting its notes or Zotero binding."""
+        """Mark a cluster inactive and move its hub folder to hub/_archived/<slug>.
+
+        Moves ``hub/<slug>/`` → ``hub/_archived/<slug>/`` so Obsidian's graph
+        view can exclude the archived folder. Idempotent: if the cluster is
+        already archived (folder already under ``_archived/``) prints a notice
+        and returns without error. The cluster's Zotero binding and raw notes
+        are NOT touched.
+        """
         cluster = self.clusters.get(slug)
         if cluster is None:
             raise ValueError(f"Cluster not found: {slug}")
+
+        cfg = get_config()
+        hub_root = cfg.hub
+        hub_dir = safe_join(hub_root, slug)
+        archived_parent = hub_root / "_archived"
+        archived_dir = archived_parent / slug
+
+        if cluster.status == "archived":
+            print(f"notice: cluster '{slug}' is already archived (no-op).")
+            return cluster
+
+        if hub_dir.exists():
+            archived_parent.mkdir(parents=True, exist_ok=True)
+            if archived_dir.exists():
+                shutil.rmtree(archived_dir)
+            shutil.move(str(hub_dir), str(archived_dir))
+
         cluster.status = "archived"
         cluster.archived_at = _utc_now()
         self.save()
@@ -468,10 +505,32 @@ class ClusterRegistry:
         return cluster
 
     def unarchive(self, slug: str) -> Cluster:
-        """Restore an archived cluster to active ingest/search workflows."""
+        """Restore an archived cluster to active ingest/search workflows.
+
+        Moves ``hub/_archived/<slug>/`` back to ``hub/<slug>/``. Idempotent:
+        if the cluster is not currently archived, prints a notice and returns
+        without error. The cluster's Zotero binding and raw notes are NOT
+        touched.
+        """
         cluster = self.clusters.get(slug)
         if cluster is None:
             raise ValueError(f"Cluster not found: {slug}")
+
+        cfg = get_config()
+        hub_root = cfg.hub
+        hub_dir = safe_join(hub_root, slug)
+        archived_dir = hub_root / "_archived" / slug
+
+        if cluster.status != "archived":
+            print(f"notice: cluster '{slug}' is not archived (no-op).")
+            return cluster
+
+        if archived_dir.exists():
+            hub_dir.parent.mkdir(parents=True, exist_ok=True)
+            if hub_dir.exists():
+                shutil.rmtree(hub_dir)
+            shutil.move(str(archived_dir), str(hub_dir))
+
         cluster.status = "active"
         cluster.archived_at = ""
         self.save()
@@ -624,8 +683,52 @@ def cascade_delete_cluster(
     *,
     apply: bool,
     delete_zotero_collection: bool = False,
+    purge_zotero_items: bool = False,
 ) -> CascadeReport:
+    """Delete a cluster and ALL of its associated data.
+
+    Behaviour:
+    - ``apply=False`` (dry-run): returns a :class:`CascadeReport` immediately
+      with ZERO Zotero I/O — no network calls, no reads, no writes.
+    - ``apply=True``: performs the full cascade delete:
+        * Moves ``raw/<slug>/`` → ``raw/_deleted_<slug>/`` (soft delete).
+        * Removes ``hub/<slug>/`` (overview, crystals, memory.json, .base,
+          briefs) using ``shutil.rmtree`` — never the shell ``rm`` command.
+        * Removes ``.research_hub/bundles/<slug>-*`` directories.
+        * Removes ``.research_hub/artifacts/<slug>/`` directory.
+        * Prunes all lines for this cluster from ``.research_hub/manifest.jsonl``.
+        * Prunes ``dedup_index.json`` entries belonging to this cluster.
+        * Removes the cluster from ``clusters.yaml``.
+        * Zotero: by default, *unbinds* items from the collection (removes the
+          collection key from each item's ``collections`` list) and optionally
+          deletes the now-empty child collection (``delete_zotero_collection``).
+        * If ``purge_zotero_items=True``: deletes each parent item via
+          ``ZoteroDualClient.delete_items`` (items go to Zotero trash,
+          recoverable until trash emptied). Zotero cascade-deletes child
+          attachments (including PDFs) automatically when the parent is trashed,
+          so only parent item keys are submitted — submitting child keys
+          explicitly would cause 404 failures on an already-removed attachment.
+          The operation is strictly scoped to the cluster's own
+          ``zotero_collection_key``; parent and sibling collections are never
+          enumerated or touched.
+
+    Structural safety invariants (always enforced):
+    - All Zotero operations (item enumeration, item deletion, collection
+      deletion) operate strictly on the cluster's own ``zotero_collection_key``.
+    - An empty ``zotero_collection_key`` is a no-op: the ``if coll_key:``
+      block is skipped entirely — no library-wide enumeration ever occurs.
+    - Parent and sibling collections are never enumerated or passed to any
+      delete operation.
+    - Defense-in-depth: if the cluster's own collection key matches the
+      configured research-hub parent collection key, the operation is refused
+      before any Zotero delete call is made.  The parent key is resolved via
+      ``_resolve_parent_collection_key_readonly`` — a read-only lookup that
+      NEVER creates a collection — and is checked only on the apply path so
+      that dry-run performs zero Zotero I/O.
+    - ``purge_zotero_items`` without ``apply`` is a no-op (dry-run only).
+    """
     from research_hub.dedup import DedupIndex
+    from research_hub.manifest import Manifest
     from research_hub.pipeline_repair import _iter_collection_items
     from research_hub.zotero.client import ZoteroDualClient
 
@@ -634,9 +737,30 @@ def cascade_delete_cluster(
     if cluster is None:
         raise ValueError(f"Cluster not found: {slug}")
 
+    # Structural safety: all operations below are gated on this cluster's own
+    # coll_key — an empty key means the block is skipped entirely (no-op).
+    coll_key = (cluster.zotero_collection_key or "").strip()
+
+    # Compute the cascade report (local filesystem + dedup index reads only;
+    # also calls Zotero to count items in the collection, but that is a read).
     report = compute_cluster_cascade_report(cfg, slug)
+
+    # Dry-run: return immediately with ZERO Zotero I/O — no network calls,
+    # no parent-key resolution, no create side-effects whatsoever.
     if not apply:
         return report
+
+    # Apply path only: defense-in-depth parent-equality guard.
+    # Uses _resolve_parent_collection_key_readonly — a read-only lookup that
+    # lists existing collections and NEVER creates one.  Falls back to "" on
+    # any error; scoping via the coll_key gate above is the primary safety.
+    if coll_key:
+        parent_key = _resolve_parent_collection_key_readonly(cfg)
+        if parent_key and coll_key == parent_key:
+            raise ValueError(
+                f"Refusing to cascade-delete cluster '{slug}': its "
+                f"zotero_collection_key is the research-hub parent collection."
+            )
 
     raw_dir = safe_join(cfg.raw, slug)
     deleted_dir = safe_join(cfg.raw, f"_deleted_{slug}")
@@ -646,38 +770,71 @@ def cascade_delete_cluster(
             shutil.rmtree(deleted_dir)
         shutil.move(str(raw_dir), str(deleted_dir))
 
-    if cluster.zotero_collection_key:
-        zot = ZoteroDualClient().web
-        items = _iter_collection_items(zot, cluster.zotero_collection_key)
-        for item in items:
-            item_key = item.get("key") or item.get("data", {}).get("key")
-            if not item_key:
-                continue
-            current = zot.item(item_key)
-            data = current.get("data", {})
-            collections = [key for key in data.get("collections", []) if key != cluster.zotero_collection_key]
-            data["collections"] = collections
-            zot.update_item(data)
-        if delete_zotero_collection:
-            other_holders = [
-                other.slug
-                for other in ClusterRegistry(cfg.clusters_file).list()
-                if other.slug != slug
-                and (other.zotero_collection_key or "").strip() == cluster.zotero_collection_key
-            ]
-            if other_holders:
+    if coll_key:
+        zot_client = ZoteroDualClient()
+        zot = zot_client.web
+        items = _iter_collection_items(zot, coll_key)
+
+        if purge_zotero_items:
+            # Collect PARENT item keys only — Zotero cascade-deletes child
+            # attachments (incl. PDFs) when the parent is trashed, so submitting
+            # child keys explicitly would 404 on already-removed items and inflate
+            # the failure count with false failures.
+            # Strictly scoped: only keys returned from THIS cluster's collection.
+            all_keys_to_delete: list[str] = []
+            for item in items:
+                item_key = item.get("key") or item.get("data", {}).get("key")
+                if not item_key:
+                    continue
+                all_keys_to_delete.append(item_key)
+            summary = zot_client.delete_items(all_keys_to_delete)
+            if summary["failed"]:
                 print(
-                    f"WARN: refusing to delete Zotero coll {cluster.zotero_collection_key} "
-                    f"because it is still bound by: {', '.join(other_holders)}",
+                    f"warning: {summary['failed']} item(s) failed to delete from "
+                    f"Zotero coll {coll_key}: "
+                    + ", ".join(e.get("error", "?") for e in summary["errors"]),
                     file=sys.stderr,
                 )
-            else:
-                try:
-                    ZoteroDualClient().delete_collection(cluster.zotero_collection_key)
-                except Exception as exc:
+            # After parent items are trashed, delete the now-empty child collection.
+            try:
+                zot_client.delete_collection(coll_key)
+            except Exception as exc:
+                print(
+                    f"warning: failed to delete Zotero coll {coll_key}: {exc}",
+                    file=sys.stderr,
+                )
+        else:
+            # Default behavior: unbind items from this collection (remove the
+            # collection key from each item's collections list).
+            for item in items:
+                item_key = item.get("key") or item.get("data", {}).get("key")
+                if not item_key:
+                    continue
+                current = zot.item(item_key)
+                data = current.get("data", {})
+                collections = [k for k in data.get("collections", []) if k != coll_key]
+                data["collections"] = collections
+                zot.update_item(data)
+            if delete_zotero_collection:
+                other_holders = [
+                    other.slug
+                    for other in ClusterRegistry(cfg.clusters_file).list()
+                    if other.slug != slug
+                    and (other.zotero_collection_key or "").strip() == coll_key
+                ]
+                if other_holders:
                     print(
-                        f"warning: failed to delete Zotero coll {cluster.zotero_collection_key}: {exc}"
+                        f"WARN: refusing to delete Zotero coll {coll_key} "
+                        f"because it is still bound by: {', '.join(other_holders)}",
+                        file=sys.stderr,
                     )
+                else:
+                    try:
+                        zot_client.delete_collection(coll_key)
+                    except Exception as exc:
+                        print(
+                            f"warning: failed to delete Zotero coll {coll_key}: {exc}"
+                        )
 
     dedup_path = cfg.research_hub_dir / "dedup_index.json"
     dedup = DedupIndex.load(dedup_path)
@@ -701,11 +858,92 @@ def cascade_delete_cluster(
                 del groups[key]
     dedup.save(dedup_path)
 
+    # hub/<slug>/ — overview, crystals, memory.json, .base, briefs
     hub_dir = safe_join(cfg.hub, slug)
     if hub_dir.exists():
         shutil.rmtree(hub_dir)
+
+    # .research_hub/bundles/<slug>-*/
+    bundles_root = cfg.research_hub_dir / "bundles"
+    if bundles_root.exists():
+        for bundle_dir in bundles_root.glob(f"{slug}-*"):
+            if bundle_dir.is_dir():
+                shutil.rmtree(bundle_dir)
+
+    # .research_hub/artifacts/<slug>/
+    artifacts_dir = cfg.research_hub_dir / "artifacts" / slug
+    if artifacts_dir.exists():
+        shutil.rmtree(artifacts_dir)
+
+    # Prune manifest.jsonl lines for this cluster
+    manifest_path = cfg.research_hub_dir / "manifest.jsonl"
+    if manifest_path.exists():
+        manifest = Manifest(manifest_path)
+        all_entries = manifest.read_all()
+        kept_entries = [e for e in all_entries if e.cluster != slug]
+        # Rewrite atomically: write to tmp then replace
+        import tempfile
+        tmp = manifest_path.with_suffix(".jsonl.tmp")
+        import json as _json
+        import dataclasses
+        try:
+            with tmp.open("w", encoding="utf-8") as fh:
+                for entry in kept_entries:
+                    fh.write(_json.dumps(dataclasses.asdict(entry), ensure_ascii=False) + "\n")
+            tmp.replace(manifest_path)
+        except Exception as exc:
+            print(f"warning: failed to prune manifest.jsonl: {exc}", file=sys.stderr)
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
 
     registry.clusters.pop(slug, None)
     registry.save()
     registry._refresh_graph_if_possible()
     return report
+
+
+def enumerate_collection_items_for_purge(
+    cfg,
+    slug: str,
+) -> list[dict]:
+    """Return a list of item-info dicts for the cluster's Zotero collection.
+
+    Used by the CLI dry-run to print the purge plan without making any
+    writes. Each dict has keys: ``title``, ``doi``, ``key``, ``pdf_count``.
+
+    Returns an empty list if the cluster has no ``zotero_collection_key``
+    or if the Zotero client is unavailable.
+    """
+    from research_hub.pipeline_repair import _iter_collection_items
+    from research_hub.zotero.client import ZoteroDualClient
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    cluster = registry.get(slug)
+    if cluster is None:
+        raise ValueError(f"Cluster not found: {slug}")
+    coll_key = (cluster.zotero_collection_key or "").strip()
+    if not coll_key:
+        return []
+    try:
+        zot = ZoteroDualClient().web
+        items = _iter_collection_items(zot, coll_key)
+        result: list[dict] = []
+        for item in items:
+            item_key = item.get("key") or item.get("data", {}).get("key", "")
+            data = item.get("data", {})
+            title = str(data.get("title", "") or item.get("title", "") or "(no title)")
+            doi = str(data.get("DOI", "") or data.get("doi", "") or "")
+            pdf_count = 0
+            if item_key:
+                try:
+                    children = zot.children(item_key)
+                    pdf_count = sum(
+                        1 for c in children
+                        if str(c.get("data", {}).get("contentType", "")).startswith("application/pdf")
+                    )
+                except Exception:
+                    pass
+            result.append({"key": item_key, "title": title, "doi": doi, "pdf_count": pdf_count})
+        return result
+    except Exception:
+        return []

@@ -278,6 +278,68 @@ def safe_api_call(func, *args, max_retries=3, **kwargs):
     raise Exception("Max retries exceeded")
 
 
+def _find_top_level_collection_key(web_client, name: str) -> str:
+    """Read-only lookup: return the key of the top-level Zotero collection named ``name``.
+
+    Paginates through existing collections and returns the key of the first
+    TOP-LEVEL collection (``parentCollection == False``) whose name matches
+    exactly.  Returns ``""`` if no match is found.
+
+    This helper is intentionally read-only — it NEVER creates a collection.
+    It is used by the delete path so that a destructive operation never has
+    a create side-effect.
+
+    On any exception (network error, missing credentials, etc.) returns ``""``
+    and never raises — the caller falls back to the primary ``coll_key``
+    scoping safety.
+    """
+    if not name:
+        return ""
+    try:
+        start = 0
+        while True:
+            chunk = web_client.collections(limit=100, start=start)
+            if not chunk:
+                break
+            for c in chunk:
+                data = c.get("data", {})
+                parent = data.get("parentCollection")
+                if parent is False and data.get("name") == name:
+                    return data.get("key") or ""
+            if len(chunk) < 100:
+                break
+            start += 100
+        return ""
+    except Exception:
+        return ""
+
+
+def _resolve_parent_collection_key_readonly(cfg) -> str:
+    """Read-only resolver for the configured research-hub parent collection key.
+
+    Reads ``cfg.zotero_parent_collection`` (defaults to ``"research-hub"``),
+    lists existing Zotero collections via the web API, and returns the key of
+    the top-level collection whose name matches exactly.
+
+    Returns ``""`` when:
+    - ``cfg.zotero_parent_collection`` is empty / falsy
+    - No matching top-level collection exists
+    - Any exception occurs (credentials missing, network error, etc.)
+
+    Crucially, this function NEVER creates a collection.  It is intended
+    for use in destructive operations (e.g. cascade-delete) where a
+    create side-effect would be incorrect.
+    """
+    try:
+        parent_name = getattr(cfg, "zotero_parent_collection", "research-hub") or ""
+        if not parent_name:
+            return ""
+        client = ZoteroDualClient()
+        return _find_top_level_collection_key(client.web, parent_name)
+    except Exception:
+        return ""
+
+
 def ensure_parent_collection(client, name: str) -> str | None:
     """Idempotent: find or create a top-level Zotero collection named ``name``.
 
@@ -303,6 +365,8 @@ def ensure_parent_collection(client, name: str) -> str | None:
       response.
     - On failure (network error, missing credentials, etc.) returns ``None``
       and never raises — the caller degrades gracefully to top-level behavior.
+    - To find an existing collection WITHOUT creating it, use
+      :func:`_find_top_level_collection_key` (read-only, never creates).
     """
     if not name:
         return None
@@ -312,23 +376,12 @@ def ensure_parent_collection(client, name: str) -> str | None:
         return cache[name]
     try:
         web = getattr(client, "web", None) or client
-        # Paginate to find an existing top-level collection by exact name
-        start = 0
-        while True:
-            chunk = web.collections(limit=100, start=start)
-            if not chunk:
-                break
-            for c in chunk:
-                data = c.get("data", {})
-                parent = data.get("parentCollection")
-                if parent is False and data.get("name") == name:
-                    key = data["key"]
-                    cache[name] = key
-                    client._parent_collection_cache = cache
-                    return key
-            if len(chunk) < 100:
-                break
-            start += 100
+        # Reuse the read-only find helper for the lookup half
+        key = _find_top_level_collection_key(web, name)
+        if key:
+            cache[name] = key
+            client._parent_collection_cache = cache
+            return key
         # Not found — create as top-level
         result = web.create_collections([{"name": name, "parentCollection": False}])
         successful = (result or {}).get("successful", {}) if isinstance(result, dict) else {}
@@ -539,15 +592,49 @@ class ZoteroDualClient:
         return self.web.update_item(item["data"])
 
     # --- DELETE (web API) ---
-    def delete_item(self, key):
-        self._require_web()
-        item = self._read("item", key)
-        return self.web.delete_item(item)
+    def delete_item(self, key: str) -> dict:
+        """Delete a single Zotero item by key.
 
-    def delete_items(self, keys: list):
+        Items are moved to the Zotero *trash* (recoverable until the trash is
+        emptied by the user). Operates only on the item key passed by the
+        caller; scoping is the caller's responsibility.
+
+        Returns a dict with keys ``"ok"`` (bool) and ``"error"`` (str or None).
+        Never raises into the caller on failure — the error is captured and
+        returned so the caller can decide how to surface it.
+        """
         self._require_web()
-        items = [self._read("item", k) for k in keys]
-        return self.web.delete_item(items)
+        try:
+            item = self._read("item", key)
+            self.web.delete_item(item)
+            return {"ok": True, "key": key, "error": None}
+        except Exception as exc:
+            return {"ok": False, "key": key, "error": str(exc)}
+
+    def delete_items(self, keys: list[str]) -> dict:
+        """Delete multiple Zotero items by key.
+
+        Items are moved to the Zotero *trash* (recoverable until the trash is
+        emptied by the user). Operates only on the item key(s) passed by the
+        caller; scoping is the caller's responsibility.
+
+        A single item failure does NOT abort the rest — errors are collected
+        and returned in the summary dict under ``"errors"``.  The caller
+        receives:
+          ``{"deleted": int, "failed": int, "errors": list[dict]}``
+        """
+        self._require_web()
+        deleted = 0
+        failed = 0
+        errors: list[dict] = []
+        for key in keys:
+            result = self.delete_item(key)
+            if result["ok"]:
+                deleted += 1
+            else:
+                failed += 1
+                errors.append(result)
+        return {"deleted": deleted, "failed": failed, "errors": errors}
 
     def delete_collection(self, collection_key):
         self._require_web()

@@ -21,6 +21,63 @@ UI scope is capped here by decision: the dashboard stays a thin
 status-mirror + palette + onboarding demo; no 3-pane / citation-
 graph rebuild (link out to the real tools instead)._
 
+### Added
+- **`--peer-reviewed` flag on `search` and `auto`.** Drops preprint
+  backends (arXiv/bioRxiv/chemRxiv/medRxiv), excludes gray doc types
+  (preprint/posted-content/report/book-chapter/paratext/dataset), and
+  floors corroboration. Closes the gap where `auto` ran search with
+  **zero** filtering and the one-shot pipeline could not express
+  "peer-reviewed only" (gray literature silently entered the vault).
+- **`doctor` check `nlm_auth_paths`.** Reports which NotebookLM
+  re-authentication paths actually work on this machine (interactive
+  vs `--from-browser`/rookiepy) and the exact command to run.
+
+### Changed
+- **`notebooklm login --help` rewritten to the three real paths.**
+  Previously advertised `--cdp / --from-chrome-profile /
+  --use-system-chrome / --timeout / --keep-open` as working modes;
+  they were silently no-ops (the underlying aliases `del`'d their
+  arguments). Help now states only: interactive default,
+  `--import-from`, `--from-browser`.
+- **`--from-browser` failure on Python ≥3.14 is now actionable.**
+  Detects the missing-rookiepy + no-prebuilt-wheel case and points to
+  the two paths that work (interactive in a terminal / `--import-from`)
+  instead of a generic `pip install` hint that cannot succeed there.
+
+### Fixed
+- **arXiv hits no longer leak past `--exclude-type preprint`.** The
+  arXiv backend left `doc_type` empty, so the type filter silently
+  missed every raw arXiv result (bioRxiv/chemRxiv already set it).
+  Now `doc_type="preprint"`.
+- **Self-heal commands are environment-correct.** New
+  `recommended_cli_invocation()` picks the `research-hub` console
+  script when on PATH, else the `python -m research_hub` module form.
+  Wired into the NLM preflight, `RequiresAuthRefresh`, keepalive task
+  resolution, and the auto-pipeline NLM-skip hint — these previously
+  hardcoded a console-script command that fails on source checkouts.
+- **`notebooklm keepalive` no longer reports false-green.** It now
+  re-probes session health *after* rotating cookies; a rotation that
+  does not preserve a usable session (server-side re-auth) returns
+  non-zero instead of exit 0.
+- **F7: doi.org anti-bot 418 no longer quarantines every valid paper.**
+  The authenticity gate's DOI resolver sent the default
+  `python-requests` User-Agent, which doi.org/Cloudflare answer with
+  HTTP 418 — read as `doi_unresolved` → **every** peer-reviewed paper
+  fail-closed-quarantined (reproduced: `accepted: 0; quarantined: 2`,
+  `DOIs accessible: 0`; the same DOI returns 200 with a real UA). Fix:
+  send a real `User-Agent`; classify 408/418/425/429/5xx + network
+  errors as *transient* (bounded retry + backoff, **not** cached as a
+  permanent miss, surfaced as `*_check_unavailable`); genuine 404/410
+  stay fail-closed `doi_unresolved` so the anti-fabrication guarantee
+  is unchanged. A 0/malformed status also fails closed.
+
+### Removed
+- **Dead `notebooklm login` flags:** `--cdp`, `--chrome-binary`,
+  `--use-system-chrome`, `--from-chrome-profile`,
+  `--chrome-profile-path`, `--chrome-profile-name`, `--keep-open`,
+  `--timeout`, and the unused `login_interactive` /
+  `login_interactive_cdp` aliases they delegated to.
+
 ## v1.0.0 (PENDING — tag on/after 2026-05-24, post ≥1-week v0.95.0rc2 bake)
 
 > **Not yet released — staged on `release-prep/v1.0.0`.** The cut

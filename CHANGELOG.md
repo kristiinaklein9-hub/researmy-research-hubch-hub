@@ -61,6 +61,23 @@ graph rebuild (link out to the real tools instead)._
   step are different skills, and the callout was only on the
   marketplace README — never echoed to the user at handoff time.
 
+### Fixed
+- **Ubuntu CI OOM (issue #61).** ubuntu-latest runners have ~7 GB RAM;
+  2800+ tests with lazy-loaded modules OOM the runner. `test` job split
+  into `test` (windows/macOS — 14 GB, full suite) and `test-ubuntu`
+  (4 `pytest-split` shards, ~700 tests each). Coverage moved to
+  `windows-latest` (per-shard coverage would undercount). `pytest-split>=0.8`
+  added to dev deps.
+- **User-agent strings updated to `research-hub/1.0.0`** across all
+  14 search backends (biorxiv, chemrxiv, cinii, crossref, dblp, eric,
+  kci, nasa_ads, openalex, pubmed, repec, websearch + the 3 already-fixed
+  in the prior OSS-readiness commit). Mailto format preserved for APIs
+  that recommend it (openalex, crossref, pubmed).
+- **`cli.py build_parser()`** catches `PackageNotFoundError` (not bare
+  `Exception`) when looking up the installed package version.
+- **`pipeline_repair.py` provenance tag** bumped from
+  `pipeline-repair-v0.12.0` to `pipeline-repair-v1.0.0`.
+
 ### Changed
 - **`notebooklm login --help` rewritten to the three real paths.**
   Previously advertised `--cdp / --from-chrome-profile /

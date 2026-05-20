@@ -13,7 +13,7 @@ from research_hub.search.base import SearchResult
 logger = logging.getLogger(__name__)
 
 ERIC_BASE = "https://api.ies.ed.gov/eric/"
-_USER_AGENT = "research-hub/0.18.0"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_DELAY = 0.4
 

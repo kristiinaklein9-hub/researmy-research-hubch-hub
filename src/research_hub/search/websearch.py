@@ -24,7 +24,7 @@ from research_hub.search.base import SearchResult
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 20
-_USER_AGENT = "research-hub/0.51"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _NEWS_DOMAINS = {
     "nytimes.com", "wsj.com", "ft.com", "bbc.com", "cnn.com", "reuters.com",
     "apnews.com", "theguardian.com", "washingtonpost.com", "bloomberg.com",

@@ -14,7 +14,7 @@ from research_hub.search.base import SearchResult
 logger = logging.getLogger(__name__)
 
 ADS_BASE = "https://api.adsabs.harvard.edu/v1/search/query"
-_USER_AGENT = "research-hub/0.18.0"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_DELAY = 0.5
 _ENV_KEY = "ADS_DEV_KEY"

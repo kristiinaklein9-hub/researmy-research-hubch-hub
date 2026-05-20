@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 OPENALEX_BASE = "https://api.openalex.org/works"
 _MAILTO = "research-hub@example.invalid"
-_USER_AGENT = f"research-hub/0.13.0 (mailto:{_MAILTO})"
+_USER_AGENT = f"research-hub/1.0.0 (mailto:{_MAILTO})"
 _ARXIV_URL_RE = re.compile(r"arxiv\.org/abs/(\d{4}\.\d{4,5})")
 _DOI_RE = re.compile(r"^10\.\d{4,}/\S+$", re.IGNORECASE)
 _ARXIV_RE = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$")

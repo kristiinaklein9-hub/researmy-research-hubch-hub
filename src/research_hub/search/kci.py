@@ -18,7 +18,7 @@ from research_hub.search.base import SearchResult
 logger = logging.getLogger(__name__)
 
 KCI_BASE = "https://www.kci.go.kr/kciportal/po/search/poArtiSearList.kci"
-_USER_AGENT = "research-hub/0.20.0"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_DELAY = 0.5
 

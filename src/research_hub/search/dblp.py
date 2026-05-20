@@ -13,7 +13,7 @@ from research_hub.search.base import SearchResult
 logger = logging.getLogger(__name__)
 
 DBLP_BASE = "https://dblp.org/search/publ/api"
-_USER_AGENT = "research-hub/0.16.0"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _DEFAULT_TIMEOUT = 20
 
 _TYPE_MAP = {

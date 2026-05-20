@@ -52,6 +52,7 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
+    "pytest-split>=0.8",
     "pytest-timeout>=2.3",
     "responses>=0.23",
 ]
@@ -74,7 +75,7 @@ markers = [
     "stress: stress/load tests excluded from default pytest run",
     "network: Tests that hit real external APIs (OpenAlex, arXiv, etc)",
     "evals: Evaluation tests measuring search accuracy and fit-check quality",
-    "slow: Tests that take >5 seconds to run",
+    "slow: Tests that take >30 seconds or block at C level (e.g. threading/subprocess timeouts)",
     "real_zotero: bypass the real-Zotero block (rare)",
 ]
 testpaths = ["tests"]

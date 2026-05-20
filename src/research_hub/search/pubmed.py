@@ -13,7 +13,7 @@ from research_hub.search.base import SearchResult
 logger = logging.getLogger(__name__)
 
 PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-_USER_AGENT = "research-hub/0.17.0 (mailto:research-hub@example.invalid)"
+_USER_AGENT = "research-hub/1.0.0 (mailto:research-hub@example.invalid)"
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_DELAY = 0.4
 

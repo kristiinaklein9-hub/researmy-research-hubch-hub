@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 BIORXIV_BASE = "https://api.biorxiv.org/details"
 _SERVERS = ("biorxiv", "medrxiv")
-_USER_AGENT = "research-hub/0.17.0"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_DELAY = 0.5
 _FETCH_WINDOW_DAYS = 365

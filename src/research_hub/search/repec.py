@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 REPEC_SEARCH_URL = "https://ideas.repec.org/cgi-bin/htsearch"
 REPEC_OAI_BASE = "https://oai.repec.org/"
-_USER_AGENT = "research-hub/0.17.0"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_DELAY = 0.5
 

@@ -21,6 +21,34 @@ UI scope is capped here by decision: the dashboard stays a thin
 status-mirror + palette + onboarding demo; no 3-pane / citation-
 graph rebuild (link out to the real tools instead)._
 
+### Fixed
+- **`probe_cleared_failed_no_abstract` URL quality signal now triggers text
+  fallback in the NLM bundle builder** (`notebooklm/bundle.py`).  Springer /
+  Wiley paywall skeleton pages return HTTP 200 with no body; the URL quality
+  probe previously rated this `ok`, so the URL was uploaded to NotebookLM
+  which also received an empty shell.  The fix treats this reason code the
+  same as `likely_error_page` — falling back to the abstract as a copied-text
+  source, or skipping if no abstract is available.
+
+- **Zotero reparent on cluster reuse** (`auto.py`).  Clusters created before
+  the parent-collection feature was added lived at the Zotero library root.
+  On subsequent `auto` runs the pipeline found them by name and returned early,
+  never calling `ensure_parent_collection`.  New helper
+  `_maybe_reparent_collection` PATCHes the collection's `parentCollection` to
+  the configured parent (default `"research-hub"`) when it is currently
+  top-level (`parentCollection=False`).  Idempotent and best-effort.
+
+- **PDF auto-attach step in `auto_pipeline`** (`auto.py`).  When `--with-pdfs`
+  is passed, the pipeline now also calls the OA-PDF attachment chain
+  (OpenAlex / Unpaywall / arXiv) for every Zotero item in the cluster after
+  ingest, attaching the PDF as an `imported_file` child item.  Previously
+  `--with-pdfs` only fed PDFs to the NLM bundle, not Zotero.
+
+- **Summarize pending hint** in `auto_pipeline` next-steps output.  After a
+  run, if any papers in the cluster have `summarize_status: pending`, the
+  terminal output now prints a `[HINT]` line with the exact command to run
+  (`paper summarize --pending --cluster <slug>`).
+
 ### Added
 - **`--peer-reviewed` flag on `search` and `auto`.** Drops preprint
   backends (arXiv/bioRxiv/chemRxiv/medRxiv), excludes gray doc types
@@ -62,6 +90,16 @@ graph rebuild (link out to the real tools instead)._
   marketplace README — never echoed to the user at handoff time.
 
 ### Fixed
+- **`probe_cleared_failed_no_abstract` now routes to abstract-text fallback.**
+  When a URL's `summarize_status` is `failed_no_abstract` and the HTTP probe
+  returns 200, the bundle was classifying the entry as `url_quality=ok` and
+  uploading the URL to NotebookLM. This silently failed because publisher
+  paywall pages (e.g. Springer) return HTTP 200 with a skeleton page that
+  NLM also cannot read — the same paywall the summarizer hit at ingest time.
+  `probe_cleared_failed_no_abstract` now resolves to `quality=likely_error_page`
+  so the bundle falls back to abstract text when available, matching the same
+  path already taken for `cloudflare_block`, `tf_cookie_wall`, and other
+  confirmed paywall signals.
 - **Ubuntu CI OOM (issue #61).** ubuntu-latest runners have ~7 GB RAM;
   2800+ tests with lazy-loaded modules OOM the runner. `test` job split
   into `test` (windows/macOS — 14 GB, full suite) and `test-ubuntu`

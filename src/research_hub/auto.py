@@ -446,6 +446,14 @@ def auto_pipeline(
     if do_cluster_overview:
         _run_cluster_overview_step(cfg, slug, llm_cli, report, started, print_progress)
 
+    if with_pdfs:
+        # Attach open-access PDFs to Zotero items after ingest.
+        # Refresh cluster from registry so we have the latest collection key.
+        from research_hub.clusters import ClusterRegistry as _CR
+        _clust = _CR(cfg.clusters_file).get(slug)
+        if _clust:
+            _run_pdf_attach_step(cfg, slug, _clust, report, started, print_progress)
+
     if not do_nlm:
         if do_crystals:
             _run_crystal_step(cfg, slug, llm_cli, report, started, print_progress)
@@ -508,6 +516,59 @@ def auto_pipeline(
     if print_progress:
         _print_next_steps(report, slug, cfg, do_crystals=do_crystals)
     return report
+
+
+def _run_pdf_attach_step(
+    cfg,
+    slug: str,
+    cluster,
+    report: AutoReport,
+    started: float,
+    print_progress: bool,
+) -> None:
+    """Attach open-access PDFs to Zotero items that were just ingested.
+
+    Uses the same OpenAlex / Unpaywall / arXiv lookup chain as
+    ``research-hub paper attach-pdfs``.  Best-effort: any failure is logged
+    but does not abort the pipeline.  Items that already have a PDF attachment
+    are silently skipped (idempotent).
+
+    Only open-access PDFs are attached — paywalled papers remain as metadata-
+    only items (the abstract is still available via the Obsidian note).
+    """
+    try:
+        from research_hub.zotero.client import get_client
+        from research_hub.zotero.pdf_attach import attach_pdfs, plan_attach_for_items
+
+        zot = get_client()
+        web = getattr(zot, "web", None) or zot
+        coll_key = getattr(cluster, "zotero_collection_key", "") or ""
+        if not coll_key:
+            _step_log(report, "pdf.attach", False, _elapsed(started, report),
+                      "no Zotero collection key — skip", print_progress)
+            return
+        # Fetch items in this collection; exclude attachments (we want parent items only)
+        items = web.collection_items(coll_key, itemType="-attachment") or []
+        if not items:
+            _step_log(report, "pdf.attach", True, _elapsed(started, report),
+                      "no items in collection", print_progress)
+            return
+        plans = plan_attach_for_items(items)
+        actionable = [p for p in plans if p.pdf_url]
+        if not actionable:
+            _step_log(report, "pdf.attach", True, _elapsed(started, report),
+                      f"0 OA PDFs found for {len(items)} item(s)", print_progress)
+            return
+        results = attach_pdfs(web, actionable, rate_limit_rps=1.0)
+        summary = results.summary
+        ok, skip, fail = summary.ok, summary.skip, summary.fail
+        _step_log(report, "pdf.attach", True, _elapsed(started, report),
+                  f"{ok} attached, {skip} skipped, {fail} failed "
+                  f"of {len(actionable)} with OA PDF",
+                  print_progress)
+    except Exception as exc:
+        _step_log(report, "pdf.attach", False, _elapsed(started, report),
+                  f"pdf attach error: {exc}", print_progress)
 
 
 def _run_summary_step(
@@ -780,6 +841,35 @@ def _print_next_steps(report: AutoReport, slug: str, cfg, *, do_crystals: bool) 
         print(f"    research-hub quarantine show <paper-slug> --cluster {slug}")
         print(f"    research-hub quarantine restore <paper-slug> --cluster {slug}")
         print()
+    # Summarize hint: count papers in the cluster with summarize_status=pending
+    # so the user knows to run `paper summarize --pending` after ingesting.
+    try:
+        import re as _re
+        cfg_raw = getattr(cfg, "raw", None)
+        if cfg_raw is not None:
+            pending_count = 0
+            no_abstract_count = 0
+            cluster_dir = cfg_raw / slug
+            if cluster_dir.is_dir():
+                for note in cluster_dir.glob("*.md"):
+                    text = note.read_text(encoding="utf-8", errors="ignore")
+                    m = _re.search(r"^summarize_status:\s*(\S+)", text, _re.MULTILINE)
+                    if m:
+                        status_val = m.group(1)
+                        if status_val == "pending":
+                            pending_count += 1
+                        elif status_val == "failed_no_abstract":
+                            no_abstract_count += 1
+            if pending_count:
+                print(f"  [HINT] {pending_count} paper(s) pending summary — run:")
+                print(f"  python -m research_hub.cli paper summarize --pending --cluster {slug}")
+                print()
+            if no_abstract_count:
+                print(f"  [HINT] {no_abstract_count} paper(s) have no extractable abstract"
+                      f" — add a PDF or check the source URL.")
+                print()
+    except Exception:
+        pass
     print("Next steps (copy-paste any of these):")
     print()
     print("  # See your new cluster in the live dashboard")
@@ -959,6 +1049,50 @@ def _run_fit_check_step(
         return []
 
 
+def _maybe_reparent_collection(zot, web, collection_key: str, slug: str, print_progress: bool) -> None:
+    """Best-effort: nest a top-level Zotero collection under the configured parent.
+
+    Called after ``_find_existing_collection_key_by_name`` finds an existing
+    collection that was created before the parent-collection feature was added.
+    Only acts if the collection's ``parentCollection`` is ``False`` (i.e. it is
+    currently a top-level collection with no parent).  Never raises — any failure
+    is silently ignored so the main ingest flow is not blocked.
+    """
+    try:
+        from research_hub.config import get_config as _get_config
+        from research_hub.zotero.client import ZoteroDualClient, ensure_parent_collection
+        try:
+            _cfg = _get_config()
+            _parent_name = getattr(_cfg, "zotero_parent_collection", "research-hub")
+        except Exception:
+            _parent_name = "research-hub"
+        if not _parent_name:
+            return
+        coll = web.collection(collection_key)
+        if not isinstance(coll, dict):
+            return
+        data = coll.get("data", coll)
+        current_parent = data.get("parentCollection")
+        if current_parent is not False:
+            return  # already nested (or unknown state) — nothing to do
+        # Collection is top-level; reparent it under the configured parent.
+        # Use the caller's client when it IS a ZoteroDualClient (which has
+        # update_collection with parent_key= kwarg); fall back to creating a
+        # fresh one for bare pyzotero clients (which also have update_collection
+        # but with a different signature — so hasattr alone is ambiguous).
+        dual = zot if isinstance(zot, ZoteroDualClient) else ZoteroDualClient()
+        parent_key = ensure_parent_collection(dual, _parent_name)
+        if parent_key:
+            dual.update_collection(collection_key, parent_key=parent_key)
+            if print_progress:
+                print(
+                    f"  [zotero.bind] reparented {collection_key} ({slug}) "
+                    f"under '{_parent_name}' ({parent_key})"
+                )
+    except Exception:
+        pass  # best-effort — never blocks ingest
+
+
 def _ensure_zotero_collection(registry, cluster, slug: str, report: AutoReport, print_progress: bool) -> None:
     """Auto-create + bind a Zotero collection so `ingest` has a target.
 
@@ -1004,6 +1138,9 @@ def _ensure_zotero_collection(registry, cluster, slug: str, report: AutoReport, 
             else:
                 cluster.zotero_collection_key = existing_key
                 registry.save()
+                # Reparent if this collection was created before the parent-
+                # collection feature existed and is currently top-level.
+                _maybe_reparent_collection(zot, web, existing_key, slug, print_progress)
                 _step_log(report, "zotero.bind", True, 0.0,
                           f"reused existing collection {existing_key} for {slug}", print_progress)
                 return

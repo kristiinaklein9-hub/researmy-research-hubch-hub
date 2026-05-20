@@ -167,12 +167,15 @@ def test_classify_arxiv_no_probe():
     assert result.reason == "open_host"
 
 
-def test_classify_failed_no_abstract_probe_clears_to_ok():
-    """failed_no_abstract + probe returns a real-article body → ok (clears metadata FP).
+def test_classify_failed_no_abstract_probe_returns_likely_error_page():
+    """failed_no_abstract + probe returns HTTP 200 → likely_error_page.
 
-    Regression guard for Hashimoto 10.1007/s42001-026-00465-4 (Springer):
-    the note has failed_no_abstract in the vault but the URL serves a real
-    456 KB article — should classify as ok, not dropped.
+    Even when the probe gets HTTP 200 (e.g. Springer skeleton page that is
+    large enough to escape the <10 KB body check), failed_no_abstract is
+    reliable paywall evidence: the summarizer already tried and failed at
+    ingest time. The reason is preserved as probe_cleared_failed_no_abstract
+    for auditability, but quality is now likely_error_page so the bundle
+    falls back to abstract text instead of uploading a URL NLM cannot read.
     """
     from research_hub.notebooklm.url_quality import classify_url_source
 
@@ -193,7 +196,7 @@ def test_classify_failed_no_abstract_probe_clears_to_ok():
             "https://doi.org/10.1007/s42001-026-00465-4",
             "failed_no_abstract",
         )
-    assert result.quality == "ok"
+    assert result.quality == "likely_error_page"
     assert result.reason == "probe_cleared_failed_no_abstract"
 
 
@@ -307,13 +310,14 @@ def test_bundle_local_pdf_upgrades_likely_error_page_entry(tmp_path):
     assert entry.url_quality_reason == "failed_no_abstract"
 
 
-def test_bundle_failed_no_abstract_probe_clears_to_ok(tmp_path):
-    """Verification #2 / Hashimoto regression guard.
+def test_bundle_failed_no_abstract_probe_ok_no_abstract_in_note(tmp_path):
+    """probe_cleared_failed_no_abstract note with NO abstract in note body → action=url (last resort).
 
-    A failed_no_abstract note with NO local PDF where _probe_url returns ok
-    (e.g. Springer real-content article) → bundle entry has url_quality=ok
-    and action=url (NOT skipped/PDF).  A Springer-style paper that happens to
-    have failed_no_abstract in the vault must NOT be wrongly dropped.
+    When probe returns ok but the note has no abstract text, the bundle cannot
+    fall back to text. The URL is used as a last resort even though url_quality
+    is likely_error_page — this is acceptable: trying the URL is better than
+    skipping entirely. The key behavioural change from pre-fix is that
+    url_quality is now likely_error_page, not ok.
     """
     from research_hub.clusters import Cluster
     from research_hub.notebooklm.bundle import bundle_cluster
@@ -334,17 +338,77 @@ def test_bundle_failed_no_abstract_probe_clears_to_ok(tmp_path):
 
     cluster = Cluster(slug="alpha", name="Alpha Cluster", obsidian_subfolder="alpha")
 
-    # Simulate: probe returns ok (real 456 KB Springer article)
     probe_result = UrlQuality("ok", "probe_ok", "HTTP 200")
     with patch("research_hub.notebooklm.url_quality._probe_url", return_value=probe_result):
         report = bundle_cluster(cluster, cfg)
 
     assert len(report.entries) == 1
     entry = report.entries[0]
-    # Probe cleared the metadata false positive → ok, not skipped
-    assert entry.url_quality == "ok"
+    assert entry.url_quality == "likely_error_page"
     assert entry.url_quality_reason == "probe_cleared_failed_no_abstract"
+    # No abstract in note → URL used as last resort
     assert entry.action == "url"
+
+
+def test_bundle_probe_cleared_failed_no_abstract_falls_back_to_text(tmp_path):
+    """Regression guard: probe_cleared_failed_no_abstract + abstract in note → action=text.
+
+    A note with summarize_status=failed_no_abstract where the probe returns
+    HTTP 200 (Springer-style paywall skeleton that the old code wrongly cleared
+    to quality=ok) MUST use the abstract text as the NLM source, NOT upload the
+    paywalled URL. NLM cannot bypass the paywall, so the text fallback is the
+    only path that actually gets content indexed.
+    """
+    from research_hub.clusters import Cluster
+    from research_hub.notebooklm.bundle import bundle_cluster
+    from research_hub.notebooklm.url_quality import UrlQuality
+
+    cfg = _StubCfg(tmp_path)
+    cfg.raw.mkdir(parents=True)
+    cfg.research_hub_dir.mkdir(parents=True)
+    (cfg.root / "pdfs").mkdir()
+
+    note_path = cfg.raw / "alpha" / "springer_paywall.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        "\n".join([
+            "---",
+            'title: "Springer Paywall Paper"',
+            'doi: "10.1007/s12345-026-00001-1"',
+            'url: ""',
+            'topic_cluster: "alpha"',
+            'summarize_status: "failed_no_abstract"',
+            "---",
+            "",
+            "# Springer Paywall Paper",
+            "",
+            "## Abstract",
+            "",
+            "This study examines flood risk adaptation using agent-based modelling "
+            "to simulate household decision-making under uncertainty. We find that "
+            "social networks and economic constraints jointly shape adaptive capacity.",
+        ]),
+        encoding="utf-8",
+    )
+
+    cluster = Cluster(slug="alpha", name="Alpha Cluster", obsidian_subfolder="alpha")
+
+    # Probe returns ok (Springer 200 skeleton — big body, no blocked status)
+    probe_result = UrlQuality("ok", "probe_ok", "HTTP 200")
+    with patch("research_hub.notebooklm.url_quality._probe_url", return_value=probe_result):
+        report = bundle_cluster(cluster, cfg)
+
+    assert len(report.entries) == 1
+    entry = report.entries[0]
+    assert entry.url_quality == "likely_error_page", (
+        f"expected likely_error_page, got {entry.url_quality!r} "
+        f"(reason={entry.url_quality_reason!r})"
+    )
+    assert entry.url_quality_reason == "probe_cleared_failed_no_abstract"
+    assert entry.action == "text", (
+        f"expected action=text (abstract fallback), got {entry.action!r}"
+    )
+    assert "flood risk" in entry.text
 
 
 # ---------------------------------------------------------------------------

@@ -319,7 +319,18 @@ def bundle_cluster(
         # e.g. an open landing page with full text) is still better than
         # an abstract, so only take the text rung when there is no URL or
         # the URL is the suspect/paywall kind.
-        if not url or entry.url_quality == "likely_error_page":
+        #
+        # "probe_cleared_failed_no_abstract": HTTP 200 but no abstract body
+        # found — characteristic of Springer/Wiley skeleton paywall pages.
+        # These are indistinguishable from real full-text pages by status
+        # code alone, so the probe rates them "ok", but NotebookLM gets the
+        # same empty shell. Treat them the same as likely_error_page and fall
+        # back to the abstract text instead.
+        _is_no_content = (
+            entry.url_quality == "likely_error_page"
+            or entry.url_quality_reason == "probe_cleared_failed_no_abstract"
+        )
+        if not url or _is_no_content:
             abstract = _extract_abstract(note_path, meta)
             if abstract:
                 entry.action = "text"

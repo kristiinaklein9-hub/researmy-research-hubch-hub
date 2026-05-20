@@ -157,8 +157,13 @@ def classify_url_source(
 
     Tier 1 (metadata prior, probe to clear): summarize_status ==
         "failed_no_abstract" → probe the URL to confirm or clear the signal.
-        If the probe returns ok (e.g. Springer real-content article), the
-        entry is cleared to quality=ok (probe_cleared_failed_no_abstract).
+        If the probe returns ok (HTTP 200), the entry is still classified as
+        likely_error_page with reason probe_cleared_failed_no_abstract —
+        HTTP 200 alone is not sufficient evidence of accessible content.
+        Springer/Wiley skeleton paywall pages return 200 but contain no body;
+        NLM also cannot bypass the paywall, so uploading such a URL would
+        silently produce zero indexed content. The abstract text fallback is
+        preferred when available.
         If probe is unavailable, returns likely_error_page immediately.
         If probe returns non-ok, returns likely_error_page.
 
@@ -186,7 +191,12 @@ def classify_url_source(
                               "metadata tier, probe unavailable")
         probed = _probe_url(url, timeout=timeout)
         if probed.quality == "ok":
-            return UrlQuality("ok", "probe_cleared_failed_no_abstract", probed.signal)
+            # Even with HTTP 200, failed_no_abstract is reliable paywall evidence:
+            # the summarizer already tried and could not extract abstract text at
+            # ingest time. NLM also cannot bypass the paywall, so uploading the URL
+            # would silently produce zero indexed content. Treat as likely_error_page
+            # so the bundle falls back to abstract text when available.
+            return UrlQuality("likely_error_page", "probe_cleared_failed_no_abstract", probed.signal)
         return UrlQuality("likely_error_page", "failed_no_abstract",
                           f"metadata+probe={probed.quality}:{probed.signal}")
 

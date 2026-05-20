@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 FetchSource = Literal["local-doi", "local-slug", "arxiv", "unpaywall", "not-found"]
 _UNPAYWALL_EMAIL = "research-hub@example.invalid"
-_USER_AGENT = "research-hub/0.12.0 (https://github.com/WenyuChiou/research-hub)"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _DEFAULT_TIMEOUT = 15.0
 _MAX_PDF_SIZE_MB = 50
 

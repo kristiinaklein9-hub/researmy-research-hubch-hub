@@ -13,7 +13,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_USER_AGENT = "research-hub/0.80.0 (https://github.com/WenyuChiou/research-hub)"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _UNPAYWALL_EMAIL = "research-hub@anthropic.com"
 
 

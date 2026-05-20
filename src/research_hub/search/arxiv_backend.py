@@ -15,7 +15,7 @@ from research_hub.search.base import SearchResult
 logger = logging.getLogger(__name__)
 
 ARXIV_BASE = "http://export.arxiv.org/api/query"
-_USER_AGENT = "research-hub/0.13.0 (https://github.com/WenyuChiou/research-hub)"
+_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
 _ARXIV_ID_RE = re.compile(r"/abs/(\d{4}\.\d{4,5})(?:v\d+)?$")
 _DOI_RE = re.compile(r"^10\.\d{4,}/\S+$", re.IGNORECASE)
 _ARXIV_RE = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$")

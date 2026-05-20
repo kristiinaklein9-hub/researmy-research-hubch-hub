@@ -4618,6 +4618,12 @@ def _cleanup_gc(*, do_bundles, do_debug, do_artifacts,
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from importlib.metadata import version as _pkg_version
+    try:
+        _version = _pkg_version("research-hub-pipeline")
+    except Exception:
+        _version = "unknown"
+
     parser = argparse.ArgumentParser(
         prog="research-hub",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -4632,6 +4638,11 @@ def build_parser() -> argparse.ArgumentParser:
             "  $ research-hub dashboard --sample  # preview without accounts\n\n"
             "Docs: https://github.com/WenyuChiou/research-hub\n"
         ),
+    )
+    parser.add_argument(
+        "--version", "-V",
+        action="version",
+        version=f"research-hub {_version}",
     )
     subparsers = parser.add_subparsers(dest="command")
 

@@ -18,17 +18,7 @@ from research_hub.clusters import ClusterRegistry, slugify
 from research_hub.config import get_config
 from research_hub.discover import _to_papers_input
 from research_hub.errors import MissingExternalTool
-from research_hub._invocation import recommended_cli_invocation
-from research_hub.notebooklm.bundle import bundle_cluster
-from research_hub.notebooklm.upload import (
-    download_briefing_for_cluster,
-    generate_artifact,
-    upload_cluster,
-)
 from research_hub.pipeline import run_pipeline
-from research_hub.search import search_papers
-from research_hub.search.fallback import FIELD_PRESETS, apply_peer_reviewed
-from research_hub.vault.graph_config import refresh_graph_from_vault
 
 
 _LLM_CLI_CANDIDATES = ("claude", "codex", "gemini")
@@ -220,6 +210,7 @@ def auto_pipeline(
             report.cluster_created = True
             _step_log(report, "cluster", True, 0.0, f"created: {slug}", print_progress)
             try:
+                from research_hub.vault.graph_config import refresh_graph_from_vault
                 refresh_graph_from_vault(cfg)
             except Exception as exc:
                 _step_log(report, "graph.refresh", False, 0.0, str(exc), print_progress)
@@ -468,6 +459,12 @@ def auto_pipeline(
     nlm_step = "nlm"
     try:
         nlm_step = "nlm.bundle"
+        from research_hub.notebooklm.bundle import bundle_cluster
+        from research_hub.notebooklm.upload import (
+            download_briefing_for_cluster,
+            generate_artifact,
+            upload_cluster,
+        )
         bundle_report = bundle_cluster(cluster, cfg, download_pdfs=True)        
         _step_log(report, "nlm.bundle", True, _elapsed(started, report),        
                   f"{bundle_report.pdf_count} PDFs", print_progress)
@@ -728,6 +725,7 @@ def _print_next_steps(report: AutoReport, slug: str, cfg, *, do_crystals: bool) 
     if report.brief_path:
         print(f"  Brief:      {report.brief_path}")
     if report.nlm_deferred:
+        from research_hub._invocation import recommended_cli_invocation
         inv = recommended_cli_invocation()
         print(f"  [NLM] skipped (check: {inv} notebooklm login). Resume with:")
         print(f"    {inv} notebooklm bundle   --cluster {slug}")
@@ -1068,6 +1066,7 @@ def _resolve_search_options(
     field: Optional[str] = None,
     peer_reviewed: bool = False,
 ) -> tuple[tuple[str, ...], tuple[str, ...], float]:
+    from research_hub.search.fallback import FIELD_PRESETS, apply_peer_reviewed
     backends = tuple(
         FIELD_PRESETS[field] if field else ("arxiv", "semantic-scholar", "openalex", "crossref")
     )
@@ -1090,7 +1089,8 @@ def _run_search(
     field: Optional[str] = None,
     peer_reviewed: bool = False,
 ) -> list[dict]:
-    """Run arxiv + semantic_scholar search, return papers_input dicts."""       
+    """Run arxiv + semantic_scholar search, return papers_input dicts."""
+    from research_hub.search import search_papers       
 
 
     # v0.49.4: search arxiv + semantic-scholar + openalex + crossref so the

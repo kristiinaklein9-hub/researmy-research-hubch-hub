@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -381,6 +382,25 @@ def auto_pipeline(
         attempted = report.papers_ingested  # tentative len(papers)
         written = len(list(raw_dir.glob("*.md"))) if raw_dir.exists() else 0
         report.papers_ingested = written
+        # PR-E: after a successful ingest, refresh the vault-level
+        # navigation artifacts (`_HOME.md` + `hub/_moc/*.md` populated
+        # bodies + every cluster's `00_overview.md`). Pre-fix these
+        # were silently stale after every `auto` -- `populate_all_overviews`
+        # was wired into `vault rebuild-overviews` only, never into the
+        # primary ingest flow. Non-fatal (the ingest itself succeeded);
+        # log + continue on any failure so a per-cluster overview / MOC
+        # / home-render error doesn't sink the whole auto pipeline.
+        if written > 0:
+            try:
+                from research_hub.vault.hub_overview import populate_all_overviews
+                populate_all_overviews(cfg)
+            except Exception as exc:  # noqa: BLE001 - best-effort post-ingest refresh
+                print(
+                    f"  [WARN] populate_all_overviews failed; _HOME.md / "
+                    f"MOCs / overviews may be stale: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
         try:
             from research_hub.authenticity import DEFERRED_LAYER, list_quarantine
             q_rows = list_quarantine(cfg, cluster=slug)

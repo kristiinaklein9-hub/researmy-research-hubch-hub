@@ -45,6 +45,17 @@ graph rebuild (link out to the real tools instead)._
   instead of a generic `pip install` hint that cannot succeed there.
 
 ### Fixed
+- **`auto` / `ingest` now refresh `_HOME.md`, MOC bodies, and cluster
+  overviews on success.** The `populate_all_overviews` cascade
+  (which writes `_HOME.md`, populates `(populated by sync)` MOC bodies
+  with their cluster lists, and refreshes every `hub/<slug>/00_overview.md`)
+  existed but was wired into `vault rebuild-overviews` only — `auto`
+  never called it. Result: every research-session ingest left the
+  vault-level navigation silently stale (empirically reproduced
+  post-PR-D 4-leg E2E: no `_HOME.md` on disk, MOCs frozen at
+  "(populated by sync)"). Now the cascade fires automatically when
+  ingest wrote >0 papers; failures are logged to stderr and swallowed
+  (the ingest itself already succeeded, navigation drift is non-fatal).
 - **`--auto-detect` cookies path hotfix.** PR-D's `_patchright_cookies_db`
   hardcoded the LEGACY `Default/Cookies` path; modern Chromium (80+,
   including patchright's bundled chromium-1208) stores cookies under

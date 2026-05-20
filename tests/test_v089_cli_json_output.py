@@ -67,6 +67,9 @@ def cfg(tmp_path, monkeypatch):
     shared_get_config = lambda: cfg_obj
     monkeypatch.setattr(cli, "get_config", shared_get_config, raising=False)
     monkeypatch.setitem(cli.require_config.__globals__, "get_config", shared_get_config)
+    # Also patch the source module so code that imports get_config directly from
+    # research_hub.config (not via cli.py) is intercepted on CI where no vault exists.
+    monkeypatch.setattr("research_hub.config.get_config", shared_get_config)
     return cfg_obj
 
 

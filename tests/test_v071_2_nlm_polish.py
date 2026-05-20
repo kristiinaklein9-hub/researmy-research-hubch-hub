@@ -251,26 +251,27 @@ def test_auto_pipeline_prints_notebook_reuse_hint(monkeypatch, capsys, tmp_path)
     monkeypatch.setattr("research_hub.auto._run_search", lambda *args, **kwargs: [{"title": "Paper"}])
     monkeypatch.setattr("research_hub.auto.run_pipeline", lambda **kwargs: 0)
     monkeypatch.setattr(
-        "research_hub.auto.bundle_cluster",
+        "research_hub.notebooklm.bundle.bundle_cluster",
         lambda *args, **kwargs: SimpleNamespace(pdf_count=1),
     )
     monkeypatch.setattr(
-        "research_hub.auto.upload_cluster",
+        "research_hub.notebooklm.upload.upload_cluster",
         lambda *args, **kwargs: nlm_upload.UploadReport(
             cluster_slug=cluster.slug,
             notebook_url="https://notebooklm.google.com/notebook/abc",
             notebook_was_reused=True,
         ),
     )
-    monkeypatch.setattr("research_hub.auto.generate_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("research_hub.notebooklm.upload.generate_artifact", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        "research_hub.auto.download_briefing_for_cluster",
+        "research_hub.notebooklm.upload.download_briefing_for_cluster",
         lambda *args, **kwargs: SimpleNamespace(
             artifact_path=cfg.research_hub_dir / "artifacts" / cluster.slug / "brief.txt",
             char_count=4,
         ),
     )
-    monkeypatch.setattr("research_hub.auto.refresh_graph_from_vault", lambda _cfg: None)
+    monkeypatch.setattr("research_hub.vault.hub_overview.populate_all_overviews", lambda _cfg: None)
+    monkeypatch.setattr("research_hub.vault.graph_config.refresh_graph_from_vault", lambda _cfg: None)
     monkeypatch.setattr("research_hub.auto._run_cluster_overview_step", lambda *args, **kwargs: None)
 
     report = auto_pipeline(

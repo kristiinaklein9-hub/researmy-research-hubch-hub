@@ -44,7 +44,8 @@ def auto_env(tmp_path):
          patch("research_hub.auto._run_fit_check_step",
                side_effect=lambda cfg, papers, *a, **k: papers), \
          patch("research_hub.auto.detect_llm_cli", return_value="claude"), \
-         patch("research_hub.authenticity.list_quarantine") as lq:
+         patch("research_hub.authenticity.list_quarantine") as lq, \
+         patch("research_hub.vault.hub_overview.populate_all_overviews"):
         reg.return_value = MagicMock()
         yield SimpleNamespace(cfg=cfg, raw=raw, list_quarantine=lq, registry=reg)
 

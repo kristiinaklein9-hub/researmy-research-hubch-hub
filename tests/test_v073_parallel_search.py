@@ -4,6 +4,8 @@ import threading
 import time
 from concurrent.futures import Future
 
+import pytest
+
 from research_hub.search.base import SearchResult
 from research_hub.search.fallback import search_papers
 
@@ -133,6 +135,7 @@ def test_parallel_search_one_failing_backend_doesnt_block_others(monkeypatch, ca
     assert "backend boom: 0 hits" in caplog.text
 
 
+@pytest.mark.slow  # hangs 60 s by design (tests as_completed pool timeout)
 def test_parallel_search_respects_pool_timeout(monkeypatch):
     import research_hub.search.fallback as fallback
 

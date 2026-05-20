@@ -52,6 +52,7 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
+    "pytest-timeout>=2.3",
     "responses>=0.23",
 ]
 
@@ -77,4 +78,4 @@ markers = [
     "real_zotero: bypass the real-Zotero block (rare)",
 ]
 testpaths = ["tests"]
-addopts = "--ignore=tests/stress -m 'not stress' -p no:cacheprovider -p no:tmpdir"
+addopts = "--ignore=tests/stress -m 'not slow and not stress' -p no:cacheprovider -p no:tmpdir -p no:langsmith -p no:logfire --timeout=30"

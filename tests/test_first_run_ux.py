@@ -43,10 +43,11 @@ def mock_auto_deps(tmp_path):
     with patch("research_hub.auto.get_config") as mock_get_config, \
          patch("research_hub.auto.ClusterRegistry") as mock_cluster_registry, \
          patch("research_hub.auto.run_pipeline") as mock_run_pipeline, \
-         patch("research_hub.auto.bundle_cluster"), \
-         patch("research_hub.auto.upload_cluster"), \
-         patch("research_hub.auto.generate_artifact"), \
-         patch("research_hub.auto.download_briefing_for_cluster"), \
+         patch("research_hub.notebooklm.bundle.bundle_cluster"), \
+         patch("research_hub.notebooklm.upload.upload_cluster"), \
+         patch("research_hub.notebooklm.upload.generate_artifact"), \
+         patch("research_hub.notebooklm.upload.download_briefing_for_cluster"), \
+         patch("research_hub.vault.hub_overview.populate_all_overviews"), \
          patch("research_hub.auto._run_search") as mock_run_search:
 
         root = tmp_path / "vault"

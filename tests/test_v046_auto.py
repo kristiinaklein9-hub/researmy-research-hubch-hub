@@ -13,10 +13,11 @@ def mock_deps():
     with patch("research_hub.auto.get_config") as mock_get_config, \
          patch("research_hub.auto.ClusterRegistry") as mock_cluster_registry, \
          patch("research_hub.auto.run_pipeline") as mock_run_pipeline, \
-         patch("research_hub.auto.bundle_cluster") as mock_bundle_cluster, \
-         patch("research_hub.auto.upload_cluster") as mock_upload_cluster, \
-         patch("research_hub.auto.generate_artifact") as mock_generate_artifact, \
-         patch("research_hub.auto.download_briefing_for_cluster") as mock_download, \
+         patch("research_hub.notebooklm.bundle.bundle_cluster") as mock_bundle_cluster, \
+         patch("research_hub.notebooklm.upload.upload_cluster") as mock_upload_cluster, \
+         patch("research_hub.notebooklm.upload.generate_artifact") as mock_generate_artifact, \
+         patch("research_hub.notebooklm.upload.download_briefing_for_cluster") as mock_download, \
+         patch("research_hub.vault.hub_overview.populate_all_overviews"), \
          patch("research_hub.auto._run_search") as mock_run_search, \
          patch("research_hub.auto._run_fit_check_step", side_effect=lambda cfg, papers, *a, **k: papers), \
          patch("research_hub.auto.detect_llm_cli", return_value="claude"):
@@ -188,7 +189,7 @@ def test_auto_nlm_failure_does_not_abort_pipeline(mock_deps, capsys):
     mock_deps["upload_cluster"].side_effect = RuntimeError("login expired")
 
     with patch("research_hub.auto._run_crystal_step") as mock_crystals, \
-         patch("research_hub.auto.recommended_cli_invocation", return_value="research-hub"):
+         patch("research_hub._invocation.recommended_cli_invocation", return_value="research-hub"):
         report = auto_pipeline(
             topic="NLM Deferred Topic",
             do_nlm=True,

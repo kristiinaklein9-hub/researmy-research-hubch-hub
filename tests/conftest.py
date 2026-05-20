@@ -50,6 +50,44 @@ def _block_real_webbrowser_open(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _block_real_patchright(monkeypatch):
+    """v1.0: globally stub sync_playwright for every test.
+
+    patchright's sync_playwright() blocks inside Windows C-level
+    WaitForSingleObject (asyncio IOCP poller) when Playwright tries to
+    connect to the browser process.  That C-level call is not interruptible
+    by pytest-timeout's thread method, so a single test that reaches the
+    real sync_playwright hangs the entire test runner.
+
+    Any test that needs to *assert* specific patchright behavior (e.g.
+    test_doctor_chrome_not_found) applies its own monkeypatch.setattr for
+    sync_playwright after this fixture runs — the per-test patch wins.
+    run_doctor()'s own except-clause converts RuntimeError to an INFO
+    result, which every existing assertion accepts (OK or INFO).
+    """
+    try:
+        import patchright.sync_api as _patchright_api
+    except ImportError:
+        return
+
+    class _FakeChromium:
+        def launch(self, *args, **kwargs):
+            raise RuntimeError("patchright browser blocked in test suite")
+
+    class _FakePlaywright:
+        def __init__(self):
+            self.chromium = _FakeChromium()  # instance-level; safe for per-test mutation
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(_patchright_api, "sync_playwright", lambda: _FakePlaywright())
+
+
+@pytest.fixture(autouse=True)
 def _block_real_authenticity_head(monkeypatch):
     """Default authenticity HEAD checks to success in legacy tests.
 

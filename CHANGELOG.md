@@ -50,6 +50,15 @@ graph rebuild (link out to the real tools instead)._
   (`paper summarize --pending --cluster <slug>`).
 
 ### Added
+- **`docs/literature-review-deliverable.md` — format specification.**
+  Defines the consolidated document the skill pipeline (`search` →
+  `literature-triage-matrix` → `research-design-helper`) produces end
+  to end: the fixed 9-section
+  contract, the `.bib` + `.gaps.yml` companion-file schemas, the
+  per-paper summarization contract (and how it relates to the
+  `paper-summarize` skill), honesty rules, and the bilingual /
+  Markdown+Word bundle convention. A fully synthetic worked example
+  ships in the `ai-research-skills` catalog repo.
 - **CI `skill-version-guard` job** (`.github/workflows/ci.yml`). Blocks
   a PR that changes skill content (`skills/` or
   `src/research_hub/skills_data/`) without also bumping

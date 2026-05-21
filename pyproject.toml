@@ -48,6 +48,7 @@ import = [
 mcp = ["fastmcp>=2.0"]
 browser-auth = ["rookiepy>=0.1.0"]
 playwright = ["patchright>=1.55"]
+scholar = ["scholarly>=1.7"]  # enables google-scholar search backend
 dev = [
     "pytest>=7",
     "pytest-cov>=4.0",

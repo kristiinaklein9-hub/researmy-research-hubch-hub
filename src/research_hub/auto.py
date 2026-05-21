@@ -249,7 +249,15 @@ def auto_pipeline(
         report.total_duration_sec = time.time() - started
         return report
 
-    # 3 + 4. Search ??papers_input.json
+    # 3 + 4. Search — print active backends before starting so user knows what's running.
+    # NOTE: This reflects the FIELD_PRESETS definition, which is the source of truth
+    # for backend selection in _run_search. If user-configured backends are added
+    # via HubConfig.search_backends in the future, this print should be updated to
+    # reflect the actual resolved list.
+    if print_progress:
+        from research_hub.search.fallback import FIELD_PRESETS, DEFAULT_BACKENDS
+        active_backends = FIELD_PRESETS.get(field, DEFAULT_BACKENDS) if field else DEFAULT_BACKENDS
+        print(f"[search] backends: {', '.join(active_backends)}")
     try:
         search_kwargs = {
             "max_papers": max_papers,

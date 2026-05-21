@@ -14,12 +14,14 @@ from research_hub.search.crossref import CrossrefBackend
 from research_hub.search.dblp import DblpBackend
 from research_hub.search.base import SearchBackend, SearchResult
 from research_hub.search.eric import EricBackend
+from research_hub.search.google_scholar_backend import GoogleScholarBackend
 from research_hub.search.kci import KciBackend
 from research_hub.search.nasa_ads import NasaAdsBackend
 from research_hub.search.openalex import OpenAlexBackend
 from research_hub.search.pubmed import PubMedBackend
 from research_hub.search.repec import RepecBackend
 from research_hub.search.semantic_scholar import SemanticScholarClient
+from research_hub.search.ssrn_backend import SsrnBackend
 from research_hub.search.websearch import WebSearchBackend
 
 
@@ -41,6 +43,8 @@ _BACKEND_REGISTRY: dict[str, type[SearchBackend]] = {
     "cinii": CiniiBackend,
     "kci": KciBackend,
     "websearch": WebSearchBackend,
+    "google-scholar": GoogleScholarBackend,  # optional: pip install scholarly
+    "ssrn": SsrnBackend,
 }
 
 DEFAULT_BACKENDS = ("openalex", "arxiv", "semantic-scholar", "crossref", "dblp")
@@ -55,13 +59,13 @@ GRAY_DOC_TYPES = (
 )
 
 FIELD_PRESETS: dict[str, tuple[str, ...]] = {
-    "cs": ("openalex", "arxiv", "semantic-scholar", "dblp", "crossref"),
+    "cs": ("openalex", "arxiv", "semantic-scholar", "dblp", "crossref", "google-scholar"),
     "bio": ("openalex", "pubmed", "biorxiv", "crossref", "semantic-scholar"),
     "med": ("openalex", "pubmed", "biorxiv", "crossref", "semantic-scholar"),
     "physics": ("openalex", "arxiv", "crossref", "semantic-scholar"),
     "math": ("openalex", "arxiv", "crossref", "semantic-scholar"),
-    "social": ("openalex", "crossref", "semantic-scholar", "repec"),
-    "econ": ("openalex", "crossref", "semantic-scholar", "repec"),
+    "social": ("openalex", "crossref", "semantic-scholar", "repec", "ssrn"),
+    "econ": ("openalex", "crossref", "semantic-scholar", "repec", "ssrn"),
     "chem": ("openalex", "chemrxiv", "crossref", "semantic-scholar"),
     "astro": ("openalex", "arxiv", "nasa-ads", "crossref", "semantic-scholar"),
     "edu": ("openalex", "eric", "crossref", "semantic-scholar"),
@@ -74,9 +78,11 @@ FIELD_PRESETS: dict[str, tuple[str, ...]] = {
         "pubmed",
         "biorxiv",
         "repec",
+        "ssrn",
         "chemrxiv",
         "nasa-ads",
         "eric",
+        "google-scholar",
     ),
 }
 

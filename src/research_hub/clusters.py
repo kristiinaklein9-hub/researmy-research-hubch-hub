@@ -157,6 +157,18 @@ class Cluster:
     archived_at: str = ""
 
 
+@dataclass
+class ClusterCoverage:
+    """Coverage metrics for a single cluster."""
+
+    slug: str
+    name: str
+    paper_count: int = 0
+    pending_summary: int = 0
+    coverage_score: int = 0
+    latest_mtime: float = 0.0  # max mtime (seconds since epoch) of paper files
+
+
 def _load_notebooklm_shards(value: object) -> list[NotebookShard]:
     if not isinstance(value, list):
         return []
@@ -242,7 +254,22 @@ class ClusterRegistry:
             data = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
         except ImportError:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-        for slug, cluster_dict in (data.get("clusters") or {}).items():
+        raw_clusters = data.get("clusters") or {}
+        if isinstance(raw_clusters, list):
+            cluster_items = []
+            for item in raw_clusters:
+                if not isinstance(item, dict):
+                    continue
+                slug = str(item.get("slug", "") or "").strip().lower()
+                if slug:
+                    cluster_items.append((slug, item))
+        elif isinstance(raw_clusters, dict):
+            cluster_items = raw_clusters.items()
+        else:
+            cluster_items = []
+        for slug, cluster_dict in cluster_items:
+            if not isinstance(cluster_dict, dict):
+                continue
             clean = {key: value for key, value in cluster_dict.items() if key != "slug"}
             clean["notebooklm_shards"] = _load_notebooklm_shards(clean.get("notebooklm_shards"))
             self.clusters[slug] = Cluster(slug=slug, **clean)
@@ -947,3 +974,93 @@ def enumerate_collection_items_for_purge(
         return result
     except Exception:
         return []
+
+
+def compute_coverage(cfg) -> list[ClusterCoverage]:
+    """Compute coverage metrics for all active clusters.
+
+    Coverage score formula:
+        score = min(100, int(
+            min(paper_count / 10.0, 1.0) * 40   # capped at 40 pts
+            + (1 - pending_fraction) * 40
+            + (1 if paper_count > 0 else 0) * 20
+        ))
+
+    ``latest_mtime`` is the max ``st_mtime`` of paper files (seconds since
+    epoch), used for ``--sort=recency`` in the coverage CLI command.
+    """
+    import yaml
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    clusters = [
+        cluster
+        for cluster in registry.list()
+        if getattr(cluster, "status", "active") != "archived"
+    ]
+
+    frontmatter_re = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
+    results: list[ClusterCoverage] = []
+    raw_root = Path(cfg.raw)
+
+    for cluster in clusters:
+        cluster_dir = raw_root / cluster.slug
+        if not cluster_dir.exists():
+            results.append(
+                ClusterCoverage(
+                    slug=cluster.slug,
+                    name=cluster.name,
+                    paper_count=0,
+                    pending_summary=0,
+                    coverage_score=0,
+                    latest_mtime=0.0,
+                )
+            )
+            continue
+
+        papers = [
+            path
+            for path in cluster_dir.glob("*.md")
+            if not path.name.startswith("00_") and not path.name.startswith("_")
+        ]
+        paper_count = len(papers)
+        pending = 0
+        latest_mtime = 0.0
+        for paper_path in papers:
+            try:
+                mtime = paper_path.stat().st_mtime
+                if mtime > latest_mtime:
+                    latest_mtime = mtime
+                text = paper_path.read_text(encoding="utf-8", errors="replace")
+                match = frontmatter_re.match(text)
+                if not match:
+                    continue
+                try:
+                    frontmatter = yaml.safe_load(match.group(1)) or {}
+                except Exception:
+                    frontmatter = {}
+                if str(frontmatter.get("summarize_status", "") or "").strip() == "pending":
+                    pending += 1
+            except Exception:
+                continue
+
+        pending_fraction = pending / paper_count if paper_count > 0 else 0.0
+        score = min(
+            100,
+            int(
+                min(paper_count / 10.0, 1.0) * 40
+                + (1.0 - pending_fraction) * 40
+                + (20 if paper_count > 0 else 0)
+            ),
+        )
+        results.append(
+            ClusterCoverage(
+                slug=cluster.slug,
+                name=cluster.name,
+                paper_count=paper_count,
+                pending_summary=pending,
+                coverage_score=score,
+                latest_mtime=latest_mtime,
+            )
+        )
+
+    return sorted(results, key=lambda row: row.coverage_score)

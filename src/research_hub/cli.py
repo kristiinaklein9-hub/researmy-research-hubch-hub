@@ -25,7 +25,7 @@ from research_hub.errors import ResearchHubError
 from research_hub.operations import add_paper, mark_paper, move_paper, remove_paper
 from research_hub.pipeline import run_pipeline
 from research_hub.pipeline_repair import repair_cluster
-from research_hub.security import safe_join
+from research_hub.security import safe_join, validate_slug, ValidationError
 from research_hub.search import SemanticScholarClient, iter_new_results
 from research_hub.search.fallback import (
     DEFAULT_BACKENDS,
@@ -2024,8 +2024,203 @@ def _zotero_gc(
     return 0
 
 
+_PAPER_FRONTMATTER_RE = re.compile(r"\A(---\r?\n)(.*?)(\r?\n---)(.*)\Z", re.DOTALL)
+
+
+def _read_paper_frontmatter(text: str) -> dict:
+    """Read a markdown YAML frontmatter block into a dict."""
+    match = _PAPER_FRONTMATTER_RE.match(text)
+    if not match:
+        return {}
+    try:
+        import yaml
+
+        parsed = yaml.safe_load(match.group(2)) or {}
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _update_paper_frontmatter(text: str, updates: dict) -> str:
+    """Update a markdown YAML frontmatter block while preserving body text."""
+    import yaml
+
+    match = _PAPER_FRONTMATTER_RE.match(text)
+    if not match:
+        frontmatter = yaml.safe_dump(
+            updates,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+        ).rstrip()
+        return f"---\n{frontmatter}\n---\n{text}"
+    frontmatter = _read_paper_frontmatter(text)
+    frontmatter.update(updates)
+    new_frontmatter = yaml.safe_dump(
+        frontmatter,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+    ).rstrip()
+    return f"{match.group(1)}{new_frontmatter}{match.group(3)}{match.group(4)}"
+
+
+def _frontmatter_field_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        return " ".join(_frontmatter_field_text(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_frontmatter_field_text(item) for item in value)
+    return str(value)
+
+
+def _topic_cluster_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _iter_raw_cluster_dirs(cfg, cluster_slug: str | None = None) -> list[tuple[str, Path]]:
+    raw_root = Path(cfg.raw)
+    if cluster_slug:
+        return [(cluster_slug, safe_join(raw_root, cluster_slug))]
+    if not raw_root.exists():
+        return []
+    return [
+        (path.name, path)
+        for path in sorted(raw_root.iterdir(), key=lambda p: p.name)
+        if path.is_dir() and not path.name.startswith(".") and not path.name.startswith("_")
+    ]
+
+
+def _display_paper_path(cfg, path: Path) -> str:
+    roots: list[Path] = []
+    if getattr(cfg, "root", None) is not None:
+        roots.append(Path(cfg.root))
+    if getattr(cfg, "raw", None) is not None:
+        roots.append(Path(cfg.raw).parent)
+    for root in roots:
+        try:
+            return str(path.relative_to(root)).replace("\\", "/")
+        except ValueError:
+            continue
+    return str(path).replace("\\", "/")
+
+
+def _find_paper_by_slug_or_doi(cfg, slug_or_doi: str) -> tuple[str, Path, dict, str] | None:
+    """Find a paper by filename stem or DOI across all cluster dirs.
+
+    If the same stem/DOI appears in multiple clusters, a warning is printed to
+    stderr (listing all matches) and the first alphabetical match is returned.
+    Callers can disambiguate by passing a --cluster flag (not handled here).
+    """
+    needle = str(slug_or_doi).strip()
+    needle_lower = needle.lower()
+    all_matches: list[tuple[str, Path, dict, str]] = []
+    for cluster_slug, cluster_dir in _iter_raw_cluster_dirs(cfg):
+        if not cluster_dir.exists():
+            continue
+        for paper_path in sorted(cluster_dir.glob("*.md"), key=lambda p: p.name):
+            try:
+                text = paper_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            frontmatter = _read_paper_frontmatter(text)
+            doi = str(frontmatter.get("doi", "") or "").strip().lower()
+            if paper_path.stem == needle or doi == needle_lower:
+                all_matches.append((cluster_slug, paper_path, frontmatter, text))
+    if not all_matches:
+        return None
+    if len(all_matches) > 1:
+        locs = ", ".join(f"{m[0]}/{m[1].name}" for m in all_matches)
+        print(
+            f"Warning: '{needle}' matched in {len(all_matches)} clusters: {locs}. "
+            "Using first match. Pass a more specific identifier to disambiguate.",
+            file=sys.stderr,
+        )
+    return all_matches[0]
+
+
+def _cmd_paper_find(cfg, args) -> None:
+    """Handle `paper find` command. cfg: HubConfig, args: argparse namespace."""
+    query = str(args.query).strip()
+    query_lower = query.lower()
+    by = getattr(args, "by", "any")
+    matches: list[tuple[str, Path, dict]] = []
+
+    for cluster_slug, cluster_dir in _iter_raw_cluster_dirs(cfg, getattr(args, "cluster", None)):
+        if not cluster_dir.exists():
+            continue
+        for paper_path in sorted(cluster_dir.glob("*.md"), key=lambda p: p.name):
+            try:
+                text = paper_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            frontmatter = _read_paper_frontmatter(text)
+            fields: list[str] = []
+            if by in {"title", "any"}:
+                fields.append(_frontmatter_field_text(frontmatter.get("title")))
+            if by in {"doi", "any"}:
+                fields.append(_frontmatter_field_text(frontmatter.get("doi")))
+            if by in {"author", "any"}:
+                fields.append(_frontmatter_field_text(frontmatter.get("author")))
+                fields.append(_frontmatter_field_text(frontmatter.get("authors")))
+            if any(query_lower in field.lower() for field in fields if field):
+                matches.append((cluster_slug, paper_path, frontmatter))
+
+    if not matches:
+        print(f"No papers matched '{query}'.")
+    for cluster_slug, paper_path, frontmatter in matches:
+        print(f"[{cluster_slug}] {_display_paper_path(cfg, paper_path)}")
+        print(f"  Title: {_frontmatter_field_text(frontmatter.get('title'))}")
+        print(f"  DOI: {_frontmatter_field_text(frontmatter.get('doi'))}")
+    print(f"Found {len(matches)} paper(s).")
+
+
+def _cmd_paper_add_to_cluster(cfg, args) -> None:
+    """Handle `paper add-to-cluster` command."""
+    target_cluster = str(args.target_cluster).strip()
+    try:
+        target_cluster = validate_slug(target_cluster, field="--cluster")
+    except ValidationError as exc:
+        print(f"Invalid cluster name: {exc}", file=sys.stderr)
+        return
+    match = _find_paper_by_slug_or_doi(cfg, args.slug_or_doi)
+    if match is None:
+        print(f"No paper matching '{args.slug_or_doi}' found in any cluster.")
+        return
+
+    _, paper_path, frontmatter, text = match
+    clusters = _topic_cluster_list(frontmatter.get("topic_cluster"))
+    if target_cluster in clusters:
+        print(f"Already in cluster '{target_cluster}', no change needed.")
+        return
+
+    updated_clusters = [*clusters, target_cluster]
+    updated_text = _update_paper_frontmatter(text, {"topic_cluster": updated_clusters})
+    display_path = _display_paper_path(cfg, paper_path)
+    if getattr(args, "dry_run", False):
+        print(f"Would add topic_cluster: [{target_cluster}] to {display_path}")
+        return
+
+    paper_path.write_text(updated_text, encoding="utf-8")
+    print(f"Added topic_cluster: [{target_cluster}] to {display_path}")
+
+
 def _paper_command(args) -> int:
     emit_json = bool(getattr(args, "json", False))
+    if args.paper_command == "find":
+        cfg = require_config()
+        _cmd_paper_find(cfg, args)
+        return 0
+    if args.paper_command == "add-to-cluster":
+        cfg = require_config()
+        _cmd_paper_add_to_cluster(cfg, args)
+        return 0
     if args.paper_command == "lookup-doi":
         from research_hub.doi_lookup import batch_lookup_missing_dois, lookup_doi_for_slug
 
@@ -5206,6 +5401,13 @@ def build_parser() -> argparse.ArgumentParser:
     clusters_parser = subparsers.add_parser("clusters", help="Manage topic clusters")
     clusters_subparsers = clusters_parser.add_subparsers(dest="clusters_command", required=True)
     clusters_subparsers.add_parser("list", help="List clusters")
+    coverage_p = clusters_subparsers.add_parser("coverage", help="Show cluster coverage/health metrics")
+    coverage_p.add_argument("--min-coverage", type=int, default=0, dest="min_coverage")
+    coverage_p.add_argument(
+        "--sort",
+        choices=["coverage", "papers", "recency"],
+        default="coverage",
+    )
     show_parser = clusters_subparsers.add_parser("show", help="Show cluster details")
     show_parser.add_argument("slug")
     new_parser = clusters_subparsers.add_parser("new", help="Create a new cluster")
@@ -6581,6 +6783,20 @@ def build_parser() -> argparse.ArgumentParser:
     lookup_doi_p.add_argument("slug", nargs="?", help="Paper slug (omit with --batch)")
     lookup_doi_p.add_argument("--cluster", help="Cluster slug for --batch mode")
     lookup_doi_p.add_argument("--batch", action="store_true", help="Process every paper missing DOI in a cluster")
+    find_p = paper_sub.add_parser(
+        "find",
+        help="Search papers by title, DOI, or author across all clusters",
+    )
+    find_p.add_argument("query", help="Search query string")
+    find_p.add_argument("--cluster", default=None, help="Restrict to one cluster slug")
+    find_p.add_argument("--by", choices=["title", "doi", "author", "any"], default="any")
+    add_to_cluster_p = paper_sub.add_parser(
+        "add-to-cluster",
+        help="Add a paper to a second cluster via topic_cluster frontmatter",
+    )
+    add_to_cluster_p.add_argument("slug_or_doi", help="Paper filename stem or DOI")
+    add_to_cluster_p.add_argument("--cluster", required=True, dest="target_cluster")
+    add_to_cluster_p.add_argument("--dry-run", action="store_true")
     prune_p = paper_sub.add_parser("prune", help="Move or delete labeled papers")
     prune_p.add_argument("--cluster", required=True)
     prune_p.add_argument("--label", default="deprecated")
@@ -7115,6 +7331,32 @@ def _main_dispatch(args, parser) -> int:
             cfg = None
         return _context_dispatch(args, cfg)
     if args.command == "clusters":
+        if args.clusters_command == "coverage":
+            from research_hub.clusters import compute_coverage
+
+            cfg = require_config()
+            rows = compute_coverage(cfg)
+            if args.sort == "papers":
+                rows.sort(key=lambda row: row.paper_count, reverse=True)
+            elif args.sort == "recency":
+                rows.sort(key=lambda row: row.latest_mtime, reverse=True)
+            else:
+                rows.sort(key=lambda row: row.coverage_score)
+
+            print(f"{'cluster':<30} {'papers':>6} {'pending':>7} {'coverage':>9}")
+            print("-" * 57)
+            for row in rows:
+                flag = (
+                    " (!)"
+                    if args.min_coverage > 0 and row.coverage_score < args.min_coverage
+                    else ""
+                )
+                print(
+                    f"{row.slug:<30} {row.paper_count:>6} "
+                    f"{row.pending_summary:>7} {row.coverage_score:>8}%{flag}"
+                )
+            print(f"\n{len(rows)} cluster(s) shown.")
+            return 0
         if args.clusters_command == "list":
             return _clusters_list()
         if args.clusters_command == "show":

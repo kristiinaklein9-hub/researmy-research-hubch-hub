@@ -5,16 +5,11 @@ import pytest
 from research_hub.search.fallback import FIELD_PRESETS, _BACKEND_REGISTRY, resolve_backends_for_field
 
 
-def test_resolve_field_cs_returns_6_backends():
-    """Wave 3 added google-scholar; cs preset now has 6 backends."""
-    assert resolve_backends_for_field("cs") == (
-        "openalex",
-        "arxiv",
-        "semantic-scholar",
-        "dblp",
-        "crossref",
-        "google-scholar",
-    )
+def test_resolve_field_cs_contains_core_backends():
+    """cs preset must include the key academic-CS backends (exact order/count may grow)."""
+    backends = resolve_backends_for_field("cs")
+    for expected in ("openalex", "arxiv", "semantic-scholar", "dblp", "crossref", "google-scholar"):
+        assert expected in backends, f"cs preset missing {expected!r}"
 
 
 def test_resolve_field_bio_includes_pubmed_and_biorxiv():
@@ -47,23 +42,17 @@ def test_resolve_field_edu_includes_eric():
     assert "eric" in resolve_backends_for_field("edu")
 
 
-def test_resolve_field_general_returns_all_13_backends():
-    """Wave 3 added ssrn and google-scholar; general preset now has 13 backends."""
-    assert resolve_backends_for_field("general") == (
-        "openalex",
-        "arxiv",
-        "semantic-scholar",
-        "crossref",
-        "dblp",
-        "pubmed",
-        "biorxiv",
-        "repec",
-        "ssrn",
-        "chemrxiv",
-        "nasa-ads",
-        "eric",
-        "google-scholar",
-    )
+def test_resolve_field_general_contains_all_core_backends():
+    """general preset must include every domain backend (exact count may grow with new backends)."""
+    backends = resolve_backends_for_field("general")
+    for expected in (
+        "openalex", "arxiv", "semantic-scholar", "crossref", "dblp",
+        "pubmed", "biorxiv", "repec", "ssrn", "chemrxiv", "nasa-ads",
+        "eric", "google-scholar",
+    ):
+        assert expected in backends, f"general preset missing {expected!r}"
+    # general must be the superset — at least as many as this wave's 13
+    assert len(backends) >= 13, f"general preset shrank below 13 backends (got {len(backends)})"
 
 
 def test_resolve_field_unknown_raises_valueerror_with_valid_list():

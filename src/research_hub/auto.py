@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -17,104 +16,23 @@ from typing import Optional
 from research_hub.clusters import ClusterRegistry, slugify
 from research_hub.config import get_config
 from research_hub.discover import _to_papers_input
-from research_hub.errors import MissingExternalTool
+from research_hub.llm_cli import (
+    _extract_first_json,
+    detect_llm_cli,
+    invoke_llm_cli,
+)
 from research_hub.pipeline import run_pipeline
 
 
-_LLM_CLI_CANDIDATES = ("claude", "codex", "gemini")
-_LLM_CLI_INSTALL_HINTS = {
-    "claude": "npm i -g @anthropic-ai/claude-code",
-    "codex": "npm i -g @anthropic-ai/codex",
-    "gemini": "pip install google-gemini-cli",
-}
+# LLM CLI detection/invocation moved to llm_cli.py (Wave 1 refactor).
 
 
-def detect_llm_cli() -> Optional[str]:
-    """Return the first LLM CLI on PATH, or None.
-
-    Order of preference: claude -> codex -> gemini.
-    Used by the optional crystal step in auto_pipeline so the user does not
-    have to manually pipe the emit prompt through their LLM of choice.
-    """
-    for name in _LLM_CLI_CANDIDATES:
-        if shutil.which(name):
-            return name
-    return None
+def _invoke_llm_cli(cli_name: str, prompt: str, timeout_sec: float = 180.0, **kwargs) -> str:
+    """Back-compat wrapper — delegates to llm_cli.invoke_llm_cli (Wave 1 refactor)."""
+    return invoke_llm_cli(cli_name, prompt, timeout_sec=timeout_sec, **kwargs)
 
 
-def _invoke_llm_cli(cli_name: str, prompt: str, timeout_sec: float = 180.0) -> str:
-    """Pipe `prompt` through the detected LLM CLI, capture stdout.
-
-    Each CLI has a slightly different non-interactive invocation:
-    - claude:  `claude -p` (prompt via stdin)
-    - codex:   `codex exec --full-auto <prompt>` (prompt as positional arg)
-    - gemini:  `gemini --approval-mode yolo` (prompt via stdin)
-
-    v0.50.1: resolve the full executable path via shutil.which() so the
-    Windows npm `.cmd` shims for codex/gemini are found correctly.
-    Without this, subprocess.run("codex", ...) hits FileNotFoundError on
-    Windows because Python doesn't auto-append PATHEXT.
-    """
-    resolved = shutil.which(cli_name)
-    if not resolved:
-        raise MissingExternalTool(
-            cli_name,
-            install_hint=_LLM_CLI_INSTALL_HINTS.get(
-                cli_name,
-                f"Install {cli_name} and add it to PATH",
-            ),
-        )
-    if cli_name == "claude":
-        cmd = [resolved, "-p"]
-        stdin_input = prompt
-    elif cli_name == "codex":
-        # codex takes the prompt as a positional argument, not stdin
-        cmd = [resolved, "exec", "--full-auto", prompt]
-        stdin_input = None
-    elif cli_name == "gemini":
-        cmd = [resolved, "--approval-mode", "yolo"]
-        stdin_input = prompt
-    else:
-        raise ValueError(f"unsupported LLM CLI: {cli_name}")
-    proc = subprocess.run(
-        cmd,
-        input=stdin_input,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout_sec,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"{cli_name} exited {proc.returncode}: {proc.stderr.strip()[:300]}")
-    return proc.stdout
-
-
-def _extract_first_json(text: str) -> Optional[dict]:
-    """Find the first valid JSON object in `text`, ignoring code fences and prose."""
-    if not text:
-        return None
-    fence_starts = [i for i in range(len(text)) if text.startswith("```", i)]
-    candidates: list[str] = []
-    for i in range(0, len(fence_starts) - 1, 2):
-        start = fence_starts[i]
-        end = fence_starts[i + 1]
-        block = text[start + 3 : end]
-        if block.lstrip().lower().startswith("json"):
-            block = block.split("\n", 1)[1] if "\n" in block else ""
-        candidates.append(block)
-    candidates.append(text)
-    for c in candidates:
-        c = c.strip()
-        first_brace = c.find("{")
-        last_brace = c.rfind("}")
-        if first_brace == -1 or last_brace == -1 or last_brace <= first_brace:
-            continue
-        try:
-            return json.loads(c[first_brace : last_brace + 1])
-        except json.JSONDecodeError:
-            continue
-    return None
+_invoke_llm_cli._llm_cli_backcompat_wrapper = True  # type: ignore[attr-defined]
 
 
 
@@ -156,6 +74,7 @@ def auto_pipeline(
     cluster_overview_threshold: int = 0,
     do_fit_check: bool = True,
     fit_check_threshold: int = 3,
+    no_llm_fit_check: bool = False,
     llm_cli: Optional[str] = None,
     dry_run: bool = False,
     print_progress: bool = True,
@@ -184,6 +103,21 @@ def auto_pipeline(
     because papers have already landed in the vault.
     """
     cfg = get_config()
+    user_adapters = getattr(cfg, "llm_cli_adapters", {}) or {}
+    if not isinstance(user_adapters, dict):
+        user_adapters = {}
+    if llm_cli is None:
+        try:
+            effective_cli = detect_llm_cli(user_adapters=user_adapters)
+        except TypeError:
+            # Preserve older tests/callers that monkeypatch detect_llm_cli
+            # with a zero-argument function.
+            effective_cli = detect_llm_cli()
+    else:
+        effective_cli = llm_cli
+    if print_progress:
+        cli_info = effective_cli or "none (term-overlap fallback)"
+        print(f"[fit-check] LLM CLI: {cli_info}")
     del cluster_overview_threshold
 
 
@@ -254,18 +188,23 @@ def auto_pipeline(
             f"backends={'+'.join(backends)}{filter_note})",
         ]
         if do_fit_check:
-            cli_for_plan = llm_cli or detect_llm_cli() or "(none on PATH — will skip)"
-            plan_lines.append(
-                f"  fit-check via LLM judge ({cli_for_plan}, threshold={fit_check_threshold})"
-            )
+            if no_llm_fit_check:
+                plan_lines.append(
+                    f"  fit-check via term-overlap rule (threshold={fit_check_threshold})"
+                )
+            else:
+                cli_for_plan = effective_cli or "(none on PATH - will skip)"
+                plan_lines.append(
+                    f"  fit-check via LLM judge ({cli_for_plan}, threshold={fit_check_threshold})"
+                )
         plan_lines.append(f"  ingest into cluster {slug}")
         if with_pdfs:
             plan_lines.append("  attach open-access PDFs from arXiv/OpenAlex/Unpaywall/Crossref")
         if with_summary:
-            cli = llm_cli or detect_llm_cli() or "(none on PATH -> will skip)"
+            cli = effective_cli or "(none on PATH -> will skip)"
             plan_lines.append(f"  summarize per-paper notes via LLM CLI ({cli})")
         if do_cluster_overview:
-            cli = llm_cli or detect_llm_cli() or "(none on PATH -> save prompt only)"
+            cli = effective_cli or "(none on PATH -> save prompt only)"
             plan_lines.append(f"  cluster overview auto-fill via LLM CLI ({cli})")
         if do_nlm:
             plan_lines.extend([
@@ -275,7 +214,7 @@ def auto_pipeline(
                 f"  notebooklm download --cluster {slug} --type brief",
             ])
         if do_crystals:
-            cli = llm_cli or detect_llm_cli() or "(none on PATH)"
+            cli = effective_cli or "(none on PATH)"
             plan_lines.append(f"  crystal emit + apply via LLM CLI: {cli}")
         if print_progress:
             print("Dry-run plan:")
@@ -289,7 +228,7 @@ def auto_pipeline(
     # vault. Does NOT weaken the gate: the only opt-out is the explicit,
     # pre-existing --no-fit-check (do_fit_check=False), which still runs
     # L0/L1/L3 authenticity, just no relevance filter.
-    if do_fit_check and not (llm_cli or detect_llm_cli()):
+    if do_fit_check and not no_llm_fit_check and not effective_cli:
         if print_progress:
             print(
                 "No relevance judge (claude / codex / gemini) on PATH.\n"
@@ -298,12 +237,14 @@ def auto_pipeline(
                 "    - install / log in a judge CLI, then re-run, OR\n"
                 "    - re-run with --no-fit-check (papers still pass\n"
                 "      L0/L1/L3 authenticity; NOT relevance-filtered), OR\n"
+                "    - re-run with --no-llm-fit-check to use rule-based\n"
+                "      term-overlap relevance filtering, OR\n"
                 "    - run 'research-hub doctor' to check setup."
             )
         report.ok = False
         report.error = (
             "no relevance judge on PATH (fail-closed); re-run with "
-            "--no-fit-check or install claude/codex/gemini"
+            "--no-fit-check, --no-llm-fit-check, or install claude/codex/gemini"
         )
         report.total_duration_sec = time.time() - started
         return report
@@ -337,8 +278,10 @@ def auto_pipeline(
     # Zotero/Obsidian writes.
     if do_fit_check:
         papers = _run_fit_check_step(
-            cfg, papers, topic, slug, llm_cli,
+            cfg, papers, topic, slug, effective_cli,
             fit_check_threshold, report, started, print_progress,
+            no_llm_fit_check=no_llm_fit_check,
+            user_adapters=user_adapters,
         )
         report.papers_ingested = len(papers)
 
@@ -441,10 +384,10 @@ def auto_pipeline(
         return report
 
     if with_summary:
-        _run_summary_step(cfg, slug, llm_cli, report, started, print_progress)
+        _run_summary_step(cfg, slug, effective_cli, report, started, print_progress)
 
     if do_cluster_overview:
-        _run_cluster_overview_step(cfg, slug, llm_cli, report, started, print_progress)
+        _run_cluster_overview_step(cfg, slug, effective_cli, report, started, print_progress)
 
     if with_pdfs:
         # Attach open-access PDFs to Zotero items after ingest.
@@ -456,7 +399,7 @@ def auto_pipeline(
 
     if not do_nlm:
         if do_crystals:
-            _run_crystal_step(cfg, slug, llm_cli, report, started, print_progress)
+            _run_crystal_step(cfg, slug, effective_cli, report, started, print_progress)
         report.total_duration_sec = time.time() - started
         if print_progress:
             _print_next_steps(report, slug, cfg, do_crystals=do_crystals)
@@ -510,7 +453,7 @@ def auto_pipeline(
 
     # 10. (optional) Crystal generation via detected LLM CLI
     if do_crystals:
-        _run_crystal_step(cfg, slug, llm_cli, report, started, print_progress)
+        _run_crystal_step(cfg, slug, effective_cli, report, started, print_progress)
 
     report.total_duration_sec = time.time() - started
     if print_progress:
@@ -942,6 +885,8 @@ def _run_fit_check_step(
     report: AutoReport,
     started: float,
     print_progress: bool,
+    no_llm_fit_check: bool = False,
+    user_adapters: dict | None = None,
 ) -> list[dict]:
     """LLM-judge relevance gate between search and ingest.
 
@@ -952,8 +897,51 @@ def _run_fit_check_step(
     if not papers:
         return papers
 
-    from research_hub.auto import detect_llm_cli  # avoid circular at module load
     from research_hub.authenticity import quarantine_paper
+
+    if no_llm_fit_check:
+        from research_hub.fit_check import (
+            _extract_key_terms,
+            _read_definition_from_overview,
+            term_overlap,
+        )
+
+        if print_progress:
+            print("[fit-check] no-llm mode: using term-overlap rule-based scoring")
+
+        definition = topic
+        try:
+            existing = _read_definition_from_overview(cfg, slug)
+            if existing:
+                definition = existing
+        except Exception:
+            pass
+        key_terms = _extract_key_terms(definition)
+
+        kept: list[dict] = []
+        for paper in papers:
+            text = paper.get("abstract") or paper.get("title") or ""
+            overlap = term_overlap(text, key_terms)
+            if overlap >= 0.1:
+                provenance = dict(paper.get("provenance") or {})
+                provenance["fit_score"] = overlap
+                provenance["fit_check_mode"] = "term_overlap"
+                paper["provenance"] = provenance
+                kept.append(paper)
+                continue
+            quarantine_paper(
+                cfg,
+                paper,
+                cluster_slug=slug,
+                layer="L4",
+                reason="low_relevance",
+                details={"fit_score": overlap, "mode": "term_overlap"},
+            )
+        _step_log(report, "fit_check", True, _elapsed(started, report),
+                  f"kept {len(kept)}/{len(papers)}; quarantined {len(papers) - len(kept)} "
+                  "(threshold=0.1, mode=term_overlap)",
+                  print_progress)
+        return kept
 
     cli = llm_cli or detect_llm_cli()
     if not cli:
@@ -984,7 +972,10 @@ def _run_fit_check_step(
             pass
 
         prompt = emit_prompt(slug, papers, definition=definition)
-        raw = _invoke_llm_cli(cli, prompt)
+        try:
+            raw = _invoke_llm_cli(cli, prompt, user_adapters=user_adapters)
+        except TypeError:
+            raw = _invoke_llm_cli(cli, prompt)
         payload = _extract_first_json(raw)
         if payload is None:
             for paper in papers:

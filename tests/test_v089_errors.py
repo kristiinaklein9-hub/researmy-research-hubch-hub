@@ -125,13 +125,13 @@ def test_rate_limit_error_backwards_compat_import():
 
 
 def test_invoke_llm_cli_missing_tool_raises_structured_error(monkeypatch):
-    monkeypatch.setattr("research_hub.auto.shutil.which", lambda _name: None)
+    monkeypatch.setattr("research_hub.llm_cli.shutil.which", lambda _name: None)
 
     with pytest.raises(MissingExternalTool) as excinfo:
         _invoke_llm_cli("codex", "hello")
 
     assert excinfo.value.context["tool"] == "codex"
-    assert excinfo.value.next_steps == ["npm i -g @anthropic-ai/codex"]
+    assert excinfo.value.next_steps == ["npm i -g @openai/codex"]
 
 
 def test_get_client_missing_api_key_raises_structured_error(monkeypatch):

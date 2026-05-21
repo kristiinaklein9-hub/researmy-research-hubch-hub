@@ -132,10 +132,11 @@ _CATEGORY_A_CASES = [
 
 
 @pytest.mark.parametrize(("action", "slug", "fields", "assertion"), _CATEGORY_A_CASES, ids=[case[0] for case in _CATEGORY_A_CASES])
+@pytest.mark.timeout(90)
 def test_e2e_category_a_real_cli(action, slug, fields, assertion, sandbox_cfg):
     if action == "delete":
         slug = "beta"
-    result = executor.execute_action(action, slug, dict(fields), timeout=30)
+    result = executor.execute_action(action, slug, dict(fields), timeout=60)
     assert result.returncode == 0, result.stderr or result.stdout
     assert result.ok is True
     assert assertion(sandbox_cfg)

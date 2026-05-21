@@ -166,7 +166,7 @@ def plan_workflow(
 
     # Crystal recommendation: only if LLM CLI present + intent reads as "learning"
     if detect_llm_cli_fn is None:
-        from research_hub.auto import detect_llm_cli as _detect
+        from research_hub.llm_cli import detect_llm_cli as _detect
         detect_llm_cli_fn = _detect
     cli_name = detect_llm_cli_fn()
     is_learning = any(kw in intent_lower for kw in _LEARNING_KEYWORDS)

@@ -479,7 +479,11 @@ def summarize_cluster(
     `<cfg.research_hub_dir>/artifacts/<slug>/summarize-prompt.md` and
     `report.ok=True` (best-effort, never raises).
     """
-    from research_hub.auto import detect_llm_cli, _invoke_llm_cli, _extract_first_json
+    from research_hub.llm_cli import (
+        _extract_first_json,
+        detect_llm_cli,
+        invoke_llm_cli as _invoke_llm_cli,
+    )
 
     report = SummaryReport(cluster_slug=cluster_slug)
 

@@ -334,7 +334,11 @@ def apply_overview(cfg, cluster_slug, payload, *, force: bool = False) -> Overvi
 
 
 def overview_cluster(cfg, cluster_slug, *, llm_cli=None, apply=False, force=False) -> OverviewReport:
-    from research_hub.auto import detect_llm_cli, _extract_first_json, _invoke_llm_cli
+    from research_hub.llm_cli import (
+        _extract_first_json,
+        detect_llm_cli,
+        invoke_llm_cli as _invoke_llm_cli,
+    )
 
     report = OverviewReport(cluster_slug=cluster_slug)
     try:

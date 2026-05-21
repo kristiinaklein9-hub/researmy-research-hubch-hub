@@ -4493,6 +4493,7 @@ def _auto(
     do_cluster_overview: bool = True,
     do_fit_check: bool = True,
     fit_check_threshold: int = 3,
+    no_llm_fit_check: bool = False,
     zotero_batch_size: int = 50,
     llm_cli,
     dry_run,
@@ -4548,6 +4549,7 @@ def _auto(
             "do_cluster_overview": do_cluster_overview,
             "do_fit_check": do_fit_check,
             "fit_check_threshold": fit_check_threshold,
+            "no_llm_fit_check": no_llm_fit_check,
             "zotero_batch_size": zotero_batch_size,
             "llm_cli": llm_cli,
             "dry_run": dry_run,
@@ -4977,8 +4979,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=50,
         help="Number of Zotero items to create per batch during ingest (default: 50)",
     )
-    auto_parser.add_argument("--llm-cli", default=None, choices=["claude", "codex", "gemini"],
+    auto_parser.add_argument("--llm-cli", default=None,
                              help="Force a specific LLM CLI for --with-crystals / fit-check (default: auto-detect)")
+    auto_parser.add_argument(
+        "--no-llm-fit-check",
+        action="store_true",
+        default=False,
+        dest="no_llm_fit_check",
+        help="Use rule-based term-overlap fit-check instead of LLM (no CLI needed).",
+    )
     auto_parser.add_argument("--dry-run", action="store_true",
                              help="Print plan without executing")
     auto_parser.add_argument(
@@ -7002,6 +7011,7 @@ def _main_dispatch(args, parser) -> int:
             do_cluster_overview=not args.no_cluster_overview,
             do_fit_check=not args.no_fit_check,
             fit_check_threshold=args.fit_check_threshold,
+            no_llm_fit_check=args.no_llm_fit_check,
             zotero_batch_size=args.zotero_batch_size,
             llm_cli=args.llm_cli,
             dry_run=args.dry_run,

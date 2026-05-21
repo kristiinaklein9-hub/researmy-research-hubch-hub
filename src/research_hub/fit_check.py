@@ -226,6 +226,31 @@ def term_overlap(abstract: str, key_terms: Iterable[str]) -> float:
     return hits / len(terms)
 
 
+def term_overlap_batch(
+    papers: list,
+    key_terms: list[str],
+) -> list[float]:
+    """Compute term_overlap score for a list of papers against key_terms.
+
+    papers: list of objects/dicts with .abstract/.title or ["abstract"]/["title"]
+    key_terms: list of keyword strings (topic keywords, cluster name words, etc.)
+    Returns: list of float scores in [0.0, 1.0], same length as papers.
+
+    Used by the --no-llm-fit-check path in auto_pipeline.
+    """
+    scores = []
+    for paper in papers:
+        # Support both object-style (.abstract) and dict-style (["abstract"])
+        if hasattr(paper, "abstract"):
+            text = (paper.abstract or "") + " " + (getattr(paper, "title", "") or "")
+        elif isinstance(paper, dict):
+            text = (paper.get("abstract") or "") + " " + (paper.get("title") or "")
+        else:
+            text = str(paper)
+        scores.append(term_overlap(text.strip(), key_terms))
+    return scores
+
+
 def parse_nlm_off_topic(briefing_md: str) -> list[str]:
     """Extract paper identifiers from the briefing's Off-topic section."""
     match = re.search(

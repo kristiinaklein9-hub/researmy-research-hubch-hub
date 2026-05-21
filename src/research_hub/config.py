@@ -109,12 +109,16 @@ class HubConfig:
         config_disable_pdf_fallback: bool = False
         config_unpaywall_email: str | None = None
         config_zotero_parent_collection: str | None = None
+        config_llm_cli_adapters: dict = {}
         zotero: dict = {}
 
         config_path = _resolve_config_path()
         if config_path is not None:
             with config_path.open(encoding="utf-8") as file_obj:
                 data = json.load(file_obj)
+            config_llm_cli_adapters = data.get("llm_cli_adapters", {})
+            if not isinstance(config_llm_cli_adapters, dict):
+                config_llm_cli_adapters = {}
             chmod_sensitive(config_path.parent, mode=0o700)
             chmod_sensitive(config_path, mode=0o600)
             knowledge_base = data.get("knowledge_base", {})
@@ -196,6 +200,7 @@ class HubConfig:
             self.zotero_parent_collection = str(config_zotero_parent_collection)
         else:
             self.zotero_parent_collection = "research-hub"
+        self.llm_cli_adapters: dict = config_llm_cli_adapters
         self.persona = str(config_persona or os.environ.get("RESEARCH_HUB_PERSONA", "")).strip().lower()
         self.no_zotero = config_no_zotero or (
             os.environ.get("RESEARCH_HUB_NO_ZOTERO", "").lower() in {"1", "true", "yes"}

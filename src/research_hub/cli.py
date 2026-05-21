@@ -2211,6 +2211,80 @@ def _cmd_paper_add_to_cluster(cfg, args) -> None:
     print(f"Added topic_cluster: [{target_cluster}] to {display_path}")
 
 
+def _cmd_paper_gaps(cfg, args) -> None:
+    """Handle `paper gaps` command — research gap analysis for a cluster."""
+    from research_hub.gap_analysis import (
+        build_cluster_digest,
+        emit_gap_prompt,
+        apply_gap_results,
+        save_gap_prompt,
+    )
+    from research_hub.llm_cli import detect_llm_cli, invoke_llm_cli
+
+    slug = str(args.cluster).strip()
+    no_llm = bool(getattr(args, "no_llm", False))
+    forced_cli = getattr(args, "llm_cli", None)
+    compare_slug = getattr(args, "compare_cluster", None)
+
+    # Cross-cluster gap analysis is Wave 5 — warn clearly rather than silently ignoring
+    if compare_slug:
+        print(
+            f"[gaps] --compare '{compare_slug}' is not yet implemented (Wave 5). "
+            "Running single-cluster analysis only.",
+            file=sys.stderr,
+        )
+
+    print(f"[gaps] Building digest for cluster '{slug}'...")
+    digest = build_cluster_digest(cfg, slug)
+    if digest.paper_count == 0:
+        print(f"No papers found in cluster '{slug}'. Nothing to analyze.", file=sys.stderr)
+        return
+
+    print(f"[gaps] {digest.paper_count} papers found. Generating prompt...")
+    prompt = emit_gap_prompt(digest)
+
+    # Save prompt for manual use regardless of LLM availability
+    prompt_path = save_gap_prompt(cfg, slug, prompt)
+
+    # Determine whether to invoke an LLM CLI
+    cli_name = None if no_llm else (forced_cli or detect_llm_cli())
+
+    if cli_name is None:
+        print(
+            f"[gaps] No LLM CLI detected (or --no-llm).\n"
+            f"[gaps] Prompt saved to: {prompt_path}\n"
+            f"[gaps] To run manually:\n"
+            f"  1. <llm-cli> < {prompt_path} > /tmp/gap-result.md\n"
+            f"  2. Copy /tmp/gap-result.md to your hub/{slug}/ directory as research-gaps.md"
+        )
+        return
+
+    print(f"[gaps] Invoking {cli_name}...")
+    try:
+        gap_text = invoke_llm_cli(cli_name, prompt, timeout_sec=300)
+    except Exception as exc:
+        print(f"[gaps] LLM invocation failed: {exc}", file=sys.stderr)
+        print(f"[gaps] Prompt saved for manual use: {prompt_path}")
+        return
+
+    if not gap_text.strip():
+        print(
+            "[gaps] LLM returned empty response.",
+            file=sys.stderr,
+        )
+        print(f"[gaps] Prompt saved for manual use: {prompt_path}")
+        return
+
+    print("[gaps] Writing research-gaps.md...")
+    result = apply_gap_results(cfg, slug, gap_text)
+    if result.written:
+        print(f"[gaps] Written: {result.research_gaps_path}")
+        if result.overview_updated:
+            print("[gaps] Updated 00_overview.md with gap summary.")
+    else:
+        print("[gaps] Failed to write output.", file=sys.stderr)
+
+
 def _paper_command(args) -> int:
     emit_json = bool(getattr(args, "json", False))
     if args.paper_command == "find":
@@ -2220,6 +2294,10 @@ def _paper_command(args) -> int:
     if args.paper_command == "add-to-cluster":
         cfg = require_config()
         _cmd_paper_add_to_cluster(cfg, args)
+        return 0
+    if args.paper_command == "gaps":
+        cfg = require_config()
+        _cmd_paper_gaps(cfg, args)
         return 0
     if args.paper_command == "lookup-doi":
         from research_hub.doi_lookup import batch_lookup_missing_dois, lookup_doi_for_slug
@@ -6797,6 +6875,27 @@ def build_parser() -> argparse.ArgumentParser:
     add_to_cluster_p.add_argument("slug_or_doi", help="Paper filename stem or DOI")
     add_to_cluster_p.add_argument("--cluster", required=True, dest="target_cluster")
     add_to_cluster_p.add_argument("--dry-run", action="store_true")
+    gaps_p = paper_sub.add_parser(
+        "gaps",
+        help="Identify research gaps for a cluster using LLM analysis",
+    )
+    gaps_p.add_argument("--cluster", required=True, help="Cluster slug to analyze")
+    gaps_p.add_argument(
+        "--compare",
+        default=None,
+        dest="compare_cluster",
+        help="Second cluster slug for cross-cluster gap analysis (Wave 5)",
+    )
+    gaps_p.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Only emit the prompt file without invoking an LLM CLI",
+    )
+    gaps_p.add_argument(
+        "--llm-cli",
+        default=None,
+        help="Force a specific LLM CLI (auto-detected by default)",
+    )
     prune_p = paper_sub.add_parser("prune", help="Move or delete labeled papers")
     prune_p.add_argument("--cluster", required=True)
     prune_p.add_argument("--label", default="deprecated")

@@ -22,20 +22,26 @@ status-mirror + palette + onboarding demo; no 3-pane / citation-
 graph rebuild (link out to the real tools instead)._
 
 ### Fixed
-- **fit-check no-LLM gate tuned to catch only blatant contamination**
-  (`fit_check.py`).  The bimodal-gap split's ratio bar was 2x — still too
-  aggressive: a real `auto` run for "large language model social
-  interaction" kept only 6/25, rejecting 19 genuinely on-topic papers
-  ("Multi-Agent Social Simulation", "LLM-based Chatbots", "AI-Mediated
-  Communication") that simply phrase the concept differently than the
-  topic string.  A no-LLM *lexical* gate cannot tell an on-topic paper
-  with different vocabulary from an off-topic one — both score modestly.
-  The gap bar is now **5x**: it fires only on blatant cross-field
-  contamination (pure-hydrology papers in an LLM cluster score ~1 vs ~8
-  for genuine LLM papers — an ~8x gap), while a focused all-relevant
-  batch (scores spread ~2x) is kept whole.  Fine-grained relevance
-  screening is the LLM-judge tier's job; the no-LLM tier is a
-  recall-biased fallback that only catches blatant contamination.
+- **fit-check no-LLM relevance gate rewritten** (`fit_check.py`, `auto.py`).
+  The old `no_llm_fit_check` gate split the topic into independent unigrams
+  and kept any paper matching `>= 0.1` of them — i.e. **1 of 5** words. A
+  generic hydrology paper trivially matched `water`/`model`/`resources`
+  and passed while the discriminating phrase "large language model" was
+  destroyed; the `llm-water-resources` cluster ended up **38/43
+  off-topic**. The gate is rebuilt as a pure-Python **BM25** scorer over
+  **1–3-gram** topic terms — phrases like "large language model" survive
+  intact, matching is plural-tolerant, and IDF is self-calibrated on the
+  candidate batch. A paper is rejected only when the batch's sorted BM25
+  scores show a **blatant bimodal split** — a gap whose upper cluster
+  out-scores the lower by ≥ 5× (the cross-field contamination signature:
+  pure-hydrology papers score ~1 vs ~8 for genuine LLM papers). A focused,
+  all-relevant search spreads only ~2× and is kept whole; cold-start
+  (batch < 5, no topic terms, or no clear gap) defers — keeps all, flags
+  `relevance_unverified`. Recall-biased: the no-LLM tier only catches
+  blatant contamination; fine-grained relevance screening is the
+  LLM-judge tier's job. New public API: `extract_topic_terms`,
+  `bm25_scores`, `screen_relevance`. Grounded in a research sweep of
+  ASReview (TF-IDF + Naive Bayes) and BM25 screening practice.
 
 - **`gap-to-topic` dossier — evidence-strength tags + an upgrade/kill test**
   (`skills/gap-to-topic/`, plugin `0.3.4 → 0.3.5`).  A Codex evaluation of a
@@ -60,25 +66,6 @@ graph rebuild (link out to the real tools instead)._
   now live once, in the scorecard, so the gate sections carry only the
   evidence (no duplication).  SKILL.md "What it produces" updated.  Mirrored
   to `src/research_hub/skills_data/gap-to-topic/`.
-- **fit-check no-LLM gate over-rejected on-topic papers** (`fit_check.py`).
-  Follow-up to the BM25 relevance gate. Two flaws surfaced on a real
-  focused-search run (an `auto` for "large language model social
-  interaction" quarantined 13/25 papers — several squarely on-topic, e.g.
-  "LLM-enabled Social Agents"):
-  (1) `_count_term` matched terms exactly, so the singular topic term
-  "large language model" never matched the plural "large language models"
-  that papers actually use — wrecking the document-frequency counts;
-  (2) the "must match a distinctive term" hard gate is wrong for a focused
-  batch — no single term is in every paper, so the gate always found some
-  rare term and rejected papers using other vocabulary ("LLM" vs "large
-  language model").
-  Fixes: `_count_term` now tolerates a regular plural (`(?:es|s)?`); and
-  the gate is rebuilt as a **bimodal-gap split** — papers are rejected only
-  when the sorted BM25 scores show a clear gap whose upper cluster
-  out-scores the lower by >= 2x (the contamination signature). A focused,
-  uniformly-relevant batch rises smoothly with no such gap and is kept
-  whole. Recall-biased: never rejects on a batch it cannot clearly split.
-
 - **`gap-to-topic` dossier was organised tool-first and code-first, not
   reader-first** (`skills/gap-to-topic/`, plugin `0.3.2 → 0.3.3`).  A review
   of a real dossier found it opened with a metadata table of pipeline / API
@@ -92,26 +79,6 @@ graph rebuild (link out to the real tools instead)._
   notes to **Appendix B**.  SKILL.md "What it produces" + the §0 step updated
   to match; `.gaps.yml` schema gains a `name:` field.  Mirrored to
   `src/research_hub/skills_data/gap-to-topic/`.
-- **fit-check no-LLM relevance gate rewritten — it was not screening topic
-  at all** (`fit_check.py`, `auto.py`).  The old `no_llm_fit_check` gate
-  split the topic into independent unigrams (`_extract_key_terms`), scored
-  each paper by `term_overlap` (fraction of those words present), and kept
-  it if `overlap >= 0.1` — i.e. matching **1 of 5** words.  A generic
-  hydrology paper trivially matched `water`/`model`/`resources` and passed,
-  while the discriminating phrase "large language model" was destroyed; the
-  `llm-water-resources` cluster ended up **38/43 off-topic**.  The gate now
-  parses the topic into **1–3-gram terms** (phrases survive intact), scores
-  papers with a pure-Python **BM25** whose IDF is self-calibrated on the
-  candidate batch, and applies a **hard gate**: a paper is kept only if it
-  matches a *distinctive* term — one appearing in fewer than 60 % of the
-  batch.  A generic hydrology paper matches no distinctive term and is
-  rejected.  Cold-start (batch < 5 papers, or no distinctive term, or no
-  topic terms) defers — keeps all, flags `relevance_unverified` — never
-  silently auto-passes and never blanket-rejects (the gate is
-  recall-biased).  New public API: `extract_topic_terms`, `bm25_scores`,
-  `screen_relevance`.  Grounded in a research sweep of ASReview (TF-IDF +
-  Naive Bayes) and BM25 screening practice.
-
 - **`gap-to-topic` §1 named `literature-triage-matrix` as the default
   prior-art tool but no step produced its matrix** (`skills/gap-to-topic/`,
   plugin `0.3.1 → 0.3.2`).  The SKILL.md "orchestrates" paragraph + `Inputs`

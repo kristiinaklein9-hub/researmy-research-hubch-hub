@@ -1038,7 +1038,7 @@ def emit_assignment_prompt(cluster_slug: str, subtopics: list[dict]) -> dict:
             (``description`` optional, defaults to ``""``).
 
     Returns: ``{"prompt": <str>, "paper_count": <int>}`` — the
-    prompt text ready to hand to claude/codex/gemini plus the
+    prompt text ready to hand to an LLM CLI plus the
     cluster's paper count — or ``{"error": ...}``. This tool does
     NOT call an LLM itself; it only constructs the prompt text.
     """
@@ -2505,7 +2505,7 @@ def auto_research_topic(
     Slugifies ``topic`` into a cluster (or reuses ``cluster_slug``), searches
     arXiv + Semantic Scholar, ingests papers into Zotero + Obsidian, then
     bundles + uploads + generates + downloads a NotebookLM brief. With
-    ``do_crystals=True`` and a detected LLM CLI on PATH (claude/codex/gemini),
+    ``do_crystals=True`` and a detected supported LLM CLI on PATH,
     also generates and applies the canonical Q&A crystals so the cluster is
     fully ready for ``read_crystal()`` queries.
 

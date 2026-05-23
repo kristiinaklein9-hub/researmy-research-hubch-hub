@@ -474,7 +474,7 @@ def summarize_cluster(
     returns the parsed payload. `apply=True` also writes back to Obsidian
     + Zotero. The split keeps the dry-run path safe.
 
-    `llm_cli` overrides auto-detection. None = use first claude/codex/gemini
+    `llm_cli` overrides auto-detection. None = use the first supported LLM CLI
     on PATH. If no CLI is available, the prompt is saved to
     `<cfg.research_hub_dir>/artifacts/<slug>/summarize-prompt.md` and
     `report.ok=True` (best-effort, never raises).

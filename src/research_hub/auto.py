@@ -236,7 +236,7 @@ def auto_pipeline(
     if do_fit_check and not no_llm_fit_check and not effective_cli:
         if print_progress:
             print(
-                "No relevance judge (claude / codex / gemini) on PATH.\n"
+                "No relevance judge LLM CLI on PATH.\n"
                 "  Relevance checking is fail-closed: every paper would be\n"
                 "  quarantined (NOT written to the vault). Choose one:\n"
                 "    - install / log in a judge CLI, then re-run, OR\n"
@@ -249,7 +249,7 @@ def auto_pipeline(
         report.ok = False
         report.error = (
             "no relevance judge on PATH (fail-closed); re-run with "
-            "--no-fit-check, --no-llm-fit-check, or install claude/codex/gemini"
+            "--no-fit-check, --no-llm-fit-check, or install a supported LLM CLI"
         )
         report.total_duration_sec = time.time() - started
         return report
@@ -595,7 +595,7 @@ def _run_summary_step(
     cli = llm_cli or detect_llm_cli()
     if not cli:
         _step_log(report, "summary", True, _elapsed(started, report),
-                  "skipped (no claude/codex/gemini on PATH)", print_progress)
+                  "skipped (no supported LLM CLI on PATH)", print_progress)
         return
 
     # --- Layer 1: ## Summary 1-liner callout, via summarize_cluster ---
@@ -697,7 +697,7 @@ def _run_crystal_step(
     cli_name = llm_cli or detect_llm_cli()
     if cli_name is None:
         _step_log(report, "crystals", False, _elapsed(started, report),
-                  f"no LLM CLI on PATH (claude/codex/gemini); prompt saved to {prompt_path}",
+                  f"no LLM CLI on PATH (supported adapters not found); prompt saved to {prompt_path}",
                   print_progress)
         return
 
@@ -884,7 +884,7 @@ def _print_next_steps(report: AutoReport, slug: str, cfg, *, do_crystals: bool) 
         print(f"  research-hub crystal apply --cluster {slug} --scored crystals.json")
         print()
         print("  # Or auto-pipe through a detected LLM CLI:")
-        print(f"  research-hub auto \"{slug}\" --with-crystals  # if claude/codex/gemini on PATH")
+        print(f"  research-hub auto \"{slug}\" --with-crystals  # if a supported LLM CLI is on PATH")
         print()
     print("  # Ad-hoc Q&A against the uploaded notebook")
     print(f"  research-hub ask {slug} \"what are the 3 main research threads?\"")

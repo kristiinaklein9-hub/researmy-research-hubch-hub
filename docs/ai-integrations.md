@@ -23,9 +23,11 @@ Every path ends the same way: `research-hub topic digest --cluster X` gives the 
 
 ---
 
-## Claude Code (has WebSearch)
+## Claude Code (WebSearch-capable path)
 
-Claude Code is the only AI with direct `WebSearch` access. Use it for discovery; let research-hub do the metadata resolution.
+Use this path when your host exposes a general web-search tool such as
+Claude Code's `WebSearch`. Let the host discover candidate DOI/arXiv
+identifiers, then let research-hub handle metadata resolution and ingest.
 
 ```bash
 # 1. Discover — Claude uses its WebSearch tool to find candidate papers.
@@ -67,9 +69,11 @@ research-hub notebooklm download --cluster my-topic
 
 ---
 
-## Claude Desktop / Cursor / Continue / any MCP client
+## Claude Desktop / Cursor / Continue / OpenClaw / any MCP client
 
-These AIs don't have WebSearch but they can call research-hub's MCP tools directly. Everything runs through tool calls; no shell needed.
+MCP-capable AIs can call research-hub's tools directly. Everything runs
+through tool calls; no shell needed. If the host also has its own web
+search, you can combine that search with `enrich_candidates`.
 
 Enable MCP in the client's config (example for Claude Desktop at `~/.claude/claude_desktop_config.json`):
 
@@ -115,7 +119,9 @@ read_topic_overview(cluster_slug="my-topic")
     -> returns the content so the user can verify
 ```
 
-**No WebSearch path** — discovery has to use `search_papers`. Three backends in a fallback chain give good 2024-2025 coverage. For topics where all three miss, the user has to paste DOIs and use `enrich_candidates`.
+**No WebSearch path** — discovery uses `search_papers`. Three backends
+in a fallback chain give good 2024-2025 coverage. For topics where all
+three miss, the user can paste DOIs and use `enrich_candidates`.
 
 ---
 
@@ -177,7 +183,7 @@ Gemini-specific caveat: when asking Gemini to fill papers_input.json summaries, 
 | A topic but no papers | `research-hub search "..." --year 2024-2025 --json` |
 | An existing cluster with no overview | `research-hub topic scaffold && research-hub topic digest` |
 | A cluster that may be off-topic | Bundle and upload to NotebookLM, then ask "is this about X?" |
-| Claude Code with WebSearch available | WebSearch for discovery + `enrich` for metadata |
+| Host with web search available | Web search for discovery + `enrich` for metadata |
 | Anything else | Three-backend `search_papers` via CLI or MCP |
 
 ---

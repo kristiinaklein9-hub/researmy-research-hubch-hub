@@ -1,8 +1,17 @@
-# MCP tools reference
+# MCP Tools Reference
 
-research-hub exposes its capabilities as Model Context Protocol (MCP) tools. Once you've run `research-hub install --mcp` and restarted Claude Desktop, every tool below is callable by your AI agent.
+research-hub exposes its capabilities as Model Context Protocol (MCP)
+tools. Start the server with `research-hub serve`, then attach it from
+Claude Desktop, Claude Code, Cursor, Continue.dev, Cline, Roo Code,
+OpenClaw, or any other MCP-capable host.
 
-> Auto-generated from `@mcp.tool()` decorators in `src/research_hub/mcp_server.py`. Last regenerated for v0.30.0.
+`research-hub install --platform ...` installs portable `SKILL.md`
+instructions for selected coding assistants; it is separate from MCP
+server configuration.
+
+> This human reference is maintained from the `@mcp.tool()` surface in
+> `src/research_hub/mcp_server.py`. For the exact installed manifest, run
+> `research-hub describe --filter mcp_tools --pretty`.
 
 For the architectural rationale of each tool category (and especially why crystals exist), see [anti-rag.md](anti-rag.md). For a worked example, see [example-claude-mcp-flow.md](example-claude-mcp-flow.md).
 

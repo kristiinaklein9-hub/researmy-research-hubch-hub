@@ -133,6 +133,19 @@ def test_invoke_llm_cli_custom_adapter():
     assert mock_run.call_args.kwargs["input"] == "test prompt"
 
 
+def test_cli_parser_accepts_non_core_llm_cli_names():
+    """CLI flags should not block built-in or configured adapters."""
+    from research_hub.cli import build_parser
+
+    parser = build_parser()
+
+    summarize_args = parser.parse_args(["summarize", "--cluster", "x", "--llm-cli", "opencode"])
+    assert summarize_args.llm_cli == "opencode"
+
+    paper_args = parser.parse_args(["paper", "summarize", "--cli", "aichat"])
+    assert paper_args.cli == "aichat"
+
+
 # ---------------------------------------------------------------------------
 # _extract_first_json
 # ---------------------------------------------------------------------------

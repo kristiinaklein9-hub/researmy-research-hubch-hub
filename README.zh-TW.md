@@ -71,7 +71,7 @@ research-hub auto "your research topic"
 research-hub auto "your research topic" --no-nlm
 ```
 
-> **第一次跑 `auto` 前請看**:`auto` 預設會做 **fail-closed** 的關聯性判斷。請確保 PATH 上有 `claude` / `codex` / `gemini` 任一個 CLI,或加 `--no-fit-check` 跳過關聯性判斷;若兩者皆無,`auto` 會在搜尋**前**停下並給出指引,而不是默默產生空的 vault。
+> **第一次跑 `auto` 前請看**:`auto` 預設會做 **fail-closed** 的關聯性判斷。請確保 PATH 上有支援的 LLM CLI（例如 `claude`、`codex`、`gemini`、`opencode`、`aichat`、`cursor`，或自訂 adapter），或加 `--no-fit-check` 跳過關聯性判斷；若兩者皆無，`auto` 會在搜尋**前**停下並給出指引，而不是默默產生空的 vault。
 >
 > **真實性閘門(v0.95+)**:每篇文獻都必須能解析出真實識別碼(DOI / arXiv / PMID)並通過完整性與關聯性檢查,否則會被**隔離(quarantine)並記錄原因**、不會寫進 vault——沒有捏造的參考文獻。用 `research-hub quarantine list` 檢視被擋下的文獻。
 
@@ -79,13 +79,21 @@ research-hub auto "your research topic" --no-nlm
 
 ## 連接 AI host
 
-支援 Claude Desktop、Claude Code、Cursor、Continue.dev、Cline、Roo Code、OpenClaw，以及其他 MCP host：
+research-hub 有兩層 AI 整合方式：
+
+| 層級 | 適合對象 | 目前狀態 |
+|---|---|---|
+| MCP / REST | Claude Desktop、Claude Code、Cursor、Continue.dev、Cline、Roo Code、VS Code Copilot、OpenClaw，以及其他能呼叫工具的 host | 通用；設定 MCP server 或呼叫 REST API |
+| 已知 skill installer | Claude Code、Codex、Cursor、Gemini | 可用 `research-hub install --platform ...` 安裝 |
+| 手動載入 `SKILL.md` | Hermes、OpenClaw、其他支援 skill/rules 目錄的 agent | 可手動複製 `skills/` 內的 skill；目前不是 release-verified installer target |
+
+Claude Desktop、Cursor、Continue.dev、Cline、Roo Code、OpenClaw，或其他 MCP host 可以這樣連接：
 
 ```json
 { "mcpServers": { "research-hub": { "command": "research-hub", "args": ["serve"] } } }
 ```
 
-也可以安裝各平台用的 skill files：
+下列平台有明確的預設 skills 目錄，因此可以直接安裝各平台用的 skill files：
 
 ```bash
 research-hub install --platform claude-code
@@ -93,6 +101,8 @@ research-hub install --platform cursor
 research-hub install --platform codex
 research-hub install --platform gemini
 ```
+
+OpenClaw、Hermes 和其他 agent 仍可透過 MCP/REST 使用 research-hub。若該 host 支援 `SKILL.md` 或 rules 目錄，請手動複製 `skills/` 內的對應目錄，或把相關 `SKILL.md` inline 到該 host 的指令中；`research-hub install --platform` 目前不驗證這些 host。
 
 更多細節請看英文 README、[First 10 minutes](docs/first-10-minutes.md)、[MCP tools](docs/mcp-tools.md)、[AI integrations](docs/ai-integrations.md)。
 

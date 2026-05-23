@@ -1249,7 +1249,7 @@ def _cmd_summarize(args, cfg, *, emit_json: bool = False) -> int:
             _emit_cli_json("summarize", 0, report)
             return 0
         print(f"no LLM CLI on PATH; prompt saved to {report.prompt_path}")
-        print("pipe it through your LLM (claude/codex/gemini) and re-run with --apply")
+        print("pipe it through your LLM CLI and re-run with --apply")
         return 0
     if not args.apply:
         if emit_json:
@@ -1683,7 +1683,7 @@ def _paper_resummarize(
         return 1
     if report.prompt_path:
         print(f"no LLM CLI on PATH; prompt saved to {report.prompt_path}")
-        print("pipe it through your LLM (claude/codex/gemini) and re-run with --apply")
+        print("pipe it through your LLM CLI and re-run with --apply")
         return 0
     print(f"cli used: {report.cli_used}")
     if not apply:
@@ -3657,6 +3657,7 @@ def _cmd_install(args, cfg=None) -> int:
         for key, name, installed in list_platforms():
             status = "installed" if installed else "not installed"
             print(f"  {key:15s} {name:20s} [{status}]")
+        print("  Other MCP/REST hosts can use research-hub without this installer; load SKILL.md manually when needed.")
         return 0
     if not args.platform:
         print("Specify --platform or use --list to see options.")
@@ -5261,6 +5262,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit only one subtree of the manifest",
     )
     describe_parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Compatibility flag; describe emits JSON by default",
+    )
+    describe_parser.add_argument(
         "--pretty",
         action="store_true",
         default=False,
@@ -5381,7 +5388,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--no-nlm", action="store_true",
                              help="Skip NotebookLM bundle/upload/generate/download")
     auto_parser.add_argument("--with-crystals", action="store_true",
-                             help="Also generate crystals via detected LLM CLI (claude/codex/gemini on PATH)")
+                             help="Also generate crystals via detected LLM CLI")
     auto_parser.add_argument(
         "--with-summary",
         action="store_true",
@@ -7013,8 +7020,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize_parser.add_argument("--cluster", required=True)
     summarize_parser.add_argument(
         "--llm-cli",
-        choices=["claude", "codex", "gemini"],
-        help="Override the auto-detected LLM CLI on PATH",
+        help="Override the auto-detected LLM CLI on PATH; built-ins include claude, codex, gemini, opencode, aichat, cursor, plus custom adapters",
     )
     summarize_parser.add_argument(
         "--apply",
@@ -7217,7 +7223,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     paper_summarize_p.add_argument("--pending", action="store_true")
     paper_summarize_p.add_argument("--cluster", default=None)
-    paper_summarize_p.add_argument("--cli", choices=["claude", "codex", "gemini"], default="claude")
+    paper_summarize_p.add_argument(
+        "--cli",
+        default="claude",
+        help="LLM CLI to invoke; built-ins include claude, codex, gemini, opencode, aichat, cursor, plus custom adapters",
+    )
     paper_summarize_p.add_argument("--max-papers", type=int, default=None)
     paper_summarize_p.add_argument("--dry-run", action="store_true")
 

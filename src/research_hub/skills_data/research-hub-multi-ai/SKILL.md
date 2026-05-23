@@ -31,7 +31,9 @@ The router emits commands that go through the `research-hub` CLI in many cases. 
 research-hub doctor
 ```
 
-If that command is **not found** (vs. emitting a health report), the user installed only the Claude Code marketplace plugin. Stop and tell them:
+If that command is **not found** (vs. emitting a health report), the
+host has loaded the skill instructions but the Python CLI is missing.
+Stop and tell them:
 
 > This skill orchestrates `research-hub` CLI commands across multiple AIs, but the CLI itself isn't installed. Please run:
 >

@@ -17,8 +17,9 @@ research-hub doctor
 ```
 
 If that command is **not found** (vs. emitting a health report), the
-user installed only the Claude Code marketplace plugin and is missing
-the Python CLI. Stop and tell them:
+host has loaded the skill instructions but the Python CLI is missing.
+This can happen after a marketplace/manual skill install without the
+runtime package. Stop and tell them:
 
 > This skill needs the `research-hub` CLI. Please run:
 >
@@ -29,8 +30,8 @@ the Python CLI. Stop and tell them:
 >
 > Then re-run your request. If you only need to compare papers, sharpen
 > a research question, or build a project / paper memory file (no
-> automated search, no NotebookLM upload), the marketplace install
-> alone is enough — you don't need this skill for those.
+> automated search, no NotebookLM upload), a lightweight prompt-only
+> skill may be enough; this workflow needs the CLI for tool execution.
 
 Do **not** invent or simulate `research-hub` output if the CLI is
 missing.
@@ -155,7 +156,7 @@ For MCP hosts:
 { "mcpServers": { "research-hub": { "command": "research-hub", "args": ["serve"] } } }
 ```
 
-Install host-specific files:
+Install host-specific files for hosts with known default skill directories:
 
 ```bash
 research-hub install --platform claude-code
@@ -163,6 +164,11 @@ research-hub install --platform cursor
 research-hub install --platform codex
 research-hub install --platform gemini
 ```
+
+For Hermes, OpenClaw, or other hosts with `SKILL.md`/rules support,
+copy the relevant `skills/<name>/` directories manually or inline this
+file into the host's instructions. Use MCP/REST for tool calls when no
+installer target exists.
 
 ## Guardrails
 

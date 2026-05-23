@@ -130,7 +130,7 @@ Papers on heterogeneous or homogeneous catalyst design, activity, selectivity, s
 Mechanistic and kinetic studies — DFT, isotope labeling, intermediate trapping, rate law analysis.
 ```
 
-NotebookLM: create two notebooks named `Chemistry Main` and `Chemistry Methods`, then update the skill's NotebookLM routing table in `skills/knowledge-base/SKILL.md` Step 5 so that `catalysts` / `mechanisms` / `synthesis-routes` go to `Chemistry Main` and `characterization` goes to `Chemistry Methods`.
+NotebookLM: create two notebooks named `Chemistry Main` and `Chemistry Methods`, then bind clusters to notebooks with `research-hub clusters bind` or update the current cluster registry so that `catalysts` / `mechanisms` / `synthesis-routes` point to `Chemistry Main` and `characterization` points to `Chemistry Methods`.
 
 ---
 
@@ -175,7 +175,10 @@ Your `config.json` zotero section:
 }
 ```
 
-For this domain, Step 2 (search) benefits from turning PubMed off in favor of SSRN and NBER, which `paper-search-mcp` already supports via CrossRef. No config change needed — Step 2 in `skills/knowledge-base/SKILL.md` always runs CrossRef when the topic looks non-medical.
+For this domain, search usually benefits from non-medical backends.
+Use `research-hub search --backend openalex,crossref` or the matching
+MCP `search_papers` backend list instead of relying on a legacy
+paper-search MCP server.
 
 NotebookLM: one notebook is enough for most economics labs. Name it `Econ Literature`.
 
@@ -215,9 +218,14 @@ The pipeline does not bundle this — it's a separate tool in your stack. The on
 
 ## Disabling steps you don't want
 
-Planned for Phase 2 but not yet in v0.2.1: an env var `RESEARCH_HUB_SKIP_STEPS=5,7` to skip specific pipeline steps without editing code.
+Current CLI flags cover the common skips:
 
-Until then, the simplest way to disable Step 5 is to leave `zotero.notebooklm` unset in config (the skill checks for it). To disable Step 7 (citation graph exploration), answer "no" when the skill asks "add these related papers?" at the end of a run.
+- `research-hub auto "topic" --no-nlm` skips NotebookLM bundle/upload/generate/download.
+- `research-hub auto "topic" --no-fit-check` skips LLM relevance judging while keeping identifier and integrity checks.
+- `research-hub auto "topic" --dry-run` previews without executing the workflow.
+
+For local files without Zotero, prefer `research-hub import-folder`
+with the `analyst` or `internal` persona instead of editing pipeline code.
 
 ---
 

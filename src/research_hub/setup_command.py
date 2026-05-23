@@ -223,7 +223,8 @@ def run_setup(args) -> int:
         platform = args.platform or detect_host()
         if not platform:
             print("[setup] No host auto-detected. Skipping install step.")
-            print("[setup] Run later: research-hub install --platform <claude-code|cursor|codex|gemini>")
+            print("[setup] Run later for supported installer targets: research-hub install --platform <claude-code|cursor|codex|gemini>")
+            print("[setup] MCP/REST hosts can attach research-hub without a skill installer.")
         else:
             print(f"[setup] Installing skill files for platform: {platform}")
             install_args = SimpleNamespace(mcp=False, list_platforms=False, platform=platform)

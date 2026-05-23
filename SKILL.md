@@ -54,6 +54,11 @@ research-hub install --platform codex
 research-hub install --platform gemini
 ```
 
+For Hermes, OpenClaw, or other hosts with `SKILL.md`/rules support,
+copy the relevant `skills/<name>/` directories manually or inline the
+skill text into the host's instructions. Use MCP/REST for tool calls
+when no installer target exists.
+
 ## Operating Rules
 
 - Run `research-hub doctor` first when setup or runtime behavior is unclear.

@@ -1,6 +1,6 @@
 ---
 name: paper-summarize
-description: After research-hub ingests a cluster of cited papers, fill the per-paper Key Findings + Methodology + Relevance sections in BOTH Obsidian markdown and the Zotero child note. Use when the user says "fill the TODO Key Findings/Methodology blocks left by research-hub auto", "I just ran auto and don't know what these papers are about", or "summarize the papers in cluster X". Invokes `claude` / `codex` / `gemini` (whichever is on PATH) on each paper's abstract. NOT for summarizing the user's own manuscript draft — that's `paper-memory-builder`. NOT for cluster-level briefs — that's `research-hub notebooklm generate`. This skill is per-cited-paper only. If the user says "extract claims from these papers", disambiguate before acting: their own manuscript draft → `paper-memory-builder`; a cross-paper comparison matrix → `literature-triage-matrix`; per-cited-paper Key Findings → this skill.
+description: After research-hub ingests a cluster of cited papers, fill the per-paper Key Findings + Methodology + Relevance sections in BOTH Obsidian markdown and the Zotero child note. Use when the user says "fill the TODO Key Findings/Methodology blocks left by research-hub auto", "I just ran auto and don't know what these papers are about", or "summarize the papers in cluster X". Invokes a supported LLM CLI on each paper's abstract. NOT for summarizing the user's own manuscript draft — that's `paper-memory-builder`. NOT for cluster-level briefs — that's `research-hub notebooklm generate`. This skill is per-cited-paper only. If the user says "extract claims from these papers", disambiguate before acting: their own manuscript draft → `paper-memory-builder`; a cross-paper comparison matrix → `literature-triage-matrix`; per-cited-paper Key Findings → this skill.
 ---
 
 # paper-summarize
@@ -28,7 +28,7 @@ Not for:
 ## Inputs
 
 - Cluster slug (must already exist in the vault under `raw/<slug>/`)
-- Optional LLM CLI override (`claude` / `codex` / `gemini`)
+- Optional LLM CLI override (`claude`, `codex`, `gemini`, `opencode`, `aichat`, `cursor`, or configured custom adapter)
 - Optional `--apply` flag (default off, dry-run)
 
 The skill reads each paper's frontmatter (DOI, year, zotero-key) + the `## Abstract` body block. Papers with empty abstract get a "PDF needed" marker rather than hallucinated findings.

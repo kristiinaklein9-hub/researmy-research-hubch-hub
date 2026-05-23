@@ -51,7 +51,7 @@ model-generated bibliographic field.
 Before v0.95.0rc2, a missing relevance judge meant **keep every
 paper** (silent fail-open). That is exactly the failure mode this
 guarantee exists to prevent. Now, with relevance checking on (the
-default) and no `claude`/`codex`/`gemini` judge on PATH:
+default) and no supported LLM judge CLI on PATH:
 
 - `research-hub auto` **stops before the slow multi-backend
   search** with actionable guidance (Phase C) — you are told
@@ -82,7 +82,7 @@ you here. Typical causes and fixes:
 
 | Reason | Meaning | Fix |
 |---|---|---|
-| `relevance_unjudged` | fit-check on, no LLM judge on PATH | install `claude`/`codex`/`gemini`, or re-run `--no-fit-check`, then `restore` |
+| `relevance_unjudged` | fit-check on, no LLM judge on PATH | install a supported judge CLI, configure a custom adapter, or re-run `--no-fit-check`, then `restore` |
 | `doi_unresolved` | identifier did not resolve (`<400`) | usually a bad/typo DOI from a backend — inspect with `show`; restore if you can confirm it manually |
 | `doi_check_unavailable` | resolver unreachable (offline/timeout) — fail-closed | re-run when network is back; `restore` the held items |
 | `no_identifier` | no DOI/arXiv/PMID at all | genuinely unverifiable as-is; keep quarantined unless you can attach an identifier |

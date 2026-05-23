@@ -1,7 +1,7 @@
 ---
 name: zotero-library-curator
 description: Audit and curate a Zotero library — find duplicate DOIs, orphan items missing required tags, propose collection rebinds, identify bloated or under-used collections, generate tag hygiene reports, emit preview-only cleanup plans. Use when the user asks to "audit Zotero", "find duplicates", "tag hygiene report", "which collections are bloated or under-used", or "propose a Zotero cleanup plan". Defers all CRUD operations to the standalone `zotero-skills` skill or `research-hub zotero` CLI. Includes a backup-first reminder before any apply/CRUD handoff suggestion.
-compatibility: Designed for Claude Code. Portable across agentskills.io-compliant hosts; depends on the standalone `zotero-skills` skill OR the `research-hub` CLI for actual Zotero connectivity. On Claude Code the sibling skill lives at ~/.claude/skills/zotero-skills/; on other hosts substitute the host's skills directory.
+compatibility: Portable `SKILL.md` instructions for agentskills.io-style hosts. Depends on the standalone `zotero-skills` skill OR the `research-hub` CLI for actual Zotero connectivity. On Claude Code the sibling skill usually lives at ~/.claude/skills/zotero-skills/; on other hosts substitute the host's skills directory or rules path.
 ---
 
 # zotero-library-curator
@@ -38,9 +38,9 @@ research-hub doctor 2>/dev/null  # if research-hub CLI installed
 # Other hosts:  ls <host-skills-dir>/zotero-skills/SKILL.md
 ```
 
-If **neither** is available, the user installed only the marketplace
-plugin without the CLI and without the standalone `zotero-skills`
-skill. Stop and tell them:
+If **neither** is available, the host has loaded these instructions but
+has no Zotero-capable runtime (`research-hub` CLI or standalone
+`zotero-skills`). Stop and tell them:
 
 > This skill audits a Zotero library, which needs Zotero connectivity
 > via one of:

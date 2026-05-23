@@ -50,6 +50,7 @@ research-hub is a local-first orchestration layer for research workflows:
 - **CLI:** `research-hub auto`, `import-folder`, `ask`, `doctor`, `tidy`, `clusters`, `zotero`, `notebooklm`, `crystal`, and more.
 - **MCP server:** lets Claude Desktop, Claude Code, Cursor, Continue.dev, Cline, Roo Code, OpenClaw, and other MCP hosts operate the same workflow.
 - **REST API:** exposes `/api/v1/*` for browser-only or HTTP-capable assistants.
+- **Portable skill pack:** `SKILL.md` workflow instructions can be installed directly for Claude Code, Codex, Cursor, and Gemini, or copied manually into hosts that support skill/rules directories.
 - **Dashboard:** gives humans a live view of clusters, papers, diagnostics, briefs, writing support, and management actions.
 - **Vault format:** writes normal Markdown, frontmatter, `.base` dashboards, cache files, and logs that you can inspect directly.
 - **Authenticity gate (v0.95+):** every discovered paper must resolve to a real identifier (DOI / arXiv / PMID), pass integrity and relevance checks, or it is **quarantined with a recorded reason** and never written to the vault. No fabricated references — inspect rejects with `research-hub quarantine list`.
@@ -126,7 +127,7 @@ Then drive operations via CLI `--json` mode or the bundled MCP server (`research
 
 **Note**: NotebookLM upload still requires one-time human-driven `research-hub notebooklm login` browser-based Google OAuth. Headless agent completion is upstream-blocked by Google's auth flow.
 
-**Note**: `auto_research_topic` (and `research-hub auto`) runs a fail-closed relevance check. Ensure a `claude` / `codex` / `gemini` CLI is reachable on PATH, or disable the relevance check, otherwise the run stops before the search with guidance rather than returning a silently empty result.
+**Note**: `auto_research_topic` (and `research-hub auto`) runs a fail-closed relevance check. Ensure a supported LLM CLI is reachable on PATH (`claude`, `codex`, `gemini`, `opencode`, `aichat`, `cursor`, or a configured custom adapter), or disable the relevance check, otherwise the run stops before the search with guidance rather than returning a silently empty result.
 
 ## Human quickstart
 
@@ -151,7 +152,8 @@ MCP server dependencies.
 
 **Relevance judge (read before first `auto` run).** `research-hub
 auto` runs a **fail-closed** relevance check by default. Keep a
-`claude`, `codex`, or `gemini` CLI on PATH (any one is enough), or
+supported LLM CLI on PATH (for example `claude`, `codex`, `gemini`,
+`opencode`, `aichat`, `cursor`, or a configured custom adapter), or
 pass `--no-fit-check` to skip relevance judging (papers still get
 identifier + integrity checks; they are just not relevance-filtered).
 With no judge and no flag, `auto` stops **before** the search with
@@ -170,7 +172,15 @@ Field presets for `discover new`, `search`, and related planning flows are `cs`,
 
 ## Connect your AI host
 
-For Claude Desktop, Cursor, Continue.dev, Cline, VS Code Copilot, OpenClaw, or another MCP host:
+research-hub has two AI-facing integration layers:
+
+| Layer | Best for | Current status |
+|---|---|---|
+| MCP / REST | Claude Desktop, Claude Code, Cursor, Continue.dev, Cline, Roo Code, VS Code Copilot, OpenClaw, and other tool-calling hosts | Host-agnostic; configure the MCP server or call the REST API |
+| Installed `SKILL.md` files | Claude Code, Codex, Cursor, Gemini | Built-in installer targets via `research-hub install --platform ...` |
+| Manual `SKILL.md` loading | Hermes, OpenClaw, other agents with skill/rules directories | Copy or reference the bundled skill directories manually; not release-verified as installer targets |
+
+For Claude Desktop, Cursor, Continue.dev, Cline, VS Code Copilot, OpenClaw, or another MCP host, configure the MCP server:
 
 ```json
 { "mcpServers": { "research-hub": { "command": "research-hub", "args": ["serve"] } } }
@@ -182,7 +192,7 @@ Restart the host. Then ask naturally:
 
 The AI can call `auto_research_topic(topic="agent-based modeling", max_papers=5)` and ingest papers, generate a NotebookLM brief, and update the vault.
 
-Install host-specific skill files:
+Install host-specific skill files for the platforms with known default skill directories:
 
 ```bash
 research-hub install --platform claude-code
@@ -191,7 +201,9 @@ research-hub install --platform codex
 research-hub install --platform gemini
 ```
 
-Browser-only or HTTP-capable AIs can use the REST API:
+OpenClaw, Hermes, and other agents can still use research-hub through MCP/REST. If the host supports `SKILL.md`-style directories or rules files, copy the bundled directories from `skills/` or inline the relevant `SKILL.md` into the host's instructions. `research-hub install --platform` does not currently verify those hosts.
+
+Browser-only or HTTP-capable AIs can use the REST API after starting the local server with `research-hub serve --dashboard`:
 
 ```bash
 curl -X POST http://127.0.0.1:8765/api/v1/plan \
@@ -296,10 +308,10 @@ research-hub zotero backfill --tags --notes --apply
 | `research-hub init` reports Chrome warnings | Chrome is missing or patchright cannot find it | Install Chrome, then run `research-hub doctor` |
 | `research-hub notebooklm login` opens a browser but Google blocks login | New-device or bot challenge | Complete the visible browser sign-in and phone challenge |
 | `research-hub auto` finds 0 papers / empty vault | Topic too narrow OR papers were quarantined by the authenticity gate (unresolved DOI, failed integrity, or relevance-unjudged) | Re-run with `--max-papers 20` / rephrase; run `research-hub quarantine list` to see rejected papers + reasons |
-| `research-hub auto` stops before searching: "no relevance judge on PATH" | Fail-closed relevance check and no `claude`/`codex`/`gemini` CLI found | Install a judge CLI, or re-run with `--no-fit-check` to skip relevance judging |
+| `research-hub auto` stops before searching: "no relevance judge on PATH" | Fail-closed relevance check and no supported LLM CLI found | Install a judge CLI, or re-run with `--no-fit-check` to skip relevance judging |
 | NotebookLM upload or generate fails | NotebookLM UI changed or login expired | Run `research-hub notebooklm login`; then resume with `research-hub notebooklm bundle/upload/generate/download --cluster <slug>` |
 | `notebooklm upload` worked yesterday and now fails on auth | Google's `__Secure-1PSIDTS` / `PSIDRTS` cookies expire roughly every 3.5h; `notebooklm keepalive` cannot refresh them server-side | Re-run `research-hub notebooklm login --auto-detect` — the browser opens, the cookies refresh on sign-in, the session saves automatically (no terminal interaction). Takes < 1 minute |
-| `auto --with-crystals` cannot find an LLM CLI | `claude`, `codex`, or `gemini` is not on PATH | Install one, or use `crystal emit` and `crystal apply` manually |
+| `auto --with-crystals` cannot find an LLM CLI | No supported LLM CLI is on PATH | Install one, configure a custom adapter, or use `crystal emit` and `crystal apply` manually |
 | Claude Desktop cannot see the MCP server | MCP config is in the wrong file or host was not restarted | Check the host config path and restart Claude Desktop |
 | `init` reports Zotero warnings but you do not use Zotero | Persona expects Zotero | Re-run `research-hub setup --persona analyst` or `--persona internal` |
 | `research-hub clusters delete` refuses to delete | Cluster has papers, notes, or Zotero items | Re-run with `--apply --force` after reviewing the cascade preview |

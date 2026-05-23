@@ -311,7 +311,7 @@ def build_frames():
     d = ImageDraw.Draw(end)
     d.text((PAD, 150), "That's it.", fill=CYAN, font=UI_BIG)
     d.text((PAD, 205), "~3 minutes to ingest.", fill=FG, font=UI_BIG)
-    d.text((PAD, 245), "~$0 if you use a subscription CLI (claude / codex / gemini).", fill=FG, font=UI_BIG)
+    d.text((PAD, 245), "~$0 if you use a subscription LLM CLI.", fill=FG, font=UI_BIG)
     d.text((PAD, 285), "Subsequent queries: zero tokens forever.", fill=GREEN, font=UI_BIG)
     d.text((PAD, 380), "pip install research-hub-pipeline[playwright,secrets]", fill=ORANGE, font=MONO_BIG)
     d.text((PAD, 425), "research-hub init  &&  research-hub auto \"your topic\"", fill=ORANGE, font=MONO_BIG)

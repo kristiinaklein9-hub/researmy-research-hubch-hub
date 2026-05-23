@@ -57,7 +57,7 @@ def _check_first_run_readiness(vault: Path, *, persona: str, has_zotero: bool) -
             rows.append(("llm-cli", "OK", f"`{cli}` on PATH -- `auto --with-crystals` will work"))
             break
     else:
-        rows.append(("llm-cli", "INFO", "no claude/codex/gemini CLI on PATH -- crystals stay manual emit/apply"))
+        rows.append(("llm-cli", "INFO", "no supported LLM CLI on PATH -- crystals stay manual emit/apply"))
 
     return rows
 

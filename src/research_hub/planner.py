@@ -338,7 +338,7 @@ def _clarifying_questions(
             )
     else:
         qs.append(
-            "(No claude/codex/gemini CLI on your PATH — crystals will be skipped. "
+            "(No supported LLM CLI on your PATH — crystals will be skipped. "
             "Install one of those CLIs to enable fully automated crystal generation.)"
         )
     return qs

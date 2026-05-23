@@ -249,6 +249,10 @@ research-hub install --platform gemini
 Each platform gets every skill under its respective skills directory
 (`~/.claude/skills/<name>/SKILL.md`, `~/.cursor/skills/<name>/SKILL.md`,
 etc). `research-hub install --list` shows install status per platform.
+For Hermes, OpenClaw, or other hosts without a verified installer target,
+copy the relevant `skills/<name>/` directory manually or inline the
+`SKILL.md` text into the host's rules/instructions. Use MCP/REST for the
+actual tool calls.
 
 ## Combinations that work well
 

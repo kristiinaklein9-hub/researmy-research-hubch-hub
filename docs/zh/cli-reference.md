@@ -1,6 +1,6 @@
 # CLI 參考
 
-針對 research-hub v0.9.0 版本生成。35+ 個子指令，依工作流程階段分組。
+針對 research-hub v1.x 版本整理。35+ 個子指令，依工作流程階段分組。
 
 ## 設定 (Setup)
 
@@ -33,12 +33,15 @@ research-hub doctor
 ```
 
 ### `install`
-安裝 AI 助理技能。
+將可攜式 `SKILL.md` 安裝到有明確預設 skills 目錄的 host。
 
 ```bash
 research-hub install --platform claude-code|codex|cursor|gemini
 research-hub install --list
 ```
+
+OpenClaw、Hermes 和其他 agent 可透過 MCP/REST 或手動載入
+`SKILL.md` 使用 research-hub，但目前不是內建 installer target。
 
 ### `dashboard`
 為 vault 生成個人化的 HTML dashboard。

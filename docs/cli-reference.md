@@ -1,6 +1,6 @@
 # CLI Reference
 
-Generated against research-hub v0.9.0. 35+ subcommands grouped by
+Generated against research-hub v1.x. 35+ subcommands grouped by
 workflow stage.
 
 ## Setup
@@ -34,12 +34,17 @@ research-hub doctor
 ```
 
 ### `install`
-Install AI assistant skill.
+Install portable `SKILL.md` files for hosts with known default skill
+directories.
 
 ```bash
 research-hub install --platform claude-code|codex|cursor|gemini
 research-hub install --list
 ```
+
+OpenClaw, Hermes, and other agents can use research-hub through MCP/REST
+or manual `SKILL.md` loading, but they are not built-in installer targets
+yet.
 
 ### `dashboard`
 Generate a personal HTML dashboard for the vault.

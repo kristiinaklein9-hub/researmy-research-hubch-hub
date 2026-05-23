@@ -102,3 +102,26 @@ def test_python_module_describe_subprocess_emits_valid_json():
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
     assert set(payload) == {"version", "subcommands", "mcp_tools", "env_vars", "skills", "personae"}
+
+
+def test_python_module_describe_accepts_json_compat_flag():
+    repo_root = Path(__file__).resolve().parents[1]
+    src_path = repo_root / "src"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(src_path) + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "research_hub", "describe", "--json"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert set(payload) == {"version", "subcommands", "mcp_tools", "env_vars", "skills", "personae"}

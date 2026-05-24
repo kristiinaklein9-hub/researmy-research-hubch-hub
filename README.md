@@ -284,15 +284,24 @@ Briefings and Writing tabs are also available. See the [dashboard walkthrough](d
 
 ## Inside Obsidian
 
-Every ingested paper becomes a real Markdown note with structured frontmatter. Every cluster can also get an Obsidian Bases dashboard.
+Every ingested paper becomes a real Markdown note with structured
+frontmatter. The vault stays inspectable: paper notes, Bases dashboards,
+and graph color groups are all regular Obsidian artifacts.
 
-**Cluster Bases dashboard**: generated `.base` file with sortable paper metadata.
+**Per-paper note**: title, authors, year, DOI, Zotero key, tags, status,
+cluster, and verification metadata.
+
+<img src="docs/images/obsidian-paper-note.png" alt="Single paper note rendered with Properties view" width="640">
+
+**Cluster Bases dashboard**: generated `.base` file with sortable paper
+metadata and reading status.
 
 <img src="docs/images/obsidian-bases-dashboard.png" alt="Obsidian Bases dashboard for a cluster" width="640">
 
-**Per-paper note**: title, authors, year, DOI, Zotero key, tags, status, cluster, and verification metadata.
+**Obsidian graph view**: managed topic folders and labels can be colored
+with `research-hub vault graph-colors --refresh`.
 
-<img src="docs/images/obsidian-paper-note.png" alt="Single paper note rendered with Properties view" width="640">
+<img src="docs/images/obsidian-graph.png" alt="Obsidian graph view with research-hub color groups" width="640">
 
 Crystals are plain Markdown notes under `hub/<cluster>/crystals/*.md`, so they can be linked, searched, and read by MCP tools at very low token cost.
 

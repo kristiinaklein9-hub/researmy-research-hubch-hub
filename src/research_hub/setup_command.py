@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -121,10 +120,10 @@ def _probe_zotero_reachability(env: dict[str, str] | os._Environ[str]) -> tuple[
 
 
 def _detect_llm_cli() -> str:
-    for name in ("claude", "codex", "gemini"):
-        if shutil.which(name):
-            return name
-    return ""
+    """Return the same LLM CLI readiness signal used by runtime workflows."""
+    from research_hub.llm_cli import detect_llm_cli
+
+    return detect_llm_cli() or ""
 
 
 def _skill_platform(host: str | None, llm_cli: str) -> str | None:
@@ -133,6 +132,7 @@ def _skill_platform(host: str | None, llm_cli: str) -> str | None:
     return {
         "claude": "claude-code",
         "codex": "codex",
+        "cursor": "cursor",
         "gemini": "gemini",
     }.get(llm_cli)
 

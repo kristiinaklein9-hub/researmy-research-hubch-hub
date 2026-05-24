@@ -880,7 +880,7 @@ def _print_next_steps(report: AutoReport, slug: str, cfg, *, do_crystals: bool) 
     if not do_crystals:
         print("  # Generate cached AI answers (~10 Q&As, ~1 KB each)")
         print(f"  research-hub crystal emit  --cluster {slug} > /tmp/cprompt.md")
-        print(f"  # paste /tmp/cprompt.md into Claude/GPT/Gemini, save response as crystals.json")
+        print(f"  # paste /tmp/cprompt.md into a supported LLM/chat, save response as crystals.json")
         print(f"  research-hub crystal apply --cluster {slug} --scored crystals.json")
         print()
         print("  # Or auto-pipe through a detected LLM CLI:")

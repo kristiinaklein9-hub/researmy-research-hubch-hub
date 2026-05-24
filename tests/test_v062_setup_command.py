@@ -98,3 +98,23 @@ def test_detect_host_from_env(monkeypatch):
 
     monkeypatch.setenv("RH_HOST", "cursor")
     assert detect_host() == "cursor"
+
+
+def test_autonomous_setup_reports_extended_llm_cli(monkeypatch, tmp_path):
+    from research_hub import setup_command
+
+    monkeypatch.setattr("research_hub.llm_cli.detect_llm_cli", lambda: "opencode")
+    monkeypatch.setattr(setup_command, "_probe_required_env_vars", lambda _env: ({}, []))
+    monkeypatch.setattr(setup_command, "_probe_zotero_reachability", lambda _env: (True, ""))
+
+    report = setup_command.run_autonomous(vault=tmp_path, persona="agent")
+
+    assert report.llm_cli_detected == "opencode"
+    assert report.ready is True
+
+
+def test_skill_platform_maps_cursor_cli_to_cursor_installer():
+    from research_hub import setup_command
+
+    assert setup_command._skill_platform(None, "cursor") == "cursor"
+    assert setup_command._skill_platform(None, "opencode") is None

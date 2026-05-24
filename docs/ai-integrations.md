@@ -4,6 +4,11 @@ research-hub is designed to be model-agnostic. Any AI that can run a shell comma
 
 Every path ends the same way: `research-hub topic digest --cluster X` gives the AI every abstract in the cluster, the AI writes an overview, and NotebookLM is used as a final sanity check ("does this cluster actually contain what I said it does?").
 
+For install/support boundaries across Claude Code, Codex, Cursor,
+Gemini, OpenClaw, Hermes, generic REST clients, and R/RStudio projects,
+see [AI host support matrix](ai-host-support.md). For real-account
+release verification, use [live smoke checklist](live-smoke.md).
+
 ---
 
 ## The shared workflow

@@ -167,6 +167,8 @@ curl http://127.0.0.1:8765/api/v1/health
 
 - [First 10 minutes](first-10-minutes.md)
 - [AI integrations](ai-integrations.md)
+- [AI host support matrix](ai-host-support.md)
+- [Live smoke checklist](live-smoke.md)
 - [MCP tools](mcp-tools.md)
 - [CLI reference](cli-reference.md)
 - [NotebookLM](notebooklm.md)

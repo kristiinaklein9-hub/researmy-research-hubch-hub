@@ -211,7 +211,7 @@ curl -X POST http://127.0.0.1:8765/api/v1/plan \
      -d "{\"intent\":\"research harness engineering\"}"
 ```
 
-Full reference: [MCP tools](docs/mcp-tools.md) and [AI integrations](docs/ai-integrations.md).
+Full reference: [MCP tools](docs/mcp-tools.md), [AI integrations](docs/ai-integrations.md), [AI host support matrix](docs/ai-host-support.md), and [live smoke checklist](docs/live-smoke.md).
 
 ---
 
@@ -345,7 +345,7 @@ which workaround to reach for.
 
 ## Docs + Status + Dev
 
-Docs: [First 10 minutes](docs/first-10-minutes.md), [lazy mode](docs/lazy-mode.md), [dashboard walkthrough](docs/dashboard-walkthrough.md), [MCP tools](docs/mcp-tools.md), [personas](docs/personas.md), [NotebookLM setup](docs/notebooklm.md), [import folder](docs/import-folder.md), [CLI reference](docs/cli-reference.md), [CHANGELOG](CHANGELOG.md).
+Docs: [First 10 minutes](docs/first-10-minutes.md), [lazy mode](docs/lazy-mode.md), [dashboard walkthrough](docs/dashboard-walkthrough.md), [MCP tools](docs/mcp-tools.md), [AI host support matrix](docs/ai-host-support.md), [live smoke checklist](docs/live-smoke.md), [personas](docs/personas.md), [NotebookLM setup](docs/notebooklm.md), [import folder](docs/import-folder.md), [CLI reference](docs/cli-reference.md), [CHANGELOG](CHANGELOG.md).
 
 Status:
 

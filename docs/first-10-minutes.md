@@ -67,7 +67,7 @@ research-hub add 10.48550/arxiv.2310.06770 --cluster llm-agents
 
 # After 5+ papers in the cluster, generate AI answers
 research-hub crystal emit --cluster llm-agents > prompt.md
-# Feed prompt.md to Claude/GPT/Gemini, save response as crystals.json
+# Feed prompt.md to a supported LLM CLI/chat, save response as crystals.json
 research-hub crystal apply --cluster llm-agents --scored crystals.json
 ```
 

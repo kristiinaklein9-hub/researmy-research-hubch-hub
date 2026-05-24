@@ -239,7 +239,10 @@ research-hub migrate-yaml [--assign-cluster SLUG] [--folder PATH]
 ### `notebooklm login`
 
 ```bash
-research-hub notebooklm login --cdp [--keep-open] [--timeout 300]
+research-hub notebooklm login --auto-detect [--wait-timeout 300]
+research-hub notebooklm login [--wait-file PATH] [--wait-timeout 300]
+research-hub notebooklm login --from-browser [chrome|edge|firefox|brave|auto]
+research-hub notebooklm login --import-from VAULT_PATH [--overwrite]
 ```
 
 ### `notebooklm bundle`

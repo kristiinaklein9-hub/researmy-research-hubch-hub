@@ -18,101 +18,72 @@ recovery workflow is documented below in the UI-update section.
 
 ## Architecture at a glance
 
-The primary v0.4.1 path is CDP attach: `research-hub` launches a normal
-Chrome process with `--remote-debugging-port`, then Playwright connects
-to that already-running browser with `connect_over_cdp`. Because Chrome
-is started as a normal user process instead of being launched by
-Playwright, Google's bot check for `navigator.webdriver` does not fire.
+The current login path is `--auto-detect`: research-hub launches a
+visible browser context, opens NotebookLM, waits for you to complete
+Google sign-in, and saves the session only after two signals are true:
+
+- the live page is on `notebooklm.google.com`
+- the browser context contains a Google session cookie
+
+This avoids the old failure mode where a transient anonymous
+NotebookLM page flash was saved as if it were a real login.
 
 ```text
-research-hub CLI
+research-hub notebooklm login --auto-detect
     |
     v
-src/research_hub/notebooklm/session.py :: open_cdp_session()
+src/research_hub/notebooklm/auth.py :: _login_with_auto_detect()
     |
     v
-src/research_hub/notebooklm/cdp_launcher.py :: launch_chrome_with_cdp()
+visible browser sign-in
     |
     v
-subprocess Chrome --remote-debugging-port=<port> --user-data-dir=<session-dir>
-    |
-    v
-Playwright chromium.connect_over_cdp(...)
-    |
-    v
-NotebookLM web UI
+Playwright storage_state -> <vault>/.research_hub/nlm_sessions/state.json
 ```
+
+Upload, generate, and download flows then reuse that saved storage
+state through the NotebookLM client/upload modules.
 
 ## One-time login
 
-Use CDP mode for the initial Google sign-in. This is the primary login
-path in v0.4.1.
+Install the browser automation extra, then run:
 
 ```bash
-research-hub notebooklm login --cdp
+pip install "research-hub-pipeline[playwright]"
+research-hub notebooklm login --auto-detect
 ```
 
-Expected success output looks like:
+Expected behavior:
 
 ```text
-Launching Chrome with CDP remote debugging enabled...
-  Chrome binary: C:/Program Files/Google/Chrome/Application/chrome.exe
-  Session dir:   C:/path/to/vault/.research_hub/nlm_sessions/default
-  Mode:          cdp-attach (no Playwright automation fingerprint)
-  Timeout:       300s  (will auto-close 5s after login)
-
->>> Sign in with your Google account in the opened Chrome.
->>> The window will close AUTOMATICALLY when login is detected.
-  [14:23:07] On https://accounts.google.com/...
-  [14:23:41] On notebooklm.google.com - waiting 5s for session to stabilize...
-  [14:23:46] Login detected. Session saved.
+[nlm] Browser opened. Sign in to NotebookLM in the window.
+      The session saves automatically once the homepage loads -- no ENTER needed.
 ```
 
-If Chrome is not installed, or the binary is not auto-detected, the
-command exits early with output like:
+Google may still require a visible new-device challenge or phone
+verification. Complete it in the browser. If the command times out,
+nothing is saved; rerun it after finishing the challenge.
 
-```text
-  [ERR] Could not find Chrome binary on this system.
-  [ERR] Install Chrome, or pass --chrome-binary <path>.
-```
-
-Pass an explicit Chrome path if needed with
-`research-hub notebooklm login --cdp --chrome-binary "C:/Program Files/Google/Chrome/Application/chrome.exe"`.
-
-For DOM inspection and selector repair, keep the browser open:
+Fallback login paths still exist for advanced use:
 
 ```bash
-research-hub notebooklm login --cdp --keep-open
+research-hub notebooklm login
+research-hub notebooklm login --wait-file ./nlm-ready.txt
+research-hub notebooklm login --from-browser chrome
+research-hub notebooklm login --import-from <other-vault>
 ```
 
-Expected output for inspection mode:
+Use `--from-browser` only when you installed the browser-cookie import
+extra and understand that browser cookie access is OS/browser-specific.
+
+The saved session file is:
 
 ```text
-Launching Chrome with CDP remote debugging enabled...
-  Chrome binary: C:/Program Files/Google/Chrome/Application/chrome.exe
-  Session dir:   C:/path/to/vault/.research_hub/nlm_sessions/default
-  Mode:          cdp-attach (no Playwright automation fingerprint)
-  Keep-open:     YES - will NOT auto-close on login detection.
-  Timeout:       300s (wall-clock max, press Enter to close sooner)
-
->>> Chrome is open for manual inspection / F12 DevTools work.
->>> Press ENTER in this terminal when you are done - window will close.
-  [14:30:04] Chrome is ready. Press Enter here when finished.
+<vault>/.research_hub/nlm_sessions/state.json
 ```
 
-The saved session directory is:
-
-```text
-<vault>/.research_hub/nlm_sessions/default/
-```
-
-Treat that directory like a password store. It contains the persistent
-Google-authenticated browser profile used by `src/research_hub/notebooklm/session.py`.
-
-`--use-system-chrome`, `--from-chrome-profile`,
-`--chrome-profile-path`, and `--chrome-profile-name` still exist in
-`research-hub notebooklm login`, but they are non-CDP fallback paths.
-The recommended path is `--cdp`.
+Treat that file like a password store. It contains Google session
+cookies for the local OS user.
 
 ## Binding a cluster to a notebook
 
@@ -232,14 +203,14 @@ What it does:
 
 If the saved browser session has expired, the command fails fast with a
 `NotebookLMError` before upload or generation starts. The error message
-tells you to rerun `research-hub notebooklm login --cdp`.
+tells you to rerun `research-hub notebooklm login --auto-detect`.
 
 The failure text is sourced from `src/research_hub/notebooklm/upload.py`
 and includes the page URL it landed on, for example:
 
 ```text
 Saved Google session appears to be expired (landed on https://accounts.google.com/...).
-Run `research-hub notebooklm login --cdp` to re-auth.
+Run `research-hub notebooklm login --auto-detect` to re-auth.
 ```
 
 ## Rate limiting and resumption
@@ -273,8 +244,9 @@ Uploads: 3 succeeded, 0 failed, 13 skipped from cache
 If NotebookLM changes its DOM and a selector breaks, use this recovery
 playbook.
 
-1. Start an inspection session:
-   `research-hub notebooklm login --cdp --keep-open`
+1. Reproduce the failing operation with a visible browser session when
+   possible, or rerun `research-hub notebooklm login --auto-detect`
+   and inspect the opened browser before it closes.
 
 2. Open DevTools with `F12`.
 3. Inspect the broken element in the Elements panel.
@@ -345,9 +317,13 @@ Uploads: 16 succeeded, 0 failed, 2 skipped from cache
 
 ## Troubleshooting
 
-**Chrome binary not found**
+**Browser automation dependency missing**
 
-Install Chrome, or pass `--chrome-binary` to the CDP login command.
+Install the browser automation extra:
+
+```bash
+pip install "research-hub-pipeline[playwright]"
+```
 
 **Session expired**
 
@@ -362,11 +338,11 @@ section 8 and patch `src/research_hub/notebooklm/selectors.py`.
 
 That usually means selector drift inside the source dialog. Log an
 issue and include the DOM dump or screenshots from a
-`research-hub notebooklm login --cdp --keep-open` inspection session.
+visible NotebookLM browser session.
 
-**CDP port in use**
+**Browser profile is locked**
 
-Another Chrome process using the same `user_data_dir` is probably still
+Another browser process using the same local profile is probably still
 running. Close it and rerun the command.
 
 ## What this does NOT do

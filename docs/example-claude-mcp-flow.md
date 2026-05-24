@@ -47,7 +47,7 @@ sequenceDiagram
     CD->>MCP: notebooklm_bundle(cluster_slug)
     MCP->>V: read raw/<cluster>/* + write bundle dir
     CD->>MCP: notebooklm_upload + generate + download
-    MCP->>N: Playwright + CDP attach
+    MCP->>N: NotebookLM saved session
     N-->>MCP: brief.txt
     MCP->>V: write .research_hub/artifacts/<cluster>/brief-*.txt
     CD-->>U: brief ready

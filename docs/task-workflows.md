@@ -73,7 +73,7 @@ Claude: [calls brief_cluster(cluster_slug="llm-agents-software-engineering")]
 
 **Under the hood:** chains `notebooklm_bundle` → `notebooklm_upload` → `notebooklm_generate` → `notebooklm_download` → `read_briefing`.
 
-**Pre-req:** `pip install 'research-hub-pipeline[playwright]'` + an already-authenticated Chrome instance attachable via CDP. See [docs/notebooklm.md](notebooklm.md).
+**Pre-req:** `pip install 'research-hub-pipeline[playwright]'` + a saved NotebookLM session from `research-hub notebooklm login --auto-detect`. See [docs/notebooklm.md](notebooklm.md).
 
 **Graceful degradation:** if Playwright isn't installed, returns `{ok: False, bundle_dir: ..., error: "playwright not installed"}` — at least you have the bundle to upload manually.
 

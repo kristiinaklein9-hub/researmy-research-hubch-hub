@@ -12,6 +12,27 @@ All 4 personas share the same dashboard, MCP server, crystal system, and cluster
 
 ---
 
+## If You Only Want To See It Work
+
+Use this path before creating API keys or signing in to Google:
+
+```bash
+pip install research-hub-pipeline
+research-hub dashboard --sample
+```
+
+Or create a local demo vault you can inspect in Obsidian:
+
+```bash
+research-hub init --sample
+research-hub serve --dashboard
+```
+
+This skips Zotero, NotebookLM, and LLM CLI probes. It is the fastest
+way to confirm the package installed correctly.
+
+---
+
 ## 0 minutes: install
 
 ```bash
@@ -58,6 +79,10 @@ Run `research-hub where` any time to confirm paths.
 ---
 
 ## 5 minutes: first useful action (per persona)
+
+For your first `auto` run, use `--no-nlm` until `research-hub doctor`
+reports Zotero and the vault are healthy. This keeps browser automation
+out of the debugging path.
 
 ### Researcher
 
@@ -146,6 +171,16 @@ research-hub doctor
 ```
 
 Catches 12+ common issues across config, vault structure, Zotero connectivity, cluster integrity, persona setup. Always the first thing to run when something feels wrong.
+
+If you want NotebookLM in the loop, sign in after the local checks pass:
+
+```bash
+research-hub notebooklm login --auto-detect
+```
+
+Google may still show a new-device or phone challenge. Complete it in
+the visible browser; research-hub saves the session after NotebookLM
+loads.
 
 ---
 

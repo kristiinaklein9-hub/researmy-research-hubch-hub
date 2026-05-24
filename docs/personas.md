@@ -65,7 +65,7 @@ research-hub crystal emit --cluster q2-research > prompt.md
   → AI answers → research-hub crystal apply
 research-hub ask q2-research "what are the main themes"   # v0.33
 research-hub notebooklm bundle --cluster q2-research
-research-hub notebooklm upload  # via Playwright + CDP
+research-hub notebooklm upload  # after notebooklm login --auto-detect
 research-hub notebooklm download  # pulls AI-generated brief back
 ```
 

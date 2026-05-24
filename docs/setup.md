@@ -43,6 +43,25 @@ research-hub doctor
 `doctor` checks config, vault paths, Zotero credentials when required,
 NotebookLM session state, and local workflow readiness.
 
+For a first real ingestion, keep the browser out of the path until the
+local pieces are healthy:
+
+```bash
+research-hub auto "agent-based modeling" --max-papers 3 --no-nlm
+```
+
+Then add NotebookLM only after the browser login succeeds:
+
+```bash
+research-hub notebooklm login --auto-detect
+research-hub notebooklm bundle --cluster <slug>
+research-hub notebooklm upload --cluster <slug>
+research-hub notebooklm generate --cluster <slug> --type brief
+research-hub notebooklm download --cluster <slug>
+```
+
+`setup` prints the same next-step checklist after it finishes.
+
 ## 3. Connect An AI Host
 
 ### MCP / REST hosts
@@ -109,10 +128,11 @@ TAVILY_API_KEY=...
 BRAVE_API_KEY=...
 ```
 
-NotebookLM upload requires a one-time browser login:
+NotebookLM upload requires a one-time browser login. The lowest-friction
+path is:
 
 ```bash
-research-hub notebooklm login
+research-hub notebooklm login --auto-detect
 ```
 
 Google's auth flow is intentionally human-driven; headless agents can

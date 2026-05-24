@@ -30,7 +30,7 @@ def detect_host() -> str | None:
 
 
 def run_notebooklm_login() -> int:
-    """Launch the standard NotebookLM login flow used by the CLI."""
+    """Launch the lowest-friction NotebookLM login flow used by setup."""
     from research_hub.config import get_config
     from research_hub.notebooklm.auth import default_session_dir, default_state_file, login_nlm
 
@@ -40,7 +40,24 @@ def run_notebooklm_login() -> int:
         session_dir,
         state_file=default_state_file(cfg.research_hub_dir),
         timeout_sec=300,
+        wait_timeout=300,
+        auto_detect=True,
     )
+
+
+def _print_setup_next_steps(*, persona: str, login_needed: bool) -> None:
+    """Print a short first-run checklist after setup finishes."""
+    print("\n[setup] Next steps:")
+    print("  1. Check readiness: research-hub doctor")
+    if login_needed:
+        print("  2. If NotebookLM login did not complete: research-hub notebooklm login --auto-detect")
+        print("  3. First safe run: research-hub auto \"agent-based modeling\" --max-papers 3 --no-nlm")
+    elif persona in {"analyst", "internal"}:
+        print("  2. Import local files: research-hub import-folder ./papers --cluster first-review")
+        print("  3. Open dashboard: research-hub serve --dashboard")
+    else:
+        print("  2. First safe run: research-hub auto \"agent-based modeling\" --max-papers 3 --no-nlm")
+        print("  3. Open dashboard: research-hub serve --dashboard")
 
 
 def _report_version() -> str:
@@ -238,14 +255,18 @@ def run_setup(args) -> int:
             persona = str(get_config().persona or "researcher").strip().lower()
         except Exception:
             persona = "researcher"
-    if not interactive and not args.skip_login and persona not in {"analyst", "internal"}:
+    login_needed = not interactive and not args.skip_login and persona not in {"analyst", "internal"}
+    if login_needed:
         print("[setup] Launching NotebookLM login (Ctrl-C to skip)...")
         try:
-            run_notebooklm_login()
+            login_rc = run_notebooklm_login()
+            if login_rc != 0:
+                print("[setup] NotebookLM login did not complete.")
+                print("[setup] Run later: research-hub notebooklm login --auto-detect")
         except KeyboardInterrupt:
-            print("[setup] Skipped NotebookLM login. Run later: research-hub notebooklm login")
+            print("[setup] Skipped NotebookLM login. Run later: research-hub notebooklm login --auto-detect")
         except Exception as exc:
-            print(f"[setup] NotebookLM login failed: {exc}. Run later: research-hub notebooklm login")
+            print(f"[setup] NotebookLM login failed: {exc}. Run later: research-hub notebooklm login --auto-detect")
     if not getattr(args, "skip_sample", False) and persona not in {"analyst", "internal"}:
         import sys as _sys
 
@@ -280,4 +301,5 @@ def run_setup(args) -> int:
                 except Exception as exc:
                     print(f"[setup] Sample run failed: {exc}.")
                     print("        That's OK -- you can run `research-hub auto TOPIC` directly.")
+    _print_setup_next_steps(persona=persona, login_needed=login_needed)
     return 0

@@ -294,7 +294,7 @@ def _login_with_auto_detect(
     except ImportError:
         print(
             "  [nlm] Playwright is not installed; cannot run --auto-detect "
-            "login.\n        Install it with: pip install 'notebooklm[browser]'",
+            "login.\n        Install it with: pip install 'research-hub-pipeline[playwright]'",
             file=sys.stderr,
         )
         return 1

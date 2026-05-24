@@ -91,14 +91,62 @@ The practical fit: research-hub is most useful if you already use at least two o
 
 ---
 
-## Personae
+## Start Here
 
-Pick the path that matches the operator: a human researcher or the autonomous agent itself. research-hub supports two primary operator personae:
+Pick the path with the fewest moving parts. You can add Zotero,
+NotebookLM, MCP, or AI-host skills later.
 
-- **Human researcher** (Wei-Ling persona): hydrology postdoc, knows Python pip + DOIs, never touched Claude / MCP / Obsidian. Start with [Human quickstart](#human-quickstart).
-- **Autonomous agent** (Claude Cowork / OpenClaw / Hermes host): the AI itself is the operator, not a human. Start with [Autonomous agent quickstart](#autonomous-agent-quickstart).
+| Goal | Accounts needed | Commands |
+|---|---|---|
+| Preview the dashboard only | None | `pip install research-hub-pipeline` then `research-hub dashboard --sample` |
+| Try a demo vault | None | `pip install research-hub-pipeline` then `research-hub init --sample` |
+| Work from local PDFs/DOCX/Markdown | Obsidian optional | `pip install "research-hub-pipeline[import,secrets]"` then `research-hub setup --persona analyst` |
+| Zotero + Obsidian, no browser automation | Zotero | `pip install "research-hub-pipeline[secrets]"` then `research-hub setup --skip-login` |
+| Full Zotero + Obsidian + NotebookLM loop | Zotero + Google | `pip install "research-hub-pipeline[playwright,secrets]"` then `research-hub setup` |
+| Autonomous agent bootstrap | Existing vault or target folder | `python -m research_hub setup --autonomous --vault ./vault --persona agent` |
 
-## Required env vars
+After setup, run:
+
+```bash
+research-hub doctor
+research-hub serve --dashboard
+```
+
+For the first real ingestion, keep NotebookLM out of the path until
+Zotero and Obsidian are healthy:
+
+```bash
+research-hub auto "agent-based modeling" --max-papers 3 --no-nlm
+```
+
+Then enable NotebookLM after the browser login works:
+
+```bash
+research-hub notebooklm login --auto-detect
+research-hub notebooklm bundle --cluster <slug>
+research-hub notebooklm upload --cluster <slug>
+research-hub notebooklm generate --cluster <slug> --type brief
+research-hub notebooklm download --cluster <slug>
+```
+
+`research-hub setup` also prints these next steps when it finishes.
+
+## First-Run Checklist
+
+| Item | Needed when | How to handle it |
+|---|---|---|
+| Python 3.10+ | Always | Use the same Python that runs `pip install research-hub-pipeline` |
+| Zotero API key + library ID | Zotero-backed paper ingestion | Set `ZOTERO_API_KEY` and `ZOTERO_LIBRARY_ID`, then run `research-hub doctor` |
+| Obsidian vault | Markdown note workflow | Point `setup` at a folder you can open in Obsidian; it is still plain Markdown |
+| NotebookLM browser login | NotebookLM upload/generate/download | Run `research-hub notebooklm login --auto-detect`; Google OAuth still requires a visible human sign-in |
+| LLM CLI for relevance judging | `research-hub auto` default path | Install `claude`, `codex`, `gemini`, `opencode`, `aichat`, `cursor`, configure a custom adapter, or pass `--no-fit-check` |
+| AI-host integration | Claude/Codex/Cursor/Gemini/OpenClaw/etc. | Use MCP/REST for tool-calling hosts; use `research-hub install --platform ...` only for verified skill installer targets |
+
+## Credential Reference
+
+These variables are required only for Zotero-backed workflows. Local
+file import, sample dashboards, MCP server startup, and REST API
+inspection can run without them.
 
 <!-- env-vars-table-start -->
 
@@ -112,9 +160,15 @@ Pick the path that matches the operator: a human researcher or the autonomous ag
 
 <!-- env-vars-table-end -->
 
-## Autonomous agent quickstart
+## Operator Modes
 
-For Cowork-style hosts:
+research-hub supports both human-first and agent-first setup.
+
+For a human researcher, `research-hub setup` runs the onboarding wizard,
+installs host-specific skills when it can detect the host, optionally
+launches NotebookLM login, and offers a small sample run.
+
+For an autonomous agent or Cowork-style host:
 
 ```bash
 pip install research-hub-pipeline
@@ -123,41 +177,19 @@ python -m research_hub setup --autonomous --vault ./vault --persona agent
 # emits BootstrapReport JSON; exit code 0 if ready, 1 otherwise
 ```
 
-Then drive operations via CLI `--json` mode or the bundled MCP server (`research-hub-mcp`). All report-shaped commands accept `--json`; capability introspection lives in `research-hub describe`.
+Then drive operations via CLI `--json` mode or the bundled MCP server
+(`research-hub-mcp`). All report-shaped commands accept `--json`;
+capability introspection lives in `research-hub describe`.
 
-**Note**: NotebookLM upload still requires one-time human-driven `research-hub notebooklm login` browser-based Google OAuth. Headless agent completion is upstream-blocked by Google's auth flow.
+**NotebookLM boundary.** NotebookLM upload still requires one-time
+human-driven browser-based Google OAuth. Headless agents can prepare
+bundles and read downloaded briefs, but they cannot complete Google's
+first sign-in or phone challenge by themselves.
 
-**Note**: `auto_research_topic` (and `research-hub auto`) runs a fail-closed relevance check. Ensure a supported LLM CLI is reachable on PATH (`claude`, `codex`, `gemini`, `opencode`, `aichat`, `cursor`, or a configured custom adapter), or disable the relevance check, otherwise the run stops before the search with guidance rather than returning a silently empty result.
-
-## Human quickstart
-
-| You already have | First command |
-|---|---|
-| Zotero + Obsidian + NotebookLM | `pip install research-hub-pipeline[playwright,secrets]` then `research-hub setup` |
-| Zotero + Obsidian, no NotebookLM | `pip install research-hub-pipeline[secrets]` then `research-hub setup --skip-login` |
-| Obsidian + local PDFs only | `pip install research-hub-pipeline[import,secrets]` then `research-hub setup --persona analyst` |
-| Just want to see it work (≤5 min, no accounts) | `pip install research-hub-pipeline` then `research-hub init --sample` |
-| Nothing yet, browser preview only | `pip install research-hub-pipeline` then `research-hub dashboard --sample` |
-
-`research-hub init --sample` (v0.89.1) copies a bundled demo vault
-(5 papers + clusters + crystals + `_HOME.md`) and skips every
-Zotero / NotebookLM / LLM probe — open `<vault>/_HOME.md` in
-Obsidian to explore, then `research-hub setup --vault <vault>` when
-you're ready for real accounts. Running bare `research-hub` (no
-subcommand) now prints help instead of starting the pipeline.
-
-Python 3.10+ is required (CI-gated 3.10–3.13; 3.14 runs in CI as an
-experimental, non-gating cell). Add `[mcp]` if you want standalone
-MCP server dependencies.
-
-**Relevance judge (read before first `auto` run).** `research-hub
-auto` runs a **fail-closed** relevance check by default. Keep a
-supported LLM CLI on PATH (for example `claude`, `codex`, `gemini`,
-`opencode`, `aichat`, `cursor`, or a configured custom adapter), or
-pass `--no-fit-check` to skip relevance judging (papers still get
-identifier + integrity checks; they are just not relevance-filtered).
-With no judge and no flag, `auto` stops **before** the search with
-actionable guidance instead of silently producing an empty vault.
+**Relevance judge boundary.** `auto_research_topic` and `research-hub
+auto` run a fail-closed relevance check by default. With no supported
+LLM CLI and no `--no-fit-check`, `auto` stops before search and prints
+the fix instead of silently producing an empty vault.
 
 | Persona | Best for | Install extra |
 |---|---|---|
@@ -166,7 +198,10 @@ actionable guidance instead of silently producing an empty vault.
 | Analyst | industry research, local PDFs/reports, no Zotero required | `[import,secrets]` |
 | Internal KM | lab/company knowledge bases, mixed file types | `[import,secrets]` |
 
-Field presets for `discover new`, `search`, and related planning flows are `cs`, `bio`, `med`, `physics`, `math`, `social`, `econ`, `chem`, `astro`, `edu`, and `general`. There is no `hydrology` preset; use `general` intentionally.
+Field presets for `discover new`, `search`, and related planning flows
+are `cs`, `bio`, `med`, `physics`, `math`, `social`, `econ`, `chem`,
+`astro`, `edu`, and `general`. There is no `hydrology` preset; use
+`general` intentionally.
 
 ---
 

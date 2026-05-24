@@ -1,8 +1,8 @@
-# research-hub 中文文件草稿
+# research-hub 中文文件
 
-此資料夾是 `research-hub` 的未來繁體中文文件入口。
+此資料夾收錄 `research-hub` 的繁體中文文件。完整英文文件仍以根目錄 README 與上一層 `docs/` 為準。
 
-如需完整的現行英文文件集，請從儲存庫根目錄的 README 及上一層的 docs 資料夾開始。
+第一次設定請先看 [快速入門](quickstart.md)；它會先帶你跑最低摩擦的 sample/dashboard 路徑，再逐步接上 Zotero、Obsidian、NotebookLM 與 AI host。
 
 ## 文件
 
@@ -12,7 +12,7 @@
 
 ## 狀態
 
-- README 翻譯：待辦
-- 快速入門翻譯：待辦
-- 入門引導翻譯：待辦
-- AI 整合翻譯：待辦
+- 根目錄 README：已有繁體中文版本 `README.zh-TW.md`
+- 快速入門：已更新首次設定流程
+- 入門引導：仍偏研究者 persona 說明
+- AI 整合：已涵蓋 MCP/REST/skills 的通用路徑

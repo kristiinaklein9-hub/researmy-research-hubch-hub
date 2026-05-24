@@ -1820,8 +1820,8 @@ def download_artifacts(
 ) -> dict:
     """Download a generated NotebookLM briefing back to the vault.
 
-    Opens the cluster's NotebookLM notebook over CDP, extracts the
-    latest briefing summary text, and saves it under
+    Opens the cluster's NotebookLM notebook using the saved local
+    session, extracts the latest briefing summary text, and saves it under
     `<vault>/.research_hub/artifacts/<cluster_slug>/brief-<UTC>.txt`.
     The cluster's `nlm_cache.json` entry is updated with the new path.
 
@@ -2100,7 +2100,7 @@ def notebooklm_upload(
     headless: bool = True,
     create_if_missing: bool = True,
 ) -> dict[str, Any]:
-    """Upload the latest cluster bundle to NotebookLM via Playwright/CDP."""
+    """Upload the latest cluster bundle to NotebookLM using the saved session."""
     cluster_slug = _validate_mcp_args(cluster_slug=cluster_slug)["cluster_slug"]
     try:
         from research_hub.clusters import ClusterRegistry

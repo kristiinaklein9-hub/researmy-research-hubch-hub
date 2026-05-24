@@ -93,6 +93,25 @@ def test_setup_skip_install_and_skip_login(monkeypatch):
     assert calls == ["init"]
 
 
+def test_setup_notebooklm_login_uses_auto_detect(monkeypatch, tmp_path):
+    from research_hub import setup_command
+
+    calls: list[dict] = []
+    cfg = SimpleNamespace(research_hub_dir=tmp_path / ".research_hub")
+    monkeypatch.setattr("research_hub.config.get_config", lambda: cfg)
+
+    def fake_login_nlm(user_data_dir, **kwargs):
+        calls.append({"user_data_dir": user_data_dir, **kwargs})
+        return 0
+
+    monkeypatch.setattr("research_hub.notebooklm.auth.login_nlm", fake_login_nlm)
+
+    assert setup_command.run_notebooklm_login() == 0
+    assert calls[0]["auto_detect"] is True
+    assert calls[0]["wait_timeout"] == 300
+    assert calls[0]["state_file"] == cfg.research_hub_dir / "nlm_sessions" / "state.json"
+
+
 def test_detect_host_from_env(monkeypatch):
     from research_hub.setup_command import detect_host
 

@@ -21,6 +21,20 @@ UI scope is capped here by decision: the dashboard stays a thin
 status-mirror + palette + onboarding demo; no 3-pane / citation-
 graph rebuild (link out to the real tools instead)._
 
+### Added
+- **`mcp-name: io.github.WenyuChiou/research-hub` line in README.md**
+  (HTML comment at the top, invisible in rendered Markdown). Required
+  for ownership validation when publishing this package to the MCP
+  Server Registry at `registry.modelcontextprotocol.io`. Without this
+  line in the PyPI-rendered README, `mcp-publisher publish` fails with
+  `PyPI package 'research-hub-pipeline' ownership validation failed`.
+  The companion `server.json` manifest already declares the namespace
+  `io.github.WenyuChiou/research-hub`; this line is the cross-verifier.
+  No version bump or release flow is triggered by this change — the
+  next PyPI release (currently staged as v1.0.0) will be the first
+  PyPI artifact carrying the `mcp-name` line, at which point
+  `mcp-publisher publish` can succeed.
+
 ### Fixed
 - **PDF attach 0% regression from PR #108's requests → httpx port**
   (`zotero/pdf_attach.py`). The `requests` → `httpx` migration in PR #108

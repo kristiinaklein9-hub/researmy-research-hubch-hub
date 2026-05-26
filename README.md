@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.WenyuChiou/research-hub -->
+
 # research-hub
 
 > **Turn your research stack into an AI-operable workspace.**

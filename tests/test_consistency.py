@@ -97,6 +97,9 @@ EXPECTED_MAPPINGS = {
     "collect_to_cluster": "mcp-only",
     "summarize_cluster": "summarize",
     "apply_cluster_summaries": "mcp-only",
+    "list_quarantine": "quarantine list",
+    "show_quarantine": "quarantine show",
+    "restore_quarantine": "quarantine restore",
 }
 
 

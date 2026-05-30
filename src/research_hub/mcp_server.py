@@ -2320,6 +2320,67 @@ def propose_research_setup(topic: str) -> dict:
     }
 
 
+def list_quarantine(cluster_slug: str = "") -> dict[str, Any]:
+    """List candidates the fit-check gate quarantined (rejected as off-topic).
+
+    Use when: an auto_research_topic run ingested fewer papers than expected, or
+    returned 0 with a 'quarantine list' hint -- this shows WHY candidates were
+    rejected so you can restore false-positives with restore_quarantine. Pass
+    cluster_slug to scope to one cluster, or omit for all.
+    Returns {ok, count, quarantined:[{cluster, slug, layer, reason, date}]}.
+    """
+    try:
+        from research_hub.authenticity import list_quarantine as _list_q
+        from research_hub.config import get_config
+        rows = _list_q(get_config(), cluster=cluster_slug or None)
+        return {"ok": True, "count": len(rows), "quarantined": rows}
+    except Exception as exc:
+        return _entrypoint_tool_error(exc, cluster_slug or None)
+
+
+def show_quarantine(slug: str, cluster_slug: str = "") -> dict[str, Any]:
+    """Show the full quarantine record for ONE rejected candidate (reason,
+    fit-check detail, raw candidate metadata).
+
+    Use when: list_quarantine shows a candidate you suspect was wrongly rejected
+    and you want detail before restoring. Pass cluster_slug to disambiguate when
+    the same slug exists in multiple clusters.
+    Returns the quarantine payload, or {ok:false, error}.
+    """
+    try:
+        from research_hub.authenticity import show_quarantine as _show_q
+        from research_hub.config import get_config
+        return {"ok": True, **_show_q(get_config(), slug, cluster=cluster_slug or None)}
+    except FileNotFoundError as exc:
+        # backend raises FileNotFoundError for an unknown slug too; don't let
+        # _entrypoint_tool_error mislabel that as "vault not initialized".
+        if "quarantined candidate" in str(exc):
+            return {"ok": False, "error": str(exc),
+                    "hint": "Run list_quarantine to see available slugs."}
+        return _entrypoint_tool_error(exc, cluster_slug or None)
+    except Exception as exc:
+        return _entrypoint_tool_error(exc, cluster_slug or None)
+
+
+def restore_quarantine(slug: str, cluster_slug: str) -> dict[str, Any]:
+    """Restore a quarantined candidate back into the ingest queue (un-reject a
+    false-positive): re-adds it to papers_input.json and removes the quarantine
+    record. Re-run auto/ingest to actually ingest it. cluster_slug is required.
+    Returns {ok, cluster, slug, papers_input}.
+    """
+    try:
+        from research_hub.authenticity import restore_quarantine as _restore_q
+        from research_hub.config import get_config
+        return {"ok": True, **_restore_q(get_config(), slug, cluster_slug)}
+    except FileNotFoundError as exc:
+        if "quarantined candidate" in str(exc):
+            return {"ok": False, "error": str(exc),
+                    "hint": "Run list_quarantine to see available slugs."}
+        return _entrypoint_tool_error(exc, cluster_slug or None)
+    except Exception as exc:
+        return _entrypoint_tool_error(exc, cluster_slug or None)
+
+
 def main() -> None:
     """Entry point for `research-hub serve`."""
     if FastMCP is None:
@@ -2372,6 +2433,9 @@ mcp.tool()(discover_clean)
 mcp.tool()(examples_list)
 mcp.tool()(examples_show)
 mcp.tool()(examples_copy)
+mcp.tool()(list_quarantine)
+mcp.tool()(show_quarantine)
+mcp.tool()(restore_quarantine)
 
 
 # v0.31 Track D: NotebookLM round-trip exposed via MCP.

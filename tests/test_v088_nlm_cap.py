@@ -275,3 +275,77 @@ def test_cli_parses_notebooklm_shard_command():
     assert args.notebooklm_command == "shard"
     assert args.strategy == "recent"
     assert args.shard_size == 25
+
+
+def test_save_nlm_cache_is_atomic_and_makes_parents(tmp_path):
+    """WF-4: cache writes go through atomic_write_text (tmp + os.replace) so a
+    crash mid-write cannot leave a half-written file that _load degrades to {}."""
+    cache_path = tmp_path / "nested" / "nlm_cache.json"
+    upload_mod._save_nlm_cache(cache_path, {"alpha": {"uploaded_sources": ["x"]}})
+
+    assert json.loads(cache_path.read_text(encoding="utf-8"))["alpha"]["uploaded_sources"] == ["x"]
+    # parent dir created, and NO leftover .tmp file from the atomic write
+    assert [p.name for p in cache_path.parent.iterdir()] == ["nlm_cache.json"]
+
+
+def test_shard_upload_checkpoints_cache_after_each_shard(tmp_path, monkeypatch):
+    """STAB-3 (sharded path): the resume cache is flushed after EACH shard, so a
+    crash before later shards complete keeps earlier shards' uploaded sources on
+    disk instead of forcing a full re-upload against NotebookLM's hard cap."""
+    cfg = _cfg(tmp_path)
+    cluster = _cluster(cfg)
+    _write_bundle(cfg, cluster.slug, [_entry(i) for i in range(110)])
+
+    class CrashAfterFirstShard(FakeNotebookLMClient):
+        def find_or_create_notebook(self, name: str) -> NotebookHandle:
+            # blow up opening the SECOND shard notebook -> simulates an OS-kill
+            # after shard 1 fully uploaded but before shard 2 completes
+            if len(self.handles) >= 1:
+                raise RuntimeError("simulated crash opening shard 2")
+            return super().find_or_create_notebook(name)
+
+    fake = CrashAfterFirstShard()
+    monkeypatch.setattr(upload_mod, "_make_client", lambda *_a, **_k: fake)
+    monkeypatch.setattr(upload_mod, "NotebookLMClient", lambda *_a, **_k: fake)
+    monkeypatch.setattr(upload_mod.time, "sleep", lambda _s: None)
+
+    with pytest.raises(RuntimeError, match="shard 2"):
+        upload_cluster(cluster, cfg, over_cap_strategy="shard", shard_size=50)
+
+    cache = json.loads((cfg.research_hub_dir / "nlm_cache.json").read_text(encoding="utf-8"))
+    shard_sources = cache[cluster.slug]["shard_uploaded_sources"]
+    # exactly shard 1 persisted, with all 50 of its sources (would be {} pre-fix)
+    assert len(shard_sources) == 1
+    first_shard_key = next(iter(shard_sources))
+    assert "[1/3]" in first_shard_key
+    assert len(shard_sources[first_shard_key]) == 50
+
+
+def test_nonsharded_upload_checkpoints_each_successful_source(tmp_path, monkeypatch):
+    """STAB-3 (non-sharded path): uploaded_sources is flushed after each success,
+    so a crash mid-loop preserves prior progress instead of re-uploading all."""
+    cfg = _cfg(tmp_path)
+    cluster = _cluster(cfg)
+    _write_bundle(cfg, cluster.slug, [_entry(i) for i in range(10)])
+    fake = FakeNotebookLMClient()
+    monkeypatch.setattr(upload_mod, "_make_client", lambda *_a, **_k: fake)
+    monkeypatch.setattr(upload_mod, "NotebookLMClient", lambda *_a, **_k: fake)
+
+    # time.sleep runs once per source AFTER its checkpoint; raise on the 3rd to
+    # simulate an OS-kill after 3 sources have been uploaded + checkpointed.
+    calls = {"n": 0}
+
+    def crashing_sleep(_seconds):
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise RuntimeError("simulated crash mid-upload-loop")
+
+    monkeypatch.setattr(upload_mod.time, "sleep", crashing_sleep)
+
+    with pytest.raises(RuntimeError, match="mid-upload-loop"):
+        upload_cluster(cluster, cfg)  # 10 < cap -> non-sharded path
+
+    cache = json.loads((cfg.research_hub_dir / "nlm_cache.json").read_text(encoding="utf-8"))
+    uploaded = cache[cluster.slug]["uploaded_sources"]
+    # 3 sources checkpointed before the crash (would be [] pre-fix)
+    assert len(uploaded) == 3

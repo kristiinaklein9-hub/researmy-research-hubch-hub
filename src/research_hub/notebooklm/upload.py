@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from research_hub.notebooklm.auth import default_state_file
+from research_hub.security import atomic_write_text
 
 logger = logging.getLogger(__name__)
 from research_hub.notebooklm.client import (
@@ -163,8 +164,11 @@ def _load_nlm_cache(cache_path: Path) -> dict:
 
 
 def _save_nlm_cache(cache_path: Path, cache: dict) -> None:
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    # WF-4: write atomically (tmp + os.replace) so a crash mid-write cannot
+    # corrupt the resume cache. _load_nlm_cache degrades a corrupt file to {},
+    # which would silently force a full re-upload. Atomicity matters more now
+    # that STAB-3 checkpoints this cache per shard.
+    atomic_write_text(cache_path, json.dumps(cache, ensure_ascii=False, indent=2))
 
 
 def _find_latest_bundle(bundles_root: Path, cluster_slug: str) -> Path | None:
@@ -873,6 +877,10 @@ def _upload_cluster_shards(
                 time.sleep(BETWEEN_UPLOADS_SEC)
 
             shard_cache[shard_name] = sorted(uploaded_sources)
+            # STAB-3: checkpoint resume progress to disk after EACH shard so an
+            # OS-level kill mid-run (not just a handled exception) cannot lose
+            # prior shards and re-upload them against NotebookLM's hard cap.
+            _save_nlm_cache(cfg.research_hub_dir / "nlm_cache.json", cache)
 
             # v0.88.11: heartbeat refresh between shards. v0.88.7 added
             # cookie persist on close(), but a 200+-source upload session
@@ -1090,6 +1098,14 @@ def upload_cluster(
         report.notebook_url = handle.url
         report.notebook_id = handle.notebook_id
         report.notebook_name = handle.name
+        # STAB-3: persist notebook identity + prior progress as soon as the
+        # notebook is open, so an OS-kill mid-upload resumes to THIS notebook
+        # rather than creating a duplicate and orphaning already-uploaded sources.
+        cluster_cache["notebook_url"] = report.notebook_url
+        cluster_cache["notebook_id"] = report.notebook_id
+        cluster_cache["notebook_name"] = report.notebook_name
+        cluster_cache["uploaded_sources"] = sorted(uploaded_sources)
+        _save_nlm_cache(cache_path, cache)
         _log_jsonl(
             log_path,
             {
@@ -1160,6 +1176,10 @@ def upload_cluster(
             if result.success:
                 uploaded_sources.add(key)
                 uploads += 1
+                # STAB-3: checkpoint after each successful upload so a crash
+                # mid-loop resumes from here instead of re-uploading everything.
+                cluster_cache["uploaded_sources"] = sorted(uploaded_sources)
+                _save_nlm_cache(cache_path, cache)
             else:
                 report.errors.append({"source": key, "error": result.error})
             time.sleep(BETWEEN_UPLOADS_SEC)

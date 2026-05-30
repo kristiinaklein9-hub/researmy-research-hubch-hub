@@ -5007,6 +5007,8 @@ def _auto(
             "zotero_batch_size": zotero_batch_size,
             "llm_cli": llm_cli,
             "dry_run": dry_run,
+            "append": append,
+            "force": force,
             "peer_reviewed": peer_reviewed,
             "include_suspect_urls": include_suspect_urls,
             "print_progress": not emit_json,

@@ -99,6 +99,7 @@ def test_auto_pipeline_runs_summary_when_enabled(monkeypatch, tmp_path):
         do_fit_check=False,
         do_cluster_overview=False,
         with_summary=True,
+        append=True,
         print_progress=False,
     )
 
@@ -154,6 +155,7 @@ def test_summary_step_counts_real_summarize_result_objects(monkeypatch, tmp_path
         do_fit_check=False,
         do_cluster_overview=False,
         with_summary=True,
+        append=True,
         print_progress=False,
     )
 
@@ -177,6 +179,7 @@ def test_auto_pipeline_skips_summary_when_no_llm_cli(monkeypatch, tmp_path):
         do_fit_check=False,
         do_cluster_overview=False,
         with_summary=True,
+        append=True,
         print_progress=False,
     )
 
@@ -197,6 +200,7 @@ def test_auto_pipeline_dry_run_mentions_summary(monkeypatch, tmp_path, capsys):
         do_fit_check=False,
         do_cluster_overview=False,
         with_summary=True,
+        append=True,
         print_progress=True,
     )
 

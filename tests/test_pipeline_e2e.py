@@ -96,8 +96,12 @@ class _FakeZotero:
         return {"itemType": kind}
 
     def create_items(self, items):
+        base = len(self.created)
         self.created.extend(items)
-        return {"successful": {"0": {"key": f"ITEM{len(self.created):02d}"}}}
+        # Realistic Zotero: the response keys EVERY submitted index, not just
+        # "0". (The old index-0-only stub made STAB-1's per-paper retry fire for
+        # indices 1..N-1, double-creating items.)
+        return {"successful": {str(i): {"key": f"ITEM{base + i:02d}"} for i in range(len(items))}}
 
 
 def test_stage_1_slugify_and_cluster_create_or_reuse(pipeline_cfg):
@@ -414,7 +418,9 @@ def test_cross_stage_auto_reuses_cluster_and_adds_papers(pipeline_cfg, monkeypat
     created_inputs: list[list[dict]] = []
 
     def fake_run_pipeline(**kwargs):
-        payload = json.loads((pipeline_cfg.root / "papers_input.json").read_text(encoding="utf-8"))["papers"]
+        # WF-2: auto now writes to a per-run path and passes it via papers_json.
+        papers_json = kwargs.get("papers_json") or (pipeline_cfg.root / "papers_input.json")
+        payload = json.loads(Path(papers_json).read_text(encoding="utf-8"))["papers"]
         created_inputs.append(payload)
         for paper in payload:
             write_note(
@@ -448,6 +454,7 @@ def test_cross_stage_auto_reuses_cluster_and_adds_papers(pipeline_cfg, monkeypat
         do_nlm=False,
         do_fit_check=False,
         do_cluster_overview=False,
+        append=True,  # FUNC-2: intentionally adding to the existing cluster
         print_progress=False,
     )
 

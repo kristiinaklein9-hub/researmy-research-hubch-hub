@@ -81,7 +81,7 @@ def test_f6_partial_write_counts_truthfully(auto_env):
     auto_env.list_quarantine.return_value = [{"slug": "p2"}]
 
     report = auto_pipeline(topic="t", do_nlm=False, do_fit_check=False,
-                           print_progress=False)
+                           append=True, print_progress=False)
 
     assert report.papers_ingested == 1
     step = _ingest_step(report)

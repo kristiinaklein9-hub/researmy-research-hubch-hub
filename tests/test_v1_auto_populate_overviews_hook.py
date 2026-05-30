@@ -102,6 +102,7 @@ def test_populate_all_overviews_fires_on_successful_ingest(tmp_path, monkeypatch
         report = auto_pipeline(
             topic="test topic",
             cluster_slug=cluster_slug,
+            append=True,
             do_nlm=False,
             do_crystals=False,
             do_cluster_overview=False,
@@ -137,6 +138,7 @@ def test_populate_all_overviews_skipped_when_zero_papers_written(tmp_path, monke
         report = auto_pipeline(
             topic="test topic",
             cluster_slug=cluster_slug,
+            append=True,
             do_nlm=False,
             do_crystals=False,
             do_cluster_overview=False,
@@ -174,6 +176,7 @@ def test_populate_all_overviews_failure_is_non_fatal(tmp_path, monkeypatch, caps
         report = auto_pipeline(
             topic="test topic",
             cluster_slug=cluster_slug,
+            append=True,
             do_nlm=False,
             do_crystals=False,
             do_cluster_overview=False,

@@ -218,6 +218,47 @@ def test_auto_nlm_failure_does_not_abort_pipeline(mock_deps, capsys):
     assert "research-hub notebooklm download --cluster nlm-deferred-topic --type brief" in out
 
 
+def test_auto_pipeline_blocks_populated_cluster_for_mcp_rest_callers(tmp_path, monkeypatch):
+    """FUNC-2: the populated-cluster guard lives in auto_pipeline (not only the
+    CLI wrapper), so MCP/REST callers cannot silently append to a curated
+    cluster without append/force."""
+    from types import SimpleNamespace
+
+    raw = tmp_path / "raw"
+    (raw / "agents").mkdir(parents=True)
+    (raw / "agents" / "existing-paper.md").write_text("# paper", encoding="utf-8")
+    cfg = SimpleNamespace(
+        raw=raw,
+        root=tmp_path,
+        clusters_file=tmp_path / "clusters.yaml",
+        llm_cli_adapters={},
+    )
+    monkeypatch.setattr("research_hub.auto.get_config", lambda: cfg)
+    monkeypatch.setattr("research_hub.auto.detect_llm_cli", lambda **k: None)
+    monkeypatch.setattr(
+        "research_hub.auto.ClusterRegistry",
+        lambda *a, **k: SimpleNamespace(
+            get=lambda slug: SimpleNamespace(
+                slug=slug, status="active", zotero_collection_key="ZCOLL"
+            ),
+        ),
+    )
+
+    # no append/force -> blocked (this is the MCP/REST contamination path)
+    blocked = auto_pipeline(
+        topic="agents", cluster_slug="agents", dry_run=True, print_progress=False
+    )
+    assert blocked.ok is False
+    assert "already has 1 paper" in blocked.error
+
+    # append=True -> guard passes (reaches the dry-run plan, returns ok)
+    allowed = auto_pipeline(
+        topic="agents", cluster_slug="agents", dry_run=True, append=True, print_progress=False
+    )
+    assert allowed.ok is True
+    assert allowed.error == ""
+
+
 def test_auto_pipeline_search_returns_no_papers(mock_deps):
     mock_deps["registry_instance"].get.return_value = MagicMock()
     mock_deps["run_search"].return_value = []

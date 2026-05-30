@@ -265,6 +265,8 @@ def post_auto(request: dict) -> dict:
     max_papers = _optional_int(body, "max_papers", 8)
     do_nlm = _optional_bool(body, "do_nlm", True)
     do_crystals = _optional_bool(body, "do_crystals", False)
+    append = _optional_bool(body, "append", False)
+    force = _optional_bool(body, "force", False)
     field = _optional_string(body, "field", "") or None
 
     def _run_auto() -> dict:
@@ -274,6 +276,8 @@ def post_auto(request: dict) -> dict:
             do_nlm=do_nlm,
             do_crystals=do_crystals,
             field=field,
+            append=append,
+            force=force,
         )
         return _clean(result)
 

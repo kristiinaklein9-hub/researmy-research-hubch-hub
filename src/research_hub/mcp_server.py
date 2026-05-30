@@ -2902,6 +2902,8 @@ def auto_research_topic(
     zotero_batch_size: int = 50,
     llm_cli: str = "",
     dry_run: bool = False,
+    append: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     """One-shot research pipeline: search + ingest + NotebookLM brief (+ optional crystals).
 
@@ -2913,6 +2915,10 @@ def auto_research_topic(
     fully ready for ``read_crystal()`` queries.
 
     Use when: user says "research X for me" or "find papers on X".
+
+    A cluster that already has papers is refused unless ``append=True`` (add
+    more) or ``force=True`` (overwrite) -- prevents silently contaminating a
+    curated cluster.
 
     Returns ``{ok, cluster_slug, papers_ingested, notebook_url,
     brief_path, total_duration_sec, error}``.
@@ -2935,6 +2941,8 @@ def auto_research_topic(
             zotero_batch_size=zotero_batch_size,
             llm_cli=llm_cli or None,
             dry_run=dry_run,
+            append=append,
+            force=force,
             print_progress=False,
         )
         return {

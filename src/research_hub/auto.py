@@ -78,6 +78,8 @@ def auto_pipeline(
     no_llm_fit_check: bool = False,
     llm_cli: Optional[str] = None,
     dry_run: bool = False,
+    append: bool = False,
+    force: bool = False,
     print_progress: bool = True,
     zotero_batch_size: int = 50,
     # NOTE: intentionally False at the Python-API layer while the CLI
@@ -180,6 +182,23 @@ def auto_pipeline(
         # (see follow-up: probe-then-rebind on stale keys).
         if not dry_run and not getattr(cluster, "zotero_collection_key", None):
             _ensure_zotero_collection(registry, cluster, slug, report, print_progress)
+
+    # FUNC-2: refuse to ingest into a cluster that already has papers unless the
+    # caller opts in (append/force). This guard lives in auto_pipeline -- not
+    # only the CLI wrapper -- so MCP and REST callers get the same protection
+    # against silently contaminating a curated cluster. Fail-closed.
+    if cluster is not None and not (append or force):
+        raw_dir = cfg.raw / slug
+        existing_papers = len(list(raw_dir.glob("*.md"))) if raw_dir.exists() else 0
+        if existing_papers > 0:
+            report.ok = False
+            report.error = (
+                f"cluster '{slug}' already has {existing_papers} paper(s); "
+                "pass append=true to add more or force=true to overwrite."
+            )
+            _step_log(report, "guard", False, _elapsed(started, report),
+                      report.error, print_progress)
+            return report
 
     # Print plan if dry_run; do NOT execute remaining steps
     if dry_run:

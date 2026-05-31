@@ -186,13 +186,20 @@ def make_raw_md(
     *,
     topic_cluster: str = "",
     cluster_queries: list[str] | None = None,
-    ingestion_source: str = "research-hub-v0.3.0",
+    ingestion_source: str | None = None,
     verified: bool | None = None,
     verified_at: str = "",
     include_pending_summary_sections: bool = True,
     moc_links: list[str] | None = None,
     provenance: dict | None = None,
 ):
+    if ingestion_source is None:
+        # Version-stamp the ingest tag from the live package version rather than
+        # a frozen literal. Was hardcoded "research-hub-v0.3.0" — dogfooding on a
+        # v1.0.0 install found every note still stamped v0.3.0. Lazy import keeps
+        # this widely-imported module free of any package load-order cycle.
+        from research_hub import __version__
+        ingestion_source = f"research-hub-v{__version__}"
     title = item_data['title'].replace('"', "'")
     authors = item_data['authors']
     year = item_data['year']

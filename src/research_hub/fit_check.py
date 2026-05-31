@@ -156,10 +156,15 @@ def emit_prompt(
     """Build the Gate 1 fit-check prompt."""
     if definition is None and cfg is not None:
         definition = _read_definition_from_overview(cfg, cluster_slug)
+    has_definition = bool(definition)
     if not definition:
         definition = f"(no definition supplied for cluster {cluster_slug})"
 
-    key_terms = _extract_key_terms(definition)
+    # Only extract key terms from a REAL definition. Without this guard an
+    # empty-definition cluster falls back to the "(no definition supplied...)"
+    # placeholder, whose own words ("definition", "supplied", "cluster") get
+    # mis-extracted as key terms and pollute the prompt (dogfooding finding).
+    key_terms = _extract_key_terms(definition) if has_definition else []
     # LLM-narrowed clusters get a stricter rubric where ML/DL papers in
     # the same parent domain score 2 (not 4), so threshold 4 filters them
     # out cleanly. Detect by scanning BOTH the cluster definition (covers

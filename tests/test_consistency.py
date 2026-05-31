@@ -5,6 +5,9 @@ This test catches drift when one surface adds a feature without the other.
 
 from __future__ import annotations
 
+import argparse
+
+from research_hub.cli import build_parser
 from research_hub.mcp_server import mcp
 
 from tests._mcp_helpers import _list_mcp_tool_names
@@ -147,3 +150,60 @@ def test_no_orphaned_mappings():
 
 def test_mcp_tool_count_at_least_18():
     assert len(_list_mcp_tool_names(mcp)) >= 60
+
+
+# --- CLI -> MCP parity gate (reverse direction; FUNC-1 prevention) -----------
+# Top-level CLI commands intentionally local/setup-only and NOT exposed as MCP
+# tools (an autonomous agent doesn't drive these remotely). Adding a NEW CLI
+# command forces a decision: give it an MCP tool (-> it appears in
+# EXPECTED_MAPPINGS via its CLI command) OR list it here. A new agent-facing
+# command shipped CLI-only (the FUNC-1 quarantine bug) lands in NEITHER set and
+# fails test_every_agent_facing_cli_command_has_mcp_coverage below.
+CLI_ONLY_EXEMPT = frozenset({
+    "init", "setup", "config", "ezproxy", "install", "where", "package-dxt",
+    "describe", "serve", "run", "ingest", "index", "dedup", "context",
+    "label-bulk", "status", "vault", "migrate-yaml", "synthesize", "sync",
+    "pipeline", "zotero",
+})
+
+
+def _cli_top_level_commands() -> set[str]:
+    parser = build_parser()
+    subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+    assert subs, "build_parser() exposes no subparsers"
+    return set(subs[0].choices.keys())
+
+
+def _mcp_backed_cli_commands() -> set[str]:
+    # the top-level CLI command each MCP tool maps to (first token of the value)
+    return {
+        value.split()[0]
+        for value in EXPECTED_MAPPINGS.values()
+        if value and value != "mcp-only"
+    }
+
+
+def test_every_agent_facing_cli_command_has_mcp_coverage():
+    """Reverse of test_every_mcp_tool_is_documented_in_expected_mappings: catch a
+    CLI command that SHOULD be MCP-reachable but isn't. The fit-check quarantine
+    feature (FUNC-1) shipped CLI-only and left MCP agents a dead-end hint; this
+    gate forces every new top-level command to be classified MCP-backed or
+    explicitly CLI-only."""
+    cli_top = _cli_top_level_commands()
+    mcp_backed = _mcp_backed_cli_commands()
+
+    unclassified = cli_top - mcp_backed - CLI_ONLY_EXEMPT
+    assert not unclassified, (
+        f"Top-level CLI command(s) {sorted(unclassified)} are neither MCP-backed "
+        "nor CLI_ONLY_EXEMPT. If agent-facing: add an MCP tool + an "
+        "EXPECTED_MAPPINGS entry (the FUNC-1 quarantine lesson). If intentionally "
+        "local/setup-only: add to CLI_ONLY_EXEMPT in tests/test_consistency.py."
+    )
+
+
+def test_cli_only_exempt_has_no_stale_entries():
+    """Renaming/removing a command must drop it from CLI_ONLY_EXEMPT too."""
+    stale = CLI_ONLY_EXEMPT - _cli_top_level_commands()
+    assert not stale, (
+        f"CLI_ONLY_EXEMPT lists command(s) that no longer exist: {sorted(stale)}"
+    )

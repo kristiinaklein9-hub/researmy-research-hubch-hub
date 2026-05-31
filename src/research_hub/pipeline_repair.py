@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from research_hub import __version__
+
 
 def _frontmatter_value(md_path: Path, field_name: str) -> str:
     try:
@@ -160,7 +162,7 @@ def repair_cluster(cfg, cluster_slug: str, *, dry_run: bool = True) -> RepairRep
             [],
             topic_cluster=cluster.slug,
             cluster_queries=[cluster.first_query or cluster.name],
-            ingestion_source="pipeline-repair-v1.0.0",
+            ingestion_source=f"pipeline-repair-v{__version__}",
         )
         target_path.write_text(markdown, encoding="utf-8")
         report.created_notes.append(str(target_path))

@@ -108,3 +108,28 @@ def test_skill_data_mirror_dirs_match_expected_set():
     assert not (missing or extra), (
         f"skills_data/ mirror drift — missing={sorted(missing)} extra={sorted(extra)}"
     )
+
+
+def test_server_json_version_matches_pyproject_version():
+    """STAB-2 (v1.0.0): server.json — the MCP Server Registry manifest — carries
+    the version in TWO places (top-level + packages[0].version), hand-bumped per
+    RELEASING.md with nothing else gating it. Without this check it silently
+    drifts and the registry advertises a stale PyPI release (the v0.68.3 drift
+    class, reopened for the new MCP-server interface)."""
+    import json
+
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    py_match = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', pyproject, re.MULTILINE)
+    assert py_match, "version not found in pyproject.toml"
+    py_version = py_match.group(1)
+
+    server = json.loads((REPO_ROOT / "server.json").read_text(encoding="utf-8"))
+    versions = {"server.json top-level": server.get("version")}
+    for idx, pkg in enumerate(server.get("packages") or []):
+        versions[f"server.json packages[{idx}]"] = pkg.get("version")
+
+    drift = {loc: v for loc, v in versions.items() if v != py_version}
+    assert not drift, (
+        f"server.json version drift vs pyproject ({py_version}): {drift}. "
+        "Bump every version field in server.json on release (RELEASING.md step 1)."
+    )

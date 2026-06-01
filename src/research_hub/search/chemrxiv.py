@@ -9,13 +9,14 @@ from typing import Any
 import requests
 
 from research_hub.search.base import SearchResult
+from research_hub._useragent import user_agent
 
 logger = logging.getLogger(__name__)
 
 FIGSHARE_SEARCH = "https://api.figshare.com/v2/articles/search"
 FIGSHARE_DETAILS = "https://api.figshare.com/v2/articles"
 _CHEMRXIV_GROUP_ID = 13652
-_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
+_USER_AGENT = user_agent()
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_DELAY = 0.5
 

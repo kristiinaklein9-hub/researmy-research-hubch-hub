@@ -10,12 +10,13 @@ import xml.etree.ElementTree as ET
 import requests
 
 from research_hub.search.base import SearchResult
+from research_hub._useragent import user_agent
 
 logger = logging.getLogger(__name__)
 
 REPEC_SEARCH_URL = "https://ideas.repec.org/cgi-bin/htsearch"
 REPEC_OAI_BASE = "https://oai.repec.org/"
-_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
+_USER_AGENT = user_agent()
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_DELAY = 0.5
 

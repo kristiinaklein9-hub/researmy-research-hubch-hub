@@ -9,6 +9,7 @@ from pathlib import Path
 
 from research_hub.config import get_config
 from research_hub.dedup import DedupIndex, normalize_doi
+from research_hub._useragent import user_agent
 
 VALID_STATUSES = {"unread", "reading", "deep-read", "cited"}
 _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,6}(?:v\d+)?$")
@@ -232,7 +233,7 @@ def add_paper(
             response = requests.get(
                 f"https://api.crossref.org/works/{paper.doi}",
                 timeout=10,
-                headers={"User-Agent": "research-hub/0.9.0"},
+                headers={"User-Agent": user_agent(None)},
             )
             if response.status_code == 200:
                 cr_data = response.json().get("message", {}) or {}

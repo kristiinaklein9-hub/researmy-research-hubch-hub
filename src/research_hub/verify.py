@@ -16,6 +16,7 @@ from typing import Any
 
 import requests
 from research_hub.utils.doi import normalize_doi as _normalize_doi
+from research_hub._useragent import user_agent
 try:
     from rapidfuzz import fuzz
 except ImportError:  # pragma: no cover - fallback for environments missing the optional wheel
@@ -261,7 +262,7 @@ def _head_exists(
                 url,
                 allow_redirects=True,
                 timeout=_DEFAULT_TIMEOUT,
-                headers={"User-Agent": "research-hub/0.4.1"},
+                headers={"User-Agent": user_agent(None)},
             )
         except requests.exceptions.ConnectionError as exc:
             last_error = exc.__class__.__name__

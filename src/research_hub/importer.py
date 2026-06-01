@@ -18,6 +18,7 @@ from research_hub.clusters import ClusterRegistry, slugify
 from research_hub.dedup import DedupHit, DedupIndex
 from research_hub.manifest import Manifest, new_entry
 from research_hub.security import atomic_write_text, safe_join, validate_slug
+from research_hub._useragent import user_agent
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +222,7 @@ def _extract_url(path: Path) -> str:
     response = requests.get(
         first_line,
         timeout=30,
-        headers={"User-Agent": "research-hub/0.43"},
+        headers={"User-Agent": user_agent(None)},
     )
     response.raise_for_status()
     html_summary = ReadabilityDocument(response.text).summary()

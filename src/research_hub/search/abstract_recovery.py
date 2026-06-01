@@ -10,10 +10,12 @@ from urllib.parse import quote
 
 import requests
 
+from research_hub._useragent import user_agent
+
 
 logger = logging.getLogger(__name__)
 
-_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
+_USER_AGENT = user_agent()
 _UNPAYWALL_EMAIL = "research-hub@anthropic.com"
 
 

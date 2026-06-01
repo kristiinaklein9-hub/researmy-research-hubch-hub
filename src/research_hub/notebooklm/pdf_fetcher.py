@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Literal
 
 from research_hub.utils.doi import extract_arxiv_id, normalize_doi
+from research_hub._useragent import user_agent
 
 logger = logging.getLogger(__name__)
 
 FetchSource = Literal["local-doi", "local-slug", "arxiv", "unpaywall", "not-found"]
 _UNPAYWALL_EMAIL = "research-hub@example.invalid"
-_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
+_USER_AGENT = user_agent()
 _DEFAULT_TIMEOUT = 15.0
 _MAX_PDF_SIZE_MB = 50
 

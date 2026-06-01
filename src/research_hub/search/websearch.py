@@ -19,12 +19,13 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 import requests
 
 from research_hub.search.base import SearchResult
+from research_hub._useragent import user_agent
 
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 20
-_USER_AGENT = "research-hub/1.0.0 (https://github.com/WenyuChiou/research-hub)"
+_USER_AGENT = user_agent()
 _NEWS_DOMAINS = {
     "nytimes.com", "wsj.com", "ft.com", "bbc.com", "cnn.com", "reuters.com",
     "apnews.com", "theguardian.com", "washingtonpost.com", "bloomberg.com",

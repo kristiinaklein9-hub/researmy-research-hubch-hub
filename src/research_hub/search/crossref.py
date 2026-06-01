@@ -10,12 +10,13 @@ from urllib.parse import quote
 import requests
 
 from research_hub.search.base import SearchResult
+from research_hub._useragent import user_agent
 
 
 logger = logging.getLogger(__name__)
 
 CROSSREF_BASE = "https://api.crossref.org/works"
-_USER_AGENT = "research-hub/1.0.0 (mailto:research-hub@example.invalid)"
+_USER_AGENT = user_agent("mailto:research-hub@example.invalid")
 _DEFAULT_TIMEOUT = 20
 _JATS_TAG_RE = re.compile(r"<[^>]+>")
 

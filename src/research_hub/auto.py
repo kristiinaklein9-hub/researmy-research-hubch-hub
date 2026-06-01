@@ -200,6 +200,32 @@ def auto_pipeline(
                       report.error, print_progress)
             return report
 
+    # FUNC-2 (force semantics): force=true is documented as "overwrite" --
+    # distinct from append=true which adds to the existing set. Previously
+    # force ONLY bypassed the guard above, leaving stale notes in place so a
+    # forced re-run silently *merged* old + new (identical to append). Honour
+    # the contract: when forcing into an existing cluster, clear that cluster's
+    # Obsidian markdown notes BEFORE ingest so the run genuinely replaces the
+    # vault content. Scoped to raw/<slug>/*.md -- the same granularity the
+    # guard measures; we deliberately do NOT touch Zotero items or NotebookLM
+    # (destructive across external systems, and not what the guard counts).
+    # append wins if both are set (additive intent is the safer interpretation).
+    if force and not append and not dry_run and cluster is not None:
+        raw_dir = cfg.raw / slug
+        if raw_dir.exists():
+            removed = 0
+            for note in raw_dir.glob("*.md"):
+                try:
+                    note.unlink()
+                    removed += 1
+                except OSError as exc:
+                    _step_log(report, "overwrite", False, _elapsed(started, report),
+                              f"could not remove {note.name}: {exc}", print_progress)
+            if removed:
+                _step_log(report, "overwrite", True, _elapsed(started, report),
+                          f"cleared {removed} existing note(s) in raw/{slug}/ (force=overwrite)",
+                          print_progress)
+
     # Print plan if dry_run; do NOT execute remaining steps
     if dry_run:
         backends, exclude_types, min_confidence = _resolve_search_options(

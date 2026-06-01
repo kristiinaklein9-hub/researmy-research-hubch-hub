@@ -304,6 +304,62 @@ def test_unknown_path_returns_404(server):
     assert payload["code"] == "not_found"
 
 
+def test_optional_bool_accepts_real_bools():
+    assert api_v1._optional_bool({"flag": True}, "flag", False) is True
+    assert api_v1._optional_bool({"flag": False}, "flag", True) is False
+    # missing key falls back to the default
+    assert api_v1._optional_bool({}, "flag", True) is True
+
+
+def test_optional_bool_coerces_string_bools_case_insensitively():
+    # REST clients commonly send string booleans; accept the two literals
+    # case-insensitively and coerce to a real bool.
+    for raw in ("true", "True", "TRUE", " true ", "tRuE"):
+        assert api_v1._optional_bool({"flag": raw}, "flag", False) is True
+    for raw in ("false", "False", "FALSE", " false ", "fAlSe"):
+        assert api_v1._optional_bool({"flag": raw}, "flag", True) is False
+
+
+def test_optional_bool_rejects_non_bool_non_literal_values():
+    # ints/floats/None/garbage strings must still raise 400 -- no silent
+    # truthy coercion (1, 0, "yes", "1" are intentionally NOT accepted).
+    for bad in (1, 0, 1.5, "yes", "1", "0", "", "  ", "tru", ["true"], {"x": 1}):
+        with pytest.raises(api_v1.ApiError) as exc_info:
+            api_v1._optional_bool({"flag": bad}, "flag", False)
+        assert exc_info.value.status == 400
+
+
+def test_auto_endpoint_accepts_string_bool_flags(server, monkeypatch):
+    # End-to-end: string "false"/"true" flags arriving over HTTP coerce
+    # cleanly instead of 400-ing (the reviewer's reported failure mode).
+    calls = {}
+
+    def fake_auto_research_topic(**kwargs):
+        calls.update(kwargs)
+        return {"ok": True, "cluster_slug": "alpha"}
+
+    monkeypatch.setattr(api_v1, "auto_research_topic", fake_auto_research_topic)
+    port = server()
+    status, payload, _headers = _request(
+        port,
+        "POST",
+        "/api/v1/auto",
+        {"topic": "agents", "do_nlm": "false", "force": "True", "append": "false"},
+    )
+    assert status == 202
+    job_id = payload["job_id"]
+    # let the enqueued job run so the coerced kwargs land in `calls`
+    for _ in range(20):
+        job_status, job_payload, _ = _request(port, "GET", f"/api/v1/jobs/{job_id}")
+        assert job_status == 200
+        if job_payload["status"] == "completed":
+            break
+        time.sleep(0.05)
+    assert calls["do_nlm"] is False
+    assert calls["force"] is True
+    assert calls["append"] is False
+
+
 def test_cluster_quarantine_endpoint_returns_rejected(server, fake_cfg, monkeypatch):
     # FUNC-1 (REST half): GET /api/v1/clusters/<slug>/quarantine surfaces the
     # fit-check quarantined candidates over HTTP.

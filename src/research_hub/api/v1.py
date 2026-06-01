@@ -92,9 +92,19 @@ def _optional_int(body: dict, key: str, default: int) -> int:
 
 def _optional_bool(body: dict, key: str, default: bool) -> bool:
     value = body.get(key, default)
-    if not isinstance(value, bool):
-        raise ApiError(400, "bad_request", f"Field {key} must be a boolean.")
-    return value
+    if isinstance(value, bool):
+        return value
+    # REST clients commonly send string booleans (e.g. "true"/"false" from
+    # query-string-style JSON or untyped form layers). Accept the two
+    # case-insensitive literals and coerce; reject everything else as 400 so
+    # ints/floats/None still fail loudly instead of silently truthy-coercing.
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    raise ApiError(400, "bad_request", f"Field {key} must be a boolean.")
 
 
 def _optional_string(body: dict, key: str, default: str = "") -> str:

@@ -1,7 +1,10 @@
 """Tests for research_hub.zotero.fetch helpers."""
 
+import pytest
+
 from research_hub.zotero.fetch import (
     extract_item_data,
+    get_notes,
     make_paper_slug,
     make_raw_md,
     safe_filename,
@@ -206,3 +209,36 @@ def test_make_raw_md_contains_yaml_frontmatter():
     assert markdown.startswith('---\ntitle: "Flood Risk and Protection Motivation"')
     assert "zotero-key: ABCD1234" in markdown
     assert "\n## Abstract\n\nAbstract text\n" in markdown
+
+
+def test_get_notes_does_not_swallow_keyboard_interrupt(monkeypatch):
+    """Regression: get_notes used a bare `except:` that swallowed
+    KeyboardInterrupt/SystemExit during the network call, making Ctrl-C
+    impossible mid-fetch. After narrowing to `except Exception`, control-flow
+    exceptions must propagate.
+    """
+
+    def raise_kbd(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("research_hub.zotero.fetch.requests.get", raise_kbd)
+
+    with pytest.raises(KeyboardInterrupt):
+        get_notes("https://api.zotero.example", "ITEMKEY")
+
+
+def test_get_notes_returns_empty_and_warns_on_network_error(monkeypatch, capsys):
+    """A genuine network/JSON error is still best-effort (returns []) but is
+    no longer fully silent — a warning is surfaced (matches get_all_items).
+    """
+
+    def raise_conn(*args, **kwargs):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr("research_hub.zotero.fetch.requests.get", raise_conn)
+
+    result = get_notes("https://api.zotero.example", "ITEMKEY")
+
+    assert result == []
+    captured = capsys.readouterr()
+    assert "Error fetching notes for ITEMKEY" in captured.out

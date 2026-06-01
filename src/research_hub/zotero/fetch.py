@@ -75,8 +75,11 @@ def get_notes(base, item_key):
                     if note_text:
                         notes.append(note_text)
             return notes
-    except:
-        pass
+    except Exception as e:
+        # Narrowed from bare `except:` so KeyboardInterrupt/SystemExit
+        # propagate; surface the failure (matches get_all_items above)
+        # instead of silently returning [] on auth/network/JSON errors.
+        print(f"  Error fetching notes for {item_key}: {e}")
     return []
 
 def extract_item_data(item):

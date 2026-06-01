@@ -20,6 +20,42 @@ UI scope is capped: the dashboard stays a thin status-mirror +
 palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
+### Added
+
+- **Dashboard surfaces fit-check quarantined papers** (FUNC-1 dashboard half).
+  The Diagnostics tab gains a "Quarantined (N)" card listing papers the
+  authenticity gate rejected (slug / cluster / layer / reason / date) --
+  completing FUNC-1 alongside the existing MCP `list_quarantine` and REST
+  `GET /clusters/{slug}/quarantine`. Additive: new `QuarantineRecord` +
+  `DashboardData.quarantined`, collected best-effort so a missing quarantine
+  store never breaks dashboard render.
+
+### Changed
+
+- **User-Agent centralized in `research_hub._useragent` (ARCH-1).** The ~22
+  hardcoded `research-hub/<version>` UA literals across the search backends and
+  verify / operations / importer / notebooklm now build from
+  `research_hub.__version__` via `user_agent()`. This fixes 3 STALE pins
+  (`0.4.1`, `0.9.0`, `0.43`) that had drifted off the real version, and a
+  version-scan gate test (`test_useragent_version_sync.py`) now fails CI if any
+  hardcoded UA literal is reintroduced.
+
+### Fixed
+
+- **REST `_optional_bool` coerces string booleans.** `POST /api/v1/auto` (and
+  other bool flags) now accept case-insensitive `"true"`/`"false"` strings (REST
+  clients commonly send string bools); other non-bool values still return 400.
+- **`auto --force` genuinely overwrites.** `force=true` was previously a no-op
+  beyond the FUNC-2 guard (indistinguishable from `--append`); it now clears the
+  cluster's `raw/<slug>/*.md` notes before re-ingest (scoped, non-recursive,
+  never on dry-run; Zotero / NotebookLM are not pruned). `--force --dry-run`
+  advertises the clear step in the plan so the destructive action is previewable.
+- **`zotero.fetch.get_notes` no longer swallows all exceptions.** Narrowed a
+  bare `except:` to `except Exception` + a warning so KeyboardInterrupt /
+  SystemExit propagate and real fetch errors surface (best-effort `[]` fallback
+  retained).
+- Added functional-test coverage for the `restore_quarantine` MCP tool.
+
 
 ## [1.0.1] - 2026-06-01
 

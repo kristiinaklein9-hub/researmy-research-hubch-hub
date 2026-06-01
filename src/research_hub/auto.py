@@ -248,6 +248,12 @@ def auto_pipeline(
             f"  search {topic!r} (max_papers={max_papers}, "
             f"backends={'+'.join(backends)}{filter_note})",
         ]
+        if force and not append and cluster is not None:
+            # force=overwrite clears raw/<slug>/*.md on a real run; advertise
+            # the destructive step in the dry-run plan (nothing is deleted here).
+            plan_lines.insert(
+                0, f"  clear existing notes in raw/{slug}/ (force=overwrite)"
+            )
         if do_fit_check:
             if no_llm_fit_check:
                 plan_lines.append(

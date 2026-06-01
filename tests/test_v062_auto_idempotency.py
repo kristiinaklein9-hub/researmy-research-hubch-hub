@@ -131,6 +131,41 @@ def test_auto_pipeline_force_overwrites_existing_notes_before_ingest(tmp_path, m
     assert sorted(p.name for p in cluster.glob("*.md")) == ["new-paper.md"]
 
 
+
+def test_auto_pipeline_force_dry_run_advertises_overwrite_without_deleting(
+    tmp_path, monkeypatch, capsys
+):
+    """force + dry_run must PREVIEW the destructive note-clear in the plan (so an
+    operator sees what a real force run would delete) while deleting nothing."""
+    from research_hub.auto import auto_pipeline
+
+    cfg = _auto_pipeline_cfg(tmp_path)
+    cluster = cfg.raw / "agents"
+    cluster.mkdir()
+    (cluster / "stale-paper.md").write_text("# old", encoding="utf-8")
+
+    _patch_auto_pipeline_internals(
+        monkeypatch, cfg, run_pipeline_side_effect=lambda *a, **k: 0
+    )
+
+    report = auto_pipeline(
+        topic="agents",
+        cluster_slug="agents",
+        do_nlm=False,
+        do_fit_check=False,
+        force=True,
+        dry_run=True,
+        print_progress=True,
+    )
+
+    out = capsys.readouterr().out
+    # the destructive step is advertised in the dry-run plan ...
+    assert "force=overwrite" in out
+    assert "raw/agents/" in out
+    # ... but a dry run deletes nothing
+    assert (cluster / "stale-paper.md").exists()
+    assert report.ok is True
+
 def test_auto_pipeline_append_preserves_existing_notes(tmp_path, monkeypatch):
     """append=true must NOT clear existing notes (the additive path stays
     additive) -- this is the contrast that proves force!=append now."""

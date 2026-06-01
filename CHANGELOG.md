@@ -20,6 +20,9 @@ UI scope is capped: the dashboard stays a thin status-mirror +
 palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
+
+## [1.0.2] - 2026-06-01
+
 ### Added
 
 - **Dashboard surfaces fit-check quarantined papers** (FUNC-1 dashboard half).
@@ -29,6 +32,11 @@ out to the real tools instead)._
   `GET /clusters/{slug}/quarantine`. Additive: new `QuarantineRecord` +
   `DashboardData.quarantined`, collected best-effort so a missing quarantine
   store never breaks dashboard render.
+- **`mcp-tools.md` coverage drift gate.** `docs/mcp-tools.md` had drifted to
+  56 documented vs 79 live MCP tools; `tests/test_mcp_tools_doc_coverage.py`
+  now enforces coverage (a new tool must be documented or consciously
+  allowlisted; the gap allowlist may only shrink). The README already
+  surfaces the live count via `describe --filter mcp_tools`.
 
 ### Changed
 
@@ -39,6 +47,10 @@ out to the real tools instead)._
   (`0.4.1`, `0.9.0`, `0.43`) that had drifted off the real version, and a
   version-scan gate test (`test_useragent_version_sync.py`) now fails CI if any
   hardcoded UA literal is reintroduced.
+- **CHANGELOG archived.** Split the 8499-line `CHANGELOG.md` at the v1.0.0
+  boundary -- current + recent releases stay here (~1.4k lines); the v1.0.0
+  pre-release notes and all v0.95.x / earlier moved to
+  `CHANGELOG-archive/CHANGELOG-pre-1.0.md` (linked at the bottom).
 
 ### Fixed
 

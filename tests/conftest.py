@@ -252,6 +252,100 @@ def _block_real_zotero(monkeypatch, request):
             pass
 
 
+# A test module referencing any of these "drives the authenticity gate itself"
+# (it mocks the resolve / Crossref layer and asserts specific verdicts), so it
+# is excluded from the offline stub below. ``research_hub.authenticity`` is
+# deliberately broad: it also catches modules that merely import a constant/tool
+# from that module (e.g. ``QUARANTINE_DIR``). Over-excluding such a test is
+# harmless -- it just doesn't get the offline stub (its ``run_pipeline`` is
+# mocked, or the existing ``_block_real_authenticity_head`` fixture covers its
+# network) -- whereas under-excluding a real gate test would break it.
+# Conservative on purpose.
+_AUTHENTICITY_GATE_INTERNALS = (
+    "_resolve_head_with_retry",
+    "_resolve_identifier",
+    "research_hub.authenticity",
+    "CrossrefVerifyCache",
+    "DoiResolveCache",
+)
+_authenticity_gate_module_cache: dict[str, bool] = {}
+
+
+def _module_drives_authenticity_gate(module) -> bool:
+    """True if a test module exercises the authenticity gate's internals itself
+    (and thus drives its own DOI-resolve / Crossref network). Detected by source
+    inspection so new gate tests are auto-excluded without a filename list.
+    Cached per module to avoid re-reading source for every test."""
+    name = getattr(module, "__name__", "")
+    if name not in _authenticity_gate_module_cache:
+        import inspect
+
+        try:
+            source = inspect.getsource(module)
+        except (OSError, TypeError):
+            source = ""
+        _authenticity_gate_module_cache[name] = any(
+            sym in source for sym in _AUTHENTICITY_GATE_INTERNALS
+        )
+    return _authenticity_gate_module_cache[name]
+
+
+@pytest.fixture(autouse=True)
+def _stub_authenticity_network(monkeypatch, request):
+    """Run the authenticity gate OFFLINE by default (stub only its network).
+
+    ``run_pipeline(dry_run=False)`` invokes
+    ``research_hub.authenticity.verify_authenticity``, which corroborates DOIs
+    via real HTTP: ``_resolve_head_with_retry`` (a ``requests.head`` DOI probe
+    with retry/backoff) and ``CrossrefBackend._request``. In tests that leaks a
+    live network call which, on a CI network blip, hangs until pytest-timeout
+    kills it -- the 2026-06-01 master CI flake (``test_v041_pipeline_ingest_fixes``
+    / ``test_v062_note_enrich`` timed out at urllib3 while local + PR CI were
+    green).
+
+    We stub ONLY the two network entry points, NOT ``verify_authenticity``
+    itself, so the real gate logic still runs: local rejections (e.g. L0
+    ``no_identifier`` for a paper with no DOI/arXiv id) stay intact, while DOI
+    resolution + Crossref corroboration take the gate's own designed
+    network-blip path (``transient`` -> fail-open accept) instead of touching
+    the wire. This keeps assertions like ``missing-doi L0:no_identifier``
+    (test_pipeline_e2e) valid AND makes the ingest tests deterministic.
+
+    Excluded: tests that drive the gate's network layer themselves -- detected
+    by source inspection for references to gate internals
+    (``_resolve_head_with_retry`` / ``_resolve_identifier`` /
+    ``research_hub.authenticity`` / ``CrossrefVerifyCache`` / ``DoiResolveCache``).
+    Those mock requests/Crossref at their own level and assert specific verdicts,
+    so this mid-level stub would bypass theirs. ``@pytest.mark.real_authenticity``
+    also opts out. A test's own ``monkeypatch.setattr`` overrides this anyway
+    (autouse runs first).
+    """
+    if request.node.get_closest_marker("real_authenticity"):
+        return
+    if _module_drives_authenticity_gate(request.module):
+        return
+
+    # DOI HEAD probe -> (status_code=None, transient=True): the gate treats this
+    # as "check-unavailable" and fails open (does not brand the DOI fake).
+    monkeypatch.setattr(
+        "research_hub.authenticity._resolve_head_with_retry",
+        lambda url, **_kwargs: (None, True),
+    )
+    # Crossref corroboration: replace ONLY authenticity's CrossrefBackend
+    # reference (not the shared search-backend class) with an offline subclass,
+    # so search-backend tests that drive CrossrefBackend._request with canned
+    # responses (e.g. test_pipeline_e2e stage 3) are unaffected.
+    import research_hub.search.crossref as _crossref
+
+    class _OfflineCrossref(_crossref.CrossrefBackend):
+        def _request(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(
+        "research_hub.authenticity.CrossrefBackend", _OfflineCrossref
+    )
+
+
 @pytest.fixture
 def reset_research_hub_modules():
     """Returns a callable that resets named research_hub.* submodules.

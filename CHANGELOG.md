@@ -20,6 +20,9 @@ UI scope is capped: the dashboard stays a thin status-mirror +
 palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
+
+## [1.0.1] - 2026-06-01
+
 ### Added
 
 - **`tests/test_skill_structure.py`** — structural + trust invariants for
@@ -40,6 +43,19 @@ out to the real tools instead)._
 
 ### Changed
 
+- **`cli.py` god-file split into `cli_*` domain modules (ARCH-2).** The
+  8439-line `src/research_hub/cli.py` was broken into focused sibling modules
+  (`cli_common`, `cli_citations`, `cli_search`, `cli_notebooklm`, `cli_zotero`,
+  `cli_summarize`, `cli_clusters`, `cli_vault`, `cli_pipeline`, `cli_paper`,
+  `cli_maintenance`); cli.py is now 3654 lines (−57%) and retains only the
+  orchestrator core (`build_parser`, `_main_dispatch`, `main`,
+  `_sync_cli_dependencies`). Pure move — byte-faithful handler bodies, no
+  behaviour change; the CLI / MCP / REST surface is unchanged and the test
+  files were not modified. Each domain module re-exports through cli.py and a
+  `_sync_cli_dependencies()` forwarder keeps test monkeypatches on
+  `research_hub.cli.*` reaching the relocated handlers. Also deduped the
+  triplicated `_load_zotero_if_configured` into a single canonical `cli_common`
+  definition and removed a dead, uncalled `_read_doi_from_frontmatter` copy.
 - **MCP tool docstrings rewritten for 12 worst-scoring tools (Glama
   TDQS lift)** (`mcp_server.py`). Replaced terse one-line docstrings on
   the 12 tools that Glama's Tool Definition Quality Score flagged as
@@ -121,6 +137,19 @@ out to the real tools instead)._
 
 ### Fixed
 
+- **Pipeline ingest tests no longer make live Crossref / DOI-resolve network
+  calls (CI flake fix).** `run_pipeline(dry_run=False)` runs the authenticity
+  gate, which corroborates DOIs over HTTP (`_resolve_head_with_retry` +
+  `CrossrefBackend`). In the test suite that leaked real network calls which,
+  on a CI network blip, hung until the 30s pytest-timeout killed them (the
+  2026-06-01 master CI failure on `test_v041_pipeline_ingest_fixes` /
+  `test_v062_note_enrich`, while local + PR CI were green). A `conftest.py`
+  autouse fixture now runs the gate OFFLINE for pipeline tests — stubbing only
+  the two network entry points so the gate's real logic (local rejections such
+  as L0 `no_identifier`) is preserved while DOI / Crossref checks take the
+  designed fail-open path. Tests that drive the gate's network themselves are
+  auto-excluded via source inspection of the gate internals. Suite stays
+  3144-green and deterministic.
 - **Subprocess reads now degrade gracefully on a stray byte instead of
   crashing the reader thread.** Six diagnostic/system-tool subprocess
   calls used `text=True` with no `errors=` handler: `doctor.py` (the

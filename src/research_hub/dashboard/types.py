@@ -135,6 +135,22 @@ class DriftAlert:
 
 
 @dataclass
+class QuarantineRecord:
+    """One fit-check quarantined (rejected) candidate, for the dashboard mirror.
+
+    Shape mirrors `research_hub.authenticity.list_quarantine` rows and the
+    MCP `list_quarantine` / REST `get_cluster_quarantine` payloads so all
+    three surfaces agree on the same five fields.
+    """
+
+    slug: str
+    cluster: str
+    layer: str = ""
+    reason: str = ""
+    date: str = ""
+
+
+@dataclass
 class Quote:
     slug: str
     doi: str
@@ -181,6 +197,7 @@ class DashboardData:
     labels_across_clusters: dict[str, list[tuple[str, str, str]]] = field(default_factory=dict)
     health_badges: list[HealthBadge] = field(default_factory=list)
     drift_alerts: list[DriftAlert] = field(default_factory=list)
+    quarantined: list[QuarantineRecord] = field(default_factory=list)
 
     @property
     def show_zotero_column(self) -> bool:

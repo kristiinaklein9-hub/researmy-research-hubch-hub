@@ -24,6 +24,7 @@ from research_hub.dashboard.types import (
     HealthBadge,
     NLMArtifactRecord,
     PaperRow,
+    QuarantineRecord,
     Quote,
 )
 from research_hub.paper import archive_dir, list_papers_by_label
@@ -179,6 +180,37 @@ def _cluster_nlm_artifacts(cluster_cache: dict, notebook_url: str) -> list[NLMAr
     return records
 
 
+def _collect_quarantine(cfg) -> list[QuarantineRecord]:
+    """Mirror fit-check quarantined candidates for the diagnostics footer.
+
+    Reads the same source the MCP `list_quarantine` tool and the REST
+    `get_cluster_quarantine` endpoint read, so all three surfaces agree.
+    Best-effort: any failure (no quarantine dir, malformed JSON) yields an
+    empty list rather than breaking dashboard render.
+    """
+    try:
+        from research_hub.authenticity import list_quarantine
+
+        rows = list_quarantine(cfg) or []
+    except Exception:
+        logger.exception("Failed to collect quarantine records for dashboard")
+        return []
+    records: list[QuarantineRecord] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        records.append(
+            QuarantineRecord(
+                slug=str(row.get("slug", "") or ""),
+                cluster=str(row.get("cluster", "") or ""),
+                layer=str(row.get("layer", "") or ""),
+                reason=str(row.get("reason", "") or ""),
+                date=str(row.get("date", "") or ""),
+            )
+        )
+    return records
+
+
 def collect_dashboard_data(cfg, zot=None) -> DashboardData:
     """Walk the vault and build the full DashboardData snapshot."""
     persona = _detect_persona(cfg, zot)
@@ -327,6 +359,7 @@ def collect_dashboard_data(cfg, zot=None) -> DashboardData:
         quotes = []
 
     drift_alerts = detect_drift(cfg, dedup)
+    quarantined = _collect_quarantine(cfg)
     total_papers = sum(len(cluster.papers) for cluster in clusters)
     papers_this_week = sum(cluster.new_this_week for cluster in clusters)
     clusters.sort(key=lambda cluster: (-len(cluster.papers), cluster.name.lower()))
@@ -400,4 +433,5 @@ def collect_dashboard_data(cfg, zot=None) -> DashboardData:
         labels_across_clusters=labels_across_clusters,
         health_badges=health_badges,
         drift_alerts=drift_alerts,
+        quarantined=quarantined,
     )

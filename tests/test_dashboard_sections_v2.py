@@ -24,6 +24,7 @@ from research_hub.dashboard.types import (
     DriftAlert,
     HealthBadge,
     PaperRow,
+    QuarantineRecord,
     Quote,
 )
 
@@ -457,6 +458,34 @@ def test_diagnostics_renders_health_and_drift():
 def test_diagnostics_empty_state_for_clean_vault():
     html = DiagnosticsSection().render(_data())
     assert "No drift detected" in html
+
+
+def test_diagnostics_renders_quarantine_records():
+    """FUNC-1 dashboard half: the Diagnostics tab mirrors fit-check
+    quarantined candidates (count + slug + reason), matching the MCP
+    `list_quarantine` / REST `get_cluster_quarantine` surfaces."""
+    html = DiagnosticsSection().render(
+        _data(
+            quarantined=[
+                QuarantineRecord(
+                    slug="off-topic-paper",
+                    cluster="agents",
+                    layer="l5_relevance",
+                    reason="low_relevance: score 0.21 below threshold",
+                    date="2026-05-30",
+                )
+            ]
+        )
+    )
+    assert "Quarantined (1)" in html
+    assert "off-topic-paper" in html
+    assert "low_relevance: score 0.21 below threshold" in html
+
+
+def test_diagnostics_quarantine_empty_state():
+    html = DiagnosticsSection().render(_data())
+    assert "Quarantined (0)" in html
+    assert "every candidate passed the fit-check" in html
 
 
 # --- ManageSection ------------------------------------------------------

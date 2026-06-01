@@ -1317,6 +1317,7 @@ class DiagnosticsSection(DashboardSection):
             return ""
         health = list(_attr(data, "health_badges", []) or [])
         drift = list(_attr(data, "drift_alerts", []) or [])
+        quarantined = list(_attr(data, "quarantined", []) or [])
         return f"""
         <section id="tab-diagnostics" class="dash-panel dash-panel-diagnostics" role="tabpanel">
           <div class="diag-grid">
@@ -1333,6 +1334,13 @@ class DiagnosticsSection(DashboardSection):
                 <p class="card-meta">Manual edits the pipeline noticed but did not fix.</p>
               </header>
               {self._drift_block(drift)}
+            </article>
+            <article class="card card-quarantine">
+              <header class="card-heading">
+                <h2>Quarantined ({len(quarantined)})</h2>
+                <p class="card-meta">Candidates the fit-check gate rejected as off-topic. Restore false-positives with <code>research-hub authenticity restore</code>.</p>
+              </header>
+              {self._quarantine_block(quarantined)}
             </article>
           </div>
         </section>
@@ -1449,6 +1457,39 @@ class DiagnosticsSection(DashboardSection):
           <div class="drift-actions">{copy_btn}</div>
         </div>
         """
+
+    def _quarantine_block(self, records: list) -> str:
+        """Thin status mirror of fit-check quarantined candidates.
+
+        Mirrors the MCP `list_quarantine` / REST `get_cluster_quarantine`
+        rows: one row per rejected paper showing slug, cluster, layer, and
+        the rejection reason. No re-design — same card/list idiom as the
+        sibling drift block.
+        """
+        if not records:
+            return '<p class="diag-empty">Nothing quarantined — every candidate passed the fit-check.</p>'
+        rows: list[str] = []
+        for record in records:
+            slug = html_escape(_attr(record, "slug", "") or "")
+            cluster = html_escape(_attr(record, "cluster", "") or "")
+            layer = html_escape(_attr(record, "layer", "") or "")
+            reason = html_escape(_attr(record, "reason", "") or "")
+            date = html_escape(_attr(record, "date", "") or "")
+            meta_bits = [bit for bit in (cluster, layer, date) if bit]
+            meta_html = (
+                f'<span class="quarantine-meta">{" · ".join(meta_bits)}</span>'
+                if meta_bits
+                else ""
+            )
+            reason_html = (
+                f'<span class="quarantine-reason">{reason}</span>' if reason else ""
+            )
+            rows.append(
+                f'<li class="quarantine-row" data-cluster="{cluster}">'
+                f"<code>{slug}</code> {meta_html} {reason_html}"
+                f"</li>"
+            )
+        return f'<ol class="quarantine-list">{"".join(rows)}</ol>'
 
 
 # --- ManageSection (command builder forms for cluster CRUD) -------------

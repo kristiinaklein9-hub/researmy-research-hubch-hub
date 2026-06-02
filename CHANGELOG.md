@@ -21,6 +21,21 @@ palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
 
+## [1.0.3] - 2026-06-02
+
+### Fixed
+
+- **`auto` now attaches Unpaywall open-access PDFs** (previously silently
+  skipped). `auto`'s PDF-attach step (`_run_pdf_attach_step`) called
+  `plan_attach_for_items(items)` without the `unpaywall_email` kwarg, so the
+  Unpaywall lookup was skipped (the "Skipping Unpaywall" hint printed) and
+  `auto` attached 0 OA PDFs even when `unpaywall_email` was configured. The
+  standalone `paper attach-pdfs` (`cli_paper`) and the `pipeline.run_pipeline`
+  path (`oa_email`) already passed it — only `auto` was missing it. Now threads
+  `cfg.unpaywall_email` through, matching the other two call sites. Regression:
+  `tests/test_v087_pdf_attach_reporting.py::test_auto_pdf_attach_forwards_unpaywall_email`.
+
+
 ## [1.0.2] - 2026-06-01
 
 ### Added

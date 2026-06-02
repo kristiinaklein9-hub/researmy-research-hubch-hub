@@ -627,7 +627,9 @@ def _run_pdf_attach_step(
             _step_log(report, "pdf.attach", True, _elapsed(started, report),
                       "no items in collection", print_progress)
             return
-        plans = plan_attach_for_items(items)
+        plans = plan_attach_for_items(
+            items, unpaywall_email=getattr(cfg, "unpaywall_email", "")
+        )
         actionable = [p for p in plans if p.pdf_url]
         if not actionable:
             _step_log(report, "pdf.attach", True, _elapsed(started, report),

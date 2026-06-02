@@ -200,6 +200,57 @@ def test_pipeline_appends_pdf_attach_summary_to_output_json(tmp_path, monkeypatc
     assert output["pdf_attach_summary"]["entries"][0]["slug"] == "paper-one"
 
 
+def test_auto_pdf_attach_forwards_unpaywall_email(monkeypatch) -> None:
+    """auto's PDF-attach step (`_run_pdf_attach_step`) must forward
+    ``cfg.unpaywall_email`` into ``plan_attach_for_items``.
+
+    Bug present through v1.0.2, fixed in v1.0.3: ``auto`` called
+    ``plan_attach_for_items(items)`` with no email, so Unpaywall (a major
+    OA source) was silently skipped during ``auto`` even when the user had
+    configured ``unpaywall_email`` — while the standalone
+    ``paper attach-pdfs`` command passed it. Symptom: "Skipping Unpaywall"
+    + 0 PDFs attached on every ``auto`` run.
+    """
+    from research_hub import auto as auto_mod
+
+    captured: dict = {}
+
+    def fake_plan(items, *, unpaywall_email="", include_publisher_link=False):
+        captured["unpaywall_email"] = unpaywall_email
+        return [PdfAttachPlan("Z0", "Paper", "10.1000/x", "", "https://ok.test/p.pdf", "unpaywall")]
+
+    zot = _zot()
+    zot.web = zot
+    zot.collection_items = MagicMock(
+        return_value=[{"key": "Z0", "data": {"title": "Paper", "DOI": "10.1000/x"}}]
+    )
+    # Patch the SOURCE modules, not research_hub.auto.*, because get_client /
+    # plan_attach_for_items / attach_pdfs are imported lazily INSIDE
+    # _run_pdf_attach_step. If any import moves to module level in auto.py,
+    # retarget to "research_hub.auto.<name>".
+    monkeypatch.setattr("research_hub.zotero.client.get_client", lambda: zot)
+    monkeypatch.setattr("research_hub.zotero.pdf_attach.plan_attach_for_items", fake_plan)
+    monkeypatch.setattr(
+        "research_hub.zotero.pdf_attach.attach_pdfs",
+        # **kwargs so the mock survives future attach_pdfs kwargs
+        # (keep_url_fallback, max_pdf_size_mb, ...) without a TypeError.
+        lambda web, actionable, **kwargs: PdfAttachResults(
+            {"Z0": "ok"},
+            PdfAttachSummary(
+                [PdfAttachEntry(item_key="Z0", title="Paper", doi="10.1000/x", action="OK", source="unpaywall", bytes=1)]
+            ),
+        ),
+    )
+
+    cfg = SimpleNamespace(unpaywall_email="me@example.com", root=None)
+    cluster = SimpleNamespace(zotero_collection_key="COLL123")
+    report = auto_mod.AutoReport(cluster_slug="agents", cluster_created=False)
+
+    auto_mod._run_pdf_attach_step(cfg, "agents", cluster, report, 0.0, False)
+
+    assert captured.get("unpaywall_email") == "me@example.com"
+
+
 def _zot() -> MagicMock:
     zot = MagicMock()
     zot.children.return_value = []

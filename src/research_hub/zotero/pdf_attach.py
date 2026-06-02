@@ -385,7 +385,7 @@ def _download_pdf_bytes_with_ezproxy_result(
 
             ezcfg = resolve_config(cfg)
             if ezcfg.enabled:
-                wrapped = wrap_url(url, ezcfg.url_template)
+                wrapped = wrap_url(url, ezcfg.url_template, ezcfg.host_suffix)
                 if wrapped != url:
                     proxy_result = _download_via_httpx_result(
                         wrapped,

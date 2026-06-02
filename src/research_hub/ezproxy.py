@@ -1,10 +1,19 @@
 """EZproxy support for institutional PDF access.
 
-Opt-in. Users set ``cfg.ezproxy_url_template`` (a Python format template
-like ``https://login.ezproxy.youruniversity.edu/login?qurl={encoded_url}``)
-and run ``research-hub ezproxy login`` once to capture cookies. After that,
-``paper attach-pdfs`` can wrap publisher URLs through the proxy, falling back
-to the original URL on any proxy failure.
+Opt-in. Two modes (configure one, then run ``research-hub ezproxy login`` once
+to capture the institutional SSO cookies):
+
+* **Hostname rewriting** (recommended) -- set ``cfg.ezproxy_host_suffix`` to the
+  institution's full EZproxy host (e.g. ``ezproxy.lib.lehigh.edu``). Publisher
+  hosts are rewritten in place (``www.nature.com`` ->
+  ``www-nature-com.ezproxy.lib.lehigh.edu``). Preferred because it avoids the
+  ``/login?qurl=`` ``EZproxyCheckBack`` JavaScript interstitial that a
+  non-browser HTTP client cannot follow.
+* **Login template** (legacy fallback) -- set ``cfg.ezproxy_url_template`` to a
+  format template like ``https://login.youruniversity.edu/login?qurl={encoded_url}``.
+
+After login, ``paper attach-pdfs`` wraps publisher URLs through the proxy,
+falling back to the original URL on any proxy failure.
 """
 
 from __future__ import annotations
@@ -14,7 +23,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 
 @dataclass
@@ -23,10 +32,11 @@ class EZproxyConfig:
 
     url_template: str
     cookies_path: Path
+    host_suffix: str = ""
 
     @property
     def enabled(self) -> bool:
-        return bool(self.url_template) and self.cookies_path.exists()
+        return bool(self.url_template or self.host_suffix) and self.cookies_path.exists()
 
 
 def resolve_config(cfg: Any) -> EZproxyConfig:
@@ -36,6 +46,10 @@ def resolve_config(cfg: Any) -> EZproxyConfig:
         template = (getattr(cfg, "ezproxy_url_template", "") or "").strip()
     except Exception:
         template = ""
+    try:
+        host_suffix = (getattr(cfg, "ezproxy_host_suffix", "") or "").strip()
+    except Exception:
+        host_suffix = ""
     try:
         raw_path = getattr(cfg, "ezproxy_cookies_path", "") or ""
     except Exception:
@@ -50,16 +64,63 @@ def resolve_config(cfg: Any) -> EZproxyConfig:
         except Exception:
             base = Path(".")
         cookies_path = base / "ezproxy_cookies.json"
-    return EZproxyConfig(url_template=template, cookies_path=cookies_path)
+    return EZproxyConfig(url_template=template, cookies_path=cookies_path, host_suffix=host_suffix)
 
 
-def wrap_url(original_url: str, template: str) -> str:
-    """Wrap an absolute publisher URL through an EZproxy template."""
+def wrap_url(original_url: str, template: str = "", host_suffix: str = "") -> str:
+    """Wrap an absolute publisher URL for institutional EZproxy access.
 
+    Two EZproxy modes are supported, in priority order:
+
+    * **Hostname rewriting** (``host_suffix`` set) -- the modern default at most
+      institutions, e.g. ``www.nature.com`` -> ``www-nature-com.<suffix>``.
+      Preferred when available: the proxied host is reached directly, with no
+      ``/login?qurl=`` JavaScript interstitial (``EZproxyCheckBack``) that a
+      non-browser HTTP client cannot follow.
+    * **Login template** (``template`` containing ``{encoded_url}``) -- the
+      legacy starting-point-URL form, kept as a fallback.
+    """
+
+    if host_suffix:
+        rewritten = wrap_url_hostname(original_url, host_suffix)
+        if rewritten != original_url:
+            return rewritten
     try:
         if not template or "{encoded_url}" not in template:
             return original_url
         return template.format(encoded_url=quote(original_url, safe=""))
+    except Exception:
+        return original_url
+
+
+def wrap_url_hostname(original_url: str, host_suffix: str) -> str:
+    """Rewrite a URL's host through an EZproxy hostname-rewriting proxy.
+
+    ``https://www.nature.com/articles/x`` -> ``https://www-nature-com.<suffix>/articles/x``.
+    EZproxy host encoding doubles existing hyphens (``-`` -> ``--``) then maps
+    dots to single hyphens (``.`` -> ``-``) so the transform stays reversible.
+    The scheme is forced to https (proxied hosts are served over TLS) and any
+    port / userinfo is dropped (academic resources are on 443). Returns the URL
+    unchanged on parse failure, when no suffix is configured, or when the URL is
+    already proxied (idempotent).
+
+    ``host_suffix`` must be the institution's FULL EZproxy host (e.g.
+    ``ezproxy.lib.lehigh.edu``), never a parent domain -- otherwise unrelated
+    campus hosts under that parent would be wrongly treated as already-proxied.
+    """
+
+    suffix = (host_suffix or "").strip().strip(".")
+    if not suffix or not original_url:
+        return original_url
+    try:
+        parts = urlsplit(original_url)
+        host = parts.hostname
+        # ':' in host => IPv6 literal (urlsplit drops the brackets); rewriting
+        # it would yield an invalid netloc, so leave such URLs untouched.
+        if not host or ":" in host or host == suffix or host.endswith("." + suffix):
+            return original_url
+        rewritten_host = host.replace("-", "--").replace(".", "-") + "." + suffix
+        return urlunsplit(("https", rewritten_host, parts.path, parts.query, parts.fragment))
     except Exception:
         return original_url
 
@@ -91,6 +152,7 @@ def login(
     cookies_path: Path,
     *,
     url_template: str = "",
+    host_suffix: str = "",
     sentinel_url: str = "https://ieeexplore.ieee.org/",
     profile_dir: Path | None = None,
 ) -> int:
@@ -119,7 +181,11 @@ def login(
         print(f"  [ezproxy] cannot create browser profile dir: {exc}", file=sys.stderr)
         return 1
 
-    homepage = wrap_url(sentinel_url, url_template) if url_template else sentinel_url
+    homepage = (
+        wrap_url(sentinel_url, url_template, host_suffix)
+        if (url_template or host_suffix)
+        else sentinel_url
+    )
     launch_kwargs = {
         "user_data_dir": str(profile),
         "headless": False,

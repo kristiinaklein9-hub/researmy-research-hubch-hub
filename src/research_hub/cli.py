@@ -2725,10 +2725,12 @@ def _main_dispatch(args, parser) -> int:
             return ezproxy_login(
                 ezcfg.cookies_path,
                 url_template=ezcfg.url_template,
+                host_suffix=ezcfg.host_suffix,
                 sentinel_url=args.sentinel_url,
             )
         if args.ezproxy_command == "status":
             print(f"ezproxy_url_template: {ezcfg.url_template or '(unset)'}")
+            print(f"ezproxy_host_suffix: {ezcfg.host_suffix or '(unset)'}")
             print(f"cookies_path: {ezcfg.cookies_path}")
             print(f"cookies file exists: {ezcfg.cookies_path.exists()}")
             print(f"enabled: {ezcfg.enabled}")

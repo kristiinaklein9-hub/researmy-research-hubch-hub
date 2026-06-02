@@ -109,6 +109,7 @@ class HubConfig:
         config_disable_pdf_fallback: bool = False
         config_ezproxy_url_template: str | None = None
         config_ezproxy_cookies_path: str | None = None
+        config_ezproxy_host_suffix: str | None = None
         config_unpaywall_email: str | None = None
         config_zotero_parent_collection: str | None = None
         config_llm_cli_adapters: dict = {}
@@ -136,6 +137,7 @@ class HubConfig:
             config_disable_pdf_fallback = bool(data.get("disable_pdf_fallback", False))
             config_ezproxy_url_template = data.get("ezproxy_url_template")
             config_ezproxy_cookies_path = data.get("ezproxy_cookies_path")
+            config_ezproxy_host_suffix = data.get("ezproxy_host_suffix")
             zotero = data.get("zotero", {})
             config_unpaywall_email = data.get("unpaywall_email")
             config_zotero_api_key = zotero.get("api_key")
@@ -217,6 +219,9 @@ class HubConfig:
         ).strip()
         self.ezproxy_cookies_path = str(
             config_ezproxy_cookies_path or os.environ.get("RESEARCH_HUB_EZPROXY_COOKIES_PATH", "")
+        ).strip()
+        self.ezproxy_host_suffix = str(
+            config_ezproxy_host_suffix or os.environ.get("RESEARCH_HUB_EZPROXY_HOST_SUFFIX", "")
         ).strip()
         self.unpaywall_email = str(
             config_unpaywall_email or os.environ.get("UNPAYWALL_EMAIL", "")

@@ -17,6 +17,7 @@ from research_hub.cli_common import _emit_cli_json
 _ALLOWED_CONFIG_KEYS = frozenset({
     "ezproxy_cookies_path",
     "ezproxy_url_template",
+    "ezproxy_host_suffix",
     "unpaywall_email",
     "zotero.unpaywall_email",
     "persona",

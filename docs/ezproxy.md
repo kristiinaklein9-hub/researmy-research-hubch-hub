@@ -2,15 +2,30 @@
 
 EZproxy support is opt-in and only affects `paper attach-pdfs`.
 
-1. Set your institution's URL template. It must contain `{encoded_url}`:
+1. Configure your institution's EZproxy. Two modes — pick one:
+
+   **Mode A — hostname rewriting (recommended).** Most modern institutions
+   rewrite the publisher host (e.g. Lehigh: `www.nature.com` →
+   `www-nature-com.ezproxy.lib.lehigh.edu`). Set the EZproxy host suffix:
+
+   ```bash
+   research-hub config set ezproxy_host_suffix "ezproxy.lib.lehigh.edu"
+   ```
+
+   This is preferred: PDFs are fetched directly from the rewritten host with no
+   `/login?qurl=` `EZproxyCheckBack` JavaScript interstitial (which a non-browser
+   HTTP client cannot follow, so PDF downloads would otherwise fail). To find
+   your suffix, click a publisher link from your library portal and read it off
+   the rewritten address bar (everything after the first host label).
+
+   **Mode B — login template (legacy fallback).** Only if your institution does
+   not support hostname rewriting. The template must contain `{encoded_url}`:
 
    ```bash
    research-hub config set ezproxy_url_template "https://login.example.edu/login?qurl={encoded_url}"
    ```
 
-   If your library uses EZproxy, the template is usually visible after you
-   click a publisher link from the library portal. Replace the target article
-   URL with `{encoded_url}`.
+   If both are set, hostname rewriting takes priority.
 
 2. Run the browser login once:
 

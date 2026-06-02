@@ -21,6 +21,25 @@ palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
 
+## [1.0.4] - 2026-06-02
+
+### Added
+
+- **Hostname-rewriting EZproxy mode** (`ezproxy_host_suffix`). Most modern
+  institutions (e.g. Lehigh) run EZproxy in hostname-rewrite mode
+  (`www.nature.com` → `www-nature-com.ezproxy.lib.lehigh.edu`) rather than the
+  legacy `/login?qurl=` starting-point form — the latter returns an
+  `EZproxyCheckBack` JavaScript interstitial that research-hub's non-browser
+  httpx fetch cannot follow, so paywalled PDFs were never retrieved. Set
+  `research-hub config set ezproxy_host_suffix "<your-ezproxy-host>"`; the
+  publisher host is rewritten in place and `paper attach-pdfs` / `auto` fetch
+  the proxied PDF directly. Hostname rewriting takes priority over
+  `ezproxy_url_template` when both are set (the template remains a legacy
+  fallback). New `ezproxy.wrap_url_hostname`; `wrap_url` gains a `host_suffix`
+  arg; `ezproxy status` shows the suffix; `RESEARCH_HUB_EZPROXY_HOST_SUFFIX`
+  env override. See [docs/ezproxy.md](docs/ezproxy.md).
+
+
 ## [1.0.3] - 2026-06-02
 
 ### Fixed

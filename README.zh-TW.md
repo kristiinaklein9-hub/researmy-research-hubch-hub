@@ -394,7 +394,7 @@ research-hub doctor --autofix
 
 | 限制 | 實際情況 | 該怎麼做 |
 |---|---|---|
-| **IEEE Xplore 的 PDF / URL 被反機器人機制阻擋** | IEEE 對直接抓取會回傳一個 *"Unable to Load Page"* 的 HTML 存根。`paper attach-pdfs` 現在可以將設定好的出版商 PDF URL 透過你機構的 EZproxy 路由，如果代理失敗則退回直接 URL。 | 設定 `ezproxy_url_template`，執行一次 `research-hub ezproxy login`，然後重新執行 `paper attach-pdfs`。請參閱 [EZproxy PDF access](docs/ezproxy.md)。若無 EZproxy，請透過機構存取手動附加 PDF 或跳過該來源。 |
+| **IEEE Xplore 的 PDF / URL 被反機器人機制阻擋** | IEEE 對直接抓取會回傳一個 *"Unable to Load Page"* 的 HTML 存根。`paper attach-pdfs` 現在可以將設定好的出版商 PDF URL 透過你機構的 EZproxy 路由，如果代理失敗則退回直接 URL。 | 設定 `ezproxy_host_suffix`（hostname-rewrite 模式，多數機構建議）或 `ezproxy_url_template`（舊版），執行一次 `research-hub ezproxy login`，然後重新執行 `paper attach-pdfs`。請參閱 [EZproxy PDF access](docs/ezproxy.md)。若無 EZproxy，請透過機構存取手動附加 PDF 或跳過該來源。 |
 | **NotebookLM session 大約每 3.5 小時過期** | Google 的短期 `__Secure-1PSIDTS` / `PSIDRTS` cookie 無法透過背景輪詢刷新。`notebooklm keepalive` 存在但無法在伺服器端輪換它們。 | 當執行報告認證失敗時，重新執行 `research-hub notebooklm login --auto-detect` — 耗時 < 1 分鐘，無需終端互動。 |
 | **`--no-llm-fit-check` 無法過濾「子主題錯誤但領域正確」的論文** | 無 LLM 的 BM25 閘門旨在捕捉 *明顯的跨領域污染* (例如在 LLM cluster 中出現純水文學且無 AI 內容)。它無法區分「AI-agents-in-general」和「AI-agents-in-water-resources」 — 兩者在僅詞彙的指標上得分相似，因此該閘門偏向 recall 並保留兩者。 | 若要進行特定主題的子集過濾，請使用 **預設的** LLM-judge 路徑 (移除 `--no-llm-fit-check`)。LLM-judge 層才是設計用來做語意相關性判斷的。 |
 | **Cluster-overview LLM 自動填寫時會寫入英文標題，即使 scaffold 是中文** | `topic.py` 會為空的 scaffold 寫入中文區段標題 (`## 核心問題`, `## 範圍定義`, …)，但當 LLM 填寫時，`apply_overview` 會用英文標題 (`## Core Question`, `## Scope`, …) 重新渲染檔案。 | 僅為外觀問題 — 內容是正確的。如果你希望填寫後的概覽有中文標題，可以在第一次自動填寫後手動整理區段名稱 (marker 會確保後續執行保留你的編輯)。 |

@@ -21,6 +21,23 @@ palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
 
+## [1.0.6] - 2026-06-03
+
+### Fixed
+
+- **`clusters rebind --auto-create-new` no longer strands papers on a transient
+  filesystem lock (Windows).** The case-only folder rename (`Foo` → `foo`) did a
+  two-step `shutil.move` (`source` → `*.__rebind_tmp__` → `target`) and swallowed
+  any exception into `result.errors`. A transient Windows AV / Search-indexer
+  sharing-violation (WinError 5/32) on the second leg left the papers stranded in
+  a `*.__rebind_tmp__` folder with no cluster binding, surfacing as `moved=0`.
+  Moves now retry transient `PermissionError` locks with backoff (`_robust_move`);
+  a failed second leg rolls the temp folder back to its original name so papers
+  are **never** stranded; and a partial cross-filesystem move is now reported
+  instead of silently recording a short moved count. This was the root cause of
+  the rare release-gate flake in `test_v039_rebind_autocreate` — it was **not**
+  config-singleton pollution (disproven) or `move_paper` (not in this path).
+
 ## [1.0.5] - 2026-06-02
 
 ### Added

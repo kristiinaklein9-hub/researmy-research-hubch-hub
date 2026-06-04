@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import shutil
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +66,42 @@ class NewClusterProposal:
 
 
 _AUTO_CREATE_THRESHOLD = 5
+
+# Windows antivirus / Search-indexer briefly hold a handle on a freshly created
+# or just-moved file/dir, so shutil.move can raise PermissionError (WinError 5
+# ACCESS_DENIED / 32 SHARING_VIOLATION) even though the same call succeeds a few
+# ms later. These knobs drive _robust_move's retry/backoff (module-level so tests
+# can zero out the sleep). Backoff 0.1+0.2+0.4+0.8 ≈ 1.5 s worst case.
+_MOVE_RETRY_ATTEMPTS = 5
+_MOVE_RETRY_BASE_DELAY = 0.1
+
+
+def _robust_move(src: str, dst: str) -> None:
+    """``shutil.move`` with retry/backoff for transient Windows lock errors.
+
+    Without this, a transient lock on Windows surfaced as a rare, full-suite-only
+    flake in the rebind auto-create path AND — worse — could strand a real user's
+    papers in a ``*.__rebind_tmp__`` folder when the second leg of a case-only
+    folder rename failed.
+
+    Only ``PermissionError`` is retried: the transient AV / Search-indexer locks
+    raise WinError 5 (ACCESS_DENIED) / 32 (SHARING_VIOLATION), both surfaced as
+    ``PermissionError``. Other ``OSError`` subclasses (``FileNotFoundError``,
+    ``FileExistsError``, ``shutil.Error``) are permanent in this context, so they
+    propagate immediately — letting the caller roll back at once instead of
+    burning ~1.5 s of backoff on an error that cannot self-heal. Re-raises the
+    last lock error if it never clears (callers handle that + roll back).
+    """
+    last_exc: PermissionError | None = None
+    for attempt in range(_MOVE_RETRY_ATTEMPTS):
+        try:
+            shutil.move(src, dst)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt < _MOVE_RETRY_ATTEMPTS - 1:
+                time.sleep(_MOVE_RETRY_BASE_DELAY * (2 ** attempt))
+    raise last_exc  # type: ignore[misc]  # set on every loop exit that didn't return
 
 
 def emit_rebind_prompt(cfg) -> str:
@@ -154,7 +191,7 @@ def apply_rebind(cfg, report_path: Path, *, dry_run: bool = True, auto_create_ne
             continue
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dst))
+            _robust_move(str(src), str(dst))
             result.moved.append(prop)
             _append_log(log_path, f"MOVED: {src} -> {dst} [{prop.confidence}: {prop.reason}]")
         except Exception as exc:
@@ -455,22 +492,65 @@ def _apply_new_cluster_proposals(cfg, registry, proposals, result, log_path: Pat
                     _append_log(log_path, f"DRY: {prop.src} -> {prop.dst} [{prop.confidence}: {prop.reason}]")
                 continue
             temp_dir = source_dir.with_name(f"{source_dir.name}.__rebind_tmp__")
+            # Two-step case-only rename (Foo -> foo) needed on case-insensitive
+            # filesystems. Leg 1: source -> temp; if it fails the source is
+            # untouched, so just record and move on.
             try:
-                shutil.move(str(source_dir), str(temp_dir))
-                shutil.move(str(temp_dir), str(target_dir_hint))
-                for dst in sorted(target_dir_hint.glob("*.md")):
-                    result.moved.append(
-                        RebindProposal(
-                            src=str(safe_join(source_dir, dst.name)),
-                            dst=str(dst.resolve()),
-                            reason=f"auto-created cluster '{proposal.slug}' from folder '{proposal.source_folder}'",
-                            confidence="medium",
-                        )
-                    )
-                _append_log(log_path, f"MOVED: folder {source_dir} -> {target_dir_hint} [medium: auto-created cluster]")
+                _robust_move(str(source_dir), str(temp_dir))
             except Exception as exc:
                 result.errors.append(f"{source_dir}: {exc}")
                 _append_log(log_path, f"ERROR: {source_dir}: {exc}")
+                continue
+            # Leg 2: temp -> target. If it fails (e.g. a transient AV/indexer
+            # lock that outlived the retries), roll the temp dir back to the
+            # original source name so papers are NEVER stranded in
+            # *.__rebind_tmp__. Re-running rebind then retries cleanly.
+            try:
+                _robust_move(str(temp_dir), str(target_dir_hint))
+            except Exception as exc:
+                try:
+                    _robust_move(str(temp_dir), str(source_dir))
+                except Exception as rollback_exc:
+                    result.errors.append(
+                        f"{source_dir}: rename failed ({exc}); rollback failed "
+                        f"({rollback_exc}); papers left in {temp_dir}"
+                    )
+                    _append_log(
+                        log_path,
+                        f"ERROR: {source_dir}: rename+rollback failed; stranded in {temp_dir}",
+                    )
+                else:
+                    result.errors.append(
+                        f"{source_dir}: rename failed ({exc}); rolled back, no files moved"
+                    )
+                    _append_log(
+                        log_path,
+                        f"ERROR: {source_dir}: rename failed, rolled back to {source_dir}",
+                    )
+                continue
+            moved_md = sorted(target_dir_hint.glob("*.md"))
+            for dst in moved_md:
+                result.moved.append(
+                    RebindProposal(
+                        src=str(safe_join(source_dir, dst.name)),
+                        dst=str(dst.resolve()),
+                        reason=f"auto-created cluster '{proposal.slug}' from folder '{proposal.source_folder}'",
+                        confidence="medium",
+                    )
+                )
+            if len(moved_md) != len(source_files):
+                # A same-filesystem rename is atomic; a short count here means a
+                # cross-filesystem copy+delete was interrupted mid-way. Surface it
+                # instead of silently logging a partial moved count.
+                result.errors.append(
+                    f"{source_dir}: moved {len(moved_md)} of {len(source_files)} "
+                    f"papers into {target_dir_hint} (possible partial cross-filesystem move)"
+                )
+                _append_log(
+                    log_path,
+                    f"ERROR: {source_dir}: partial move {len(moved_md)}/{len(source_files)} -> {target_dir_hint}",
+                )
+            _append_log(log_path, f"MOVED: folder {source_dir} -> {target_dir_hint} [medium: auto-created cluster]")
             continue
 
         for src in source_files:
@@ -490,7 +570,7 @@ def _apply_new_cluster_proposals(cfg, registry, proposals, result, log_path: Pat
                 continue
             try:
                 Path(prop.dst).parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(prop.src, prop.dst)
+                _robust_move(prop.src, prop.dst)
                 result.moved.append(prop)
                 _append_log(log_path, f"MOVED: {prop.src} -> {prop.dst} [{prop.confidence}: {prop.reason}]")
             except Exception as exc:

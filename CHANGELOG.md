@@ -21,6 +21,33 @@ palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
 
+## [1.0.5] - 2026-06-02
+
+### Added
+
+- **`ezproxy login --from-browser <browser>`** — import EZproxy session cookies
+  from an already-logged-in real browser via rookiepy (no Playwright popup, no
+  terminal interaction), mirroring `notebooklm login --from-browser`. Reuses the
+  session you already have from browsing through your library proxy. Requires the
+  `browser-auth` extra; rookiepy has no Python 3.14 wheel yet, so it degrades
+  with a clear message (use the interactive `ezproxy login` on 3.14). New
+  `ezproxy.capture_cookies_from_browser`.
+- **Auto-detected `ezproxy_host_suffix`** — `resolve_config` now derives the
+  hostname-rewrite suffix from captured cookie domains when it is not explicitly
+  configured, so a one-time login enables hostname-rewrite without a manual
+  `config set ezproxy_host_suffix`. New `ezproxy.detect_host_suffix`; an explicit
+  config value still takes precedence.
+
+### Fixed
+
+- **`ezproxy login` now saves cookies reliably.** It previously called
+  `storage_state()` only AFTER the close-detection loop, but closing the window
+  tears down the Playwright context first, so the save raised and nothing was
+  persisted (0 cookies). Login now saves `storage_state` every second WHILE the
+  window is open (plus a final save on close), so the session is captured even
+  on an abrupt window close.
+
+
 ## [1.0.4] - 2026-06-02
 
 ### Added

@@ -456,6 +456,19 @@ def build_parser() -> argparse.ArgumentParser:
         default="https://ieeexplore.ieee.org/",
         help="Publisher URL to load (proxied) so you can verify access before closing the window",
     )
+    ezproxy_login.add_argument(
+        "--from-browser",
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="BROWSER",
+        help=(
+            "Skip the Playwright popup: import EZproxy cookies from an already-logged-in "
+            "real browser via rookiepy (chrome/firefox/edge/brave/...; omit the value for "
+            "auto-detect). Requires ezproxy_host_suffix set + 'pip install "
+            "research-hub-pipeline[browser-auth]' (no py3.14 wheel yet)."
+        ),
+    )
     ezproxy_sub.add_parser("status", help="Show configured template + cookie file state")
 
     examples_parser = subparsers.add_parser(
@@ -2722,6 +2735,14 @@ def _main_dispatch(args, parser) -> int:
         cfg = get_config()
         ezcfg = resolve_config(cfg)
         if args.ezproxy_command == "login":
+            from_browser = getattr(args, "from_browser", None)
+            if from_browser is not None:
+                from research_hub.ezproxy import capture_cookies_from_browser
+
+                browser = None if from_browser == "auto" else from_browser
+                return capture_cookies_from_browser(
+                    ezcfg.cookies_path, browser, domain=ezcfg.host_suffix
+                )
             return ezproxy_login(
                 ezcfg.cookies_path,
                 url_template=ezcfg.url_template,

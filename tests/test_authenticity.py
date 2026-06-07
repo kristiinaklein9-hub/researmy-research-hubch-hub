@@ -57,6 +57,33 @@ def _ok_head(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("research_hub.authenticity.requests.head", lambda *a, **k: _Response(200))
 
 
+@pytest.fixture(autouse=True)
+def _offline_crossref_corroboration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep this module's L2 Crossref corroboration OFFLINE.
+
+    test_authenticity.py is deliberately excluded from conftest's autouse
+    ``_stub_authenticity_network`` (its source references the gate internals so it
+    can drive the real gate). But ``verify_authenticity`` -> single-source
+    ``_crossref_verify_corroboration`` -> ``CrossrefBackend._request`` still made a
+    REAL Crossref API call that intermittently timed out in CI (the 2026-06-07
+    master flake: ``test_l1_request_exception_falls_through_to_l2_uncorroborated``
+    + ``test_l2_single_source_accepts_and_two_backends_corroborate``, both >30s
+    pytest-timeout). No test here relies on a live corroboration *result*:
+    single-source papers are expected to stay uncorroborated, and the
+    corroborated/accepted cases use ``found_in`` / ``citation_count`` (not a
+    network query). So default the Crossref backend OFFLINE here, mirroring the
+    conftest stub. A test that needs a corroborating Crossref result can still
+    override this with its own monkeypatch (applied after this autouse setup).
+    """
+    import research_hub.search.crossref as _crossref
+
+    class _OfflineCrossref(_crossref.CrossrefBackend):
+        def _request(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr("research_hub.authenticity.CrossrefBackend", _OfflineCrossref)
+
+
 def test_l0_no_identifier_is_quarantined(tmp_path):
     from research_hub.authenticity import verify_authenticity
 

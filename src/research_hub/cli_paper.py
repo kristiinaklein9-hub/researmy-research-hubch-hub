@@ -390,7 +390,22 @@ def _paper_attach_pdfs(
         items,
         unpaywall_email=getattr(cfg, "unpaywall_email", ""),
         include_publisher_link=include_publisher_link,
+        cfg=cfg,
     )
+
+    # Fail-soft preflight (P1-2): if some papers couldn't be resolved and the
+    # EZproxy path that would reach them has a lapsed session, surface the exact
+    # re-auth command instead of a silent "no PDF". Non-fatal — OA papers still
+    # attach; the user just learns WHY the paywalled ones didn't.
+    if any(not p.pdf_url for p in plans):
+        try:
+            from research_hub.ezproxy import RequiresAuthRefresh, ezproxy_probe, resolve_config
+
+            if resolve_config(cfg).enabled and not ezproxy_probe(cfg).live:
+                exc = RequiresAuthRefresh("EZproxy", "research-hub ezproxy login")
+                print(f"  [!] {exc} — some papers may be paywalled; re-auth then retry.")
+        except Exception:
+            pass
 
     print("item_key\tsource\turl\ttitle")
     for plan in plans:

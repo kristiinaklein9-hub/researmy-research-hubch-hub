@@ -17,7 +17,7 @@ from research_hub._useragent import user_agent
 
 logger = logging.getLogger(__name__)
 
-FetchSource = Literal["local-doi", "local-slug", "arxiv", "unpaywall", "not-found"]
+FetchSource = Literal["local-doi", "local-slug", "arxiv", "unpaywall", "ezproxy", "not-found"]
 _UNPAYWALL_EMAIL = "research-hub@example.invalid"
 _USER_AGENT = user_agent()
 _DEFAULT_TIMEOUT = 15.0
@@ -42,8 +42,14 @@ def fetch_paper_pdf(
     pdfs_dir: Path,
     *,
     timeout: float = _DEFAULT_TIMEOUT,
+    cfg=None,
 ) -> FetchResult:
-    """Try the full fallback chain. Returns FetchResult."""
+    """Try the full fallback chain. Returns FetchResult.
+
+    When ``cfg`` is provided and EZproxy is enabled, a paywalled-no-OA DOI falls
+    back to institutional localization through the proxy (P1-1) — the auto-ingest
+    path can then reach subscribed content, not just OA.
+    """
     pdfs_dir.mkdir(parents=True, exist_ok=True)
     normalized = normalize_doi(doi) if doi else ""
     target = pdfs_dir / f"{_filename_from_doi(normalized)}.pdf" if normalized else None
@@ -81,6 +87,28 @@ def fetch_paper_pdf(
             if result.ok:
                 return result
             last_error = result.error or last_error
+
+    # Institutional fallback: paywalled-no-OA DOI → localize through EZproxy
+    # (reuses the v1.0.8-safe credentialed fetch; cookies never leave the proxy).
+    if normalized and cfg is not None:
+        try:
+            from research_hub.zotero.pdf_attach import (
+                _download_pdf_bytes_with_ezproxy_result,
+                find_institutional_pdf_url,
+            )
+
+            inst_url, _src = find_institutional_pdf_url(normalized, cfg)
+            if inst_url:
+                dest = target or pdfs_dir / f"{_filename_from_doi(normalized)}.pdf"
+                bytes_result = _download_pdf_bytes_with_ezproxy_result(
+                    inst_url, cfg=cfg, timeout=int(timeout) or 60
+                )
+                if bytes_result.content is not None:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(bytes_result.content)
+                    return FetchResult(source="ezproxy", path=dest, size_bytes=len(bytes_result.content))
+        except Exception as exc:  # noqa: BLE001 - institutional fetch is best-effort
+            last_error = f"ezproxy: {type(exc).__name__}: {exc}" or last_error
 
     return FetchResult(
         source="not-found",

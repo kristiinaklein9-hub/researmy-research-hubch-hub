@@ -256,7 +256,7 @@ def test_stage_6_bundle_downloads_pdfs_and_reports_failures(pipeline_cfg, monkey
             arxiv_id=f"2604.0822{idx}",
         )
 
-    def fake_fetch(doi, slug, pdfs_dir):
+    def fake_fetch(doi, slug, pdfs_dir, *, cfg=None):
         if doi.endswith("2"):
             return SimpleNamespace(ok=False, path=None, source="", error="404")
         path = pdfs_dir / f"{slug}.pdf"

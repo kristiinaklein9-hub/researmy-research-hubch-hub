@@ -1413,7 +1413,7 @@ def run_pipeline(
             if just_added_keys:
                 try:
                     items = [zot.item(key) for key in just_added_keys]
-                    plans = plan_attach_for_items(items, unpaywall_email=oa_email)
+                    plans = plan_attach_for_items(items, unpaywall_email=oa_email, cfg=cfg)
                     pdf_results = attach_pdfs(zot, plans, rate_limit_rps=2.0, cfg=cfg)
                     slug_by_key = {
                         pp.get("zotero_key", ""): pp.get("slug", "")

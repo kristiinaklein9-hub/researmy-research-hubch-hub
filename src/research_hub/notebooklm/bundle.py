@@ -263,7 +263,7 @@ def bundle_cluster(
         if pdf is None and download_pdfs:
             from research_hub.notebooklm.pdf_fetcher import fetch_paper_pdf
 
-            fetch_result = fetch_paper_pdf(entry.doi, note_path.stem, pdfs_dir)
+            fetch_result = fetch_paper_pdf(entry.doi, note_path.stem, pdfs_dir, cfg=cfg)
             if fetch_result.ok:
                 pdf = fetch_result.path
                 entry.pdf_source = fetch_result.source

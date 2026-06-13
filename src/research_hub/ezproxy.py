@@ -73,6 +73,67 @@ def resolve_config(cfg: Any) -> EZproxyConfig:
     return EZproxyConfig(url_template=template, cookies_path=cookies_path, host_suffix=host_suffix)
 
 
+class RequiresAuthRefresh(RuntimeError):
+    """Raised when a credentialed action can't proceed because an auth session
+    needs a manual refresh. Carries the exact re-auth command so the CLI can
+    print a one-liner instead of failing silently with "PDF not found"."""
+
+    def __init__(self, service: str, command: str) -> None:
+        self.service = service
+        self.command = command
+        super().__init__(f"{service} session needs refresh — run: {command}")
+
+
+@dataclass
+class EZproxyProbeResult:
+    """Liveness-probe outcome. ``live`` is True only when the proxy served real
+    content; ``reason`` is a short human label; ``checked_at`` is ISO-8601 UTC."""
+
+    live: bool
+    reason: str
+    checked_at: str
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _auth_state_path(cfg) -> Path:
+    return Path(getattr(cfg, "research_hub_dir", ".")) / "auth_state.json"
+
+
+def record_ezproxy_live_probe(cfg) -> None:
+    """Persist the last-verified-live timestamp so doctor can show a REAL recency
+    signal (the stored cookie expiry is unreliable -- `__Secure-1PSIDTS` claims
+    ~345 days while the session lapses in hours)."""
+    path = _auth_state_path(cfg)
+    try:
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, ValueError):
+        state = {}
+    state.setdefault("ezproxy", {})["last_verified_live"] = _now_iso()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def ezproxy_last_verified(cfg) -> str | None:
+    """ISO timestamp of the last live probe, or None."""
+    path = _auth_state_path(cfg)
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        value = state.get("ezproxy", {}).get("last_verified_live")
+        return value if isinstance(value, str) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def wrap_url(original_url: str, template: str = "", host_suffix: str = "") -> str:
     """Wrap an absolute publisher URL for institutional EZproxy access.
 
@@ -193,26 +254,82 @@ def detect_host_suffix(cookies_path) -> str:
     return min(candidates, key=len)
 
 
-def capture_cookies_from_browser(cookies_path, browser: str | None, *, domain: str) -> int:
-    """Import EZproxy session cookies from an already-logged-in real browser via
-    rookiepy -- no Playwright popup, no terminal interaction. Reuses the session
-    you already have from browsing through your library's proxy.
-
-    Requires rookiepy (``pip install 'research-hub-pipeline[browser-auth]'``).
-    rookiepy has no prebuilt wheel for Python 3.14 yet; on 3.14 use the
-    interactive ``research-hub ezproxy login`` instead. ``domain`` is the EZproxy
-    host to extract cookies for (normally ``ezproxy_host_suffix``).
-    """
+def _extract_via_rookiepy(browser: str | None, want: str) -> list[dict] | None:
+    """rookiepy extractor → rookiepy-shaped cookie dicts, or None when rookiepy
+    is unavailable / has no extractor for ``browser`` / errored."""
     try:
         import rookiepy
     except ImportError:
+        return None
+    extractor = (
+        getattr(rookiepy, browser, None)
+        if browser and browser != "auto"
+        else getattr(rookiepy, "load", None)
+    )
+    if extractor is None:
+        print(f"  [ezproxy] rookiepy has no extractor for browser {browser!r}.", file=sys.stderr)
+        return None
+    try:
+        return list(extractor([want]) or [])
+    except Exception as exc:  # noqa: BLE001 - rookiepy raises various OS/browser errors
         print(
-            "  [ezproxy] rookiepy is not installed (needed for --from-browser).\n"
-            "            Install: pip install 'research-hub-pipeline[browser-auth]'\n"
-            "            (no py3.14 wheel yet -- on 3.14 use `research-hub ezproxy login`).",
+            f"  [ezproxy] rookiepy could not read {browser or 'auto'} cookies: "
+            f"{type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
-        return 1
+        return None
+
+
+def _extract_via_browser_cookie3(browser: str | None, want: str) -> list[dict] | None:
+    """browser_cookie3 fallback (pure-Python, py3.14-compatible) → rookiepy-shaped
+    cookie dicts, or None when browser_cookie3 is unavailable / errored.
+
+    The ``domain_name`` hint is best-effort; the suffix-anchored filter in
+    ``capture_cookies_from_browser`` is the authoritative guard either way.
+    """
+    try:
+        import browser_cookie3
+    except ImportError:
+        return None
+    loader = (
+        getattr(browser_cookie3, browser, None)
+        if browser and browser != "auto"
+        else getattr(browser_cookie3, "load", None)
+    )
+    if loader is None:
+        print(f"  [ezproxy] browser_cookie3 has no extractor for browser {browser!r}.", file=sys.stderr)
+        return None
+    try:
+        jar = loader(domain_name=want)
+    except Exception as exc:  # noqa: BLE001 - cookie DB locked / unsupported browser / OS errors
+        print(
+            f"  [ezproxy] browser_cookie3 could not read {browser or 'auto'} cookies: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+    return [
+        {
+            "name": getattr(c, "name", None),
+            "value": getattr(c, "value", None),
+            "domain": str(getattr(c, "domain", "")),
+            "path": getattr(c, "path", "/") or "/",
+        }
+        for c in jar
+    ]
+
+
+def capture_cookies_from_browser(cookies_path, browser: str | None, *, domain: str) -> int:
+    """Import EZproxy session cookies from an already-logged-in real browser --
+    no Playwright popup, no terminal interaction. Reuses the session you already
+    have from browsing through your library's proxy.
+
+    Tries rookiepy first, then ``browser_cookie3`` (pure-Python, py3.14-compatible)
+    as a fallback -- rookiepy has no py3.14 wheel, so browser_cookie3 is what makes
+    ``--from-browser`` work on a 3.14 box. Install either via
+    ``pip install 'research-hub-pipeline[browser-auth]'``. ``domain`` is the
+    EZproxy host to extract cookies for (normally ``ezproxy_host_suffix``).
+    """
     want = (domain or "").strip().lstrip(".")
     if not want:
         print(
@@ -221,29 +338,27 @@ def capture_cookies_from_browser(cookies_path, browser: str | None, *, domain: s
             file=sys.stderr,
         )
         return 1
-    extractor = (
-        getattr(rookiepy, browser, None)
-        if browser and browser != "auto"
-        else getattr(rookiepy, "load", None)
-    )
-    if extractor is None:
-        print(f"  [ezproxy] rookiepy has no extractor for browser {browser!r}.", file=sys.stderr)
-        return 1
-    try:
-        raw = extractor([want]) or []
-    except Exception as exc:  # noqa: BLE001 - rookiepy raises various OS/browser errors
+
+    raw = _extract_via_rookiepy(browser, want)
+    source = "rookiepy"
+    if raw is None:
+        raw = _extract_via_browser_cookie3(browser, want)
+        source = "browser_cookie3"
+    if raw is None:
         print(
-            f"  [ezproxy] rookiepy could not read {browser or 'auto'} cookies: "
-            f"{type(exc).__name__}: {exc}",
+            "  [ezproxy] --from-browser needs rookiepy or browser_cookie3.\n"
+            "            Install: pip install 'research-hub-pipeline[browser-auth]'\n"
+            "            (browser_cookie3 is pure-Python + py3.14-compatible).",
             file=sys.stderr,
         )
         return 1
+
     cookies: list[dict] = []
     for cookie in raw:
         try:
             dom = str(cookie.get("domain", ""))
-            # Suffix-anchored match (the Python loop is the authoritative filter;
-            # rookiepy's domain-hint arg is best-effort and backend-dependent).
+            # Suffix-anchored match (the authoritative filter, regardless of which
+            # extractor produced the cookie + its best-effort domain hint).
             # Anchoring prevents a lookalike like
             # x-ezproxy.lib.lehigh.edu.evil.com from leaking the session cookie.
             stripped = dom.lstrip(".")
@@ -260,19 +375,76 @@ def capture_cookies_from_browser(cookies_path, browser: str | None, *, domain: s
             continue
     if not cookies:
         print(
-            f"  [ezproxy] No cookies for {want!r} in {browser or 'auto'}. Sign in to your "
+            f"  [ezproxy] No cookies for {want!r} via {source}. Sign in to your "
             "EZproxy (open a paywalled article via the library portal) in that browser first.",
             file=sys.stderr,
         )
         return 1
+
     from research_hub.notebooklm.auth import _tighten_state_file_perms
 
     out = Path(cookies_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"cookies": cookies}, ensure_ascii=False), encoding="utf-8")
     _tighten_state_file_perms(out)
-    print(f"  [ezproxy] Imported {len(cookies)} cookie(s) for {want} from {browser or 'auto'} -> {out}")
+    print(f"  [ezproxy] Imported {len(cookies)} cookie(s) for {want} via {source} -> {out}")
     return 0
+
+
+_PROBE_SENTINEL = "https://www.nature.com/"
+_PROBE_HEADERS = {"User-Agent": "Mozilla/5.0 (research-hub ezproxy probe)"}
+
+
+def _looks_like_login_redirect(location: str) -> bool:
+    """Heuristic: a session-expired EZproxy redirect lands on a login URL."""
+    loc = (location or "").lower()
+    return bool(loc) and any(
+        marker in loc for marker in ("login", "?url=", "?qurl=", "/menu", "ezproxy.cgi")
+    )
+
+
+def ezproxy_probe(cfg, *, timeout: int = 8) -> EZproxyProbeResult:
+    """Single-hop liveness probe of the EZproxy session.
+
+    Fetches a wrapped sentinel WITH the session cookies and
+    ``follow_redirects=False`` -- so the cookies are never forwarded across an
+    off-proxy redirect (the v1.0.8 cookie-scoping contract holds: one GET to the
+    proxy host only) -- then classifies:
+
+    - 2xx → live (proxy served content); records the verified-live timestamp.
+    - 3xx to a login URL → expired (needs re-auth).
+    - 3xx within the proxy → live.
+    - network error / 4xx / 5xx → not-confirmed-live (advisory; never claims
+      "expired" so doctor stays useful offline).
+    """
+    ezcfg = resolve_config(cfg)
+    if not ezcfg.enabled:
+        return EZproxyProbeResult(False, "ezproxy not configured", _now_iso())
+    wrapped = wrap_url(_PROBE_SENTINEL, ezcfg.url_template, ezcfg.host_suffix)
+    cookies = load_cookies(ezcfg.cookies_path)
+    try:
+        import httpx
+
+        resp = httpx.get(
+            wrapped,
+            cookies=cookies,
+            follow_redirects=False,
+            timeout=timeout,
+            headers=_PROBE_HEADERS,
+        )
+    except Exception as exc:  # noqa: BLE001 - probe is advisory, never hard-fail
+        return EZproxyProbeResult(False, f"unreachable: {type(exc).__name__}", _now_iso())
+    status = int(getattr(resp, "status_code", 0) or 0)
+    if getattr(resp, "is_redirect", 300 <= status < 400):
+        location = str((getattr(resp, "headers", {}) or {}).get("location", "") or "")
+        if _looks_like_login_redirect(location):
+            return EZproxyProbeResult(False, "session expired (login redirect)", _now_iso())
+        record_ezproxy_live_probe(cfg)
+        return EZproxyProbeResult(True, "live (in-proxy redirect)", _now_iso())
+    if 200 <= status < 400:
+        record_ezproxy_live_probe(cfg)
+        return EZproxyProbeResult(True, "live", _now_iso())
+    return EZproxyProbeResult(False, f"HTTP {status}", _now_iso())
 
 
 def login(

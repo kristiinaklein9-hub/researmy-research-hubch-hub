@@ -399,6 +399,30 @@ def _build_schtasks_uninstall_argv() -> list[str]:
     ]
 
 
+def is_keepalive_task_registered() -> bool | None:
+    """Whether the keepalive Scheduled Task is currently registered.
+
+    Returns True if registered, False if not, or None when the check is not
+    applicable (non-Windows, or ``schtasks`` unavailable) — callers should treat
+    None as "don't nag", not "not installed".
+    """
+    if not sys.platform.startswith("win"):
+        return None
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["schtasks", "/Query", "/TN", _TASK_NAME],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.returncode == 0
+
+
 def run_install_windows_task(
     interval_minutes: int,
     *,

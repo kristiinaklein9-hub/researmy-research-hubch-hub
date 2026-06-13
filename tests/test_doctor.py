@@ -369,6 +369,56 @@ def test_nlm_session_present_and_healthy(tmp_path, monkeypatch):
     assert nlm.status == "OK"
 
 
+def test_nlm_session_healthy_nudges_keepalive_when_not_installed(tmp_path, monkeypatch):
+    """Live NLM session + keepalive task NOT registered -> INFO nudge with the
+    install one-liner (P1-3)."""
+    from research_hub.doctor import run_doctor
+
+    root, _ = _write_config(tmp_path, monkeypatch)
+    session_root = root / ".research_hub" / "nlm_sessions"
+    session_root.mkdir(parents=True)
+    (session_root / "state.json").write_text('{"cookies": []}', encoding="utf-8")
+    monkeypatch.setattr("requests.head", lambda *args, **kwargs: SimpleNamespace(status_code=200))
+    monkeypatch.setattr(
+        "research_hub.notebooklm.auth.check_session_health",
+        lambda _p: {"ok": True, "reason": "ok", "expires_at": None},
+    )
+    monkeypatch.setattr(
+        "research_hub.notebooklm.keepalive.is_keepalive_task_registered",
+        lambda: False,
+    )
+
+    results = run_doctor()
+
+    nudge = next((r for r in results if r.name == "nlm_keepalive"), None)
+    assert nudge is not None and nudge.status == "INFO"
+    assert "keepalive --install-windows-task" in nudge.remedy
+
+
+def test_nlm_session_healthy_no_keepalive_nudge_when_registered(tmp_path, monkeypatch):
+    """Live session + keepalive task already registered (or non-Windows None) ->
+    no nudge."""
+    from research_hub.doctor import run_doctor
+
+    root, _ = _write_config(tmp_path, monkeypatch)
+    session_root = root / ".research_hub" / "nlm_sessions"
+    session_root.mkdir(parents=True)
+    (session_root / "state.json").write_text('{"cookies": []}', encoding="utf-8")
+    monkeypatch.setattr("requests.head", lambda *args, **kwargs: SimpleNamespace(status_code=200))
+    monkeypatch.setattr(
+        "research_hub.notebooklm.auth.check_session_health",
+        lambda _p: {"ok": True, "reason": "ok", "expires_at": None},
+    )
+    monkeypatch.setattr(
+        "research_hub.notebooklm.keepalive.is_keepalive_task_registered",
+        lambda: True,
+    )
+
+    results = run_doctor()
+
+    assert not any(r.name == "nlm_keepalive" for r in results)
+
+
 def test_nlm_session_present_but_auth_rejected(tmp_path, monkeypatch):
     """File present + probe returns auth invalid -> WARN with login remedy."""
     from research_hub.doctor import run_doctor

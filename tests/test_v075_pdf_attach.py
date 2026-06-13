@@ -123,7 +123,7 @@ def test_run_pipeline_with_pdfs_invokes_attach_helpers(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "_refresh_cluster_base", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "research_hub.zotero.pdf_attach.plan_attach_for_items",
-        lambda items, unpaywall_email="": [
+        lambda items, unpaywall_email="", cfg=None: [
             PdfAttachPlan(
                 item_key="Z0",
                 title="Paper One",

@@ -21,6 +21,42 @@ palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
 
+## [1.0.10] - 2026-06-13
+
+"Institutional access end-to-end" — make a paywalled-no-OA paper with a DOI
+localizable through the library's EZproxy by both the Zotero and auto-ingest
+paths, with fail-soft auth + a discoverable keepalive.
+
+### Added
+
+- **Institutional PDF localization (P1-1).** `find_pdf_url` only ever returned
+  open-access URLs, so EZproxy never fired for a paywalled-no-OA paper. New
+  `find_institutional_pdf_url` resolves the publisher landing page (OpenAlex
+  `primary_location` / DOI redirect), fetches it THROUGH the proxy, extracts the
+  standard `<meta name="citation_pdf_url">`, and localizes the PDF — `paper
+  attach-pdfs` and the NotebookLM auto-ingest path (`fetch_paper_pdf(cfg=...)`)
+  both reach subscribed content now, reported as `ezproxy-citation-pdf` instead
+  of a silent skip. The landing + PDF fetches reuse the v1.0.8 cookie-scoped
+  `_credentialed_get` core, so the SSO session is never forwarded off-proxy.
+- **EZproxy fail-soft auth (P1-2).** New `ezproxy_probe` (single-hop,
+  cookie-safe) classifies the session live vs expired; `doctor` gains an
+  `ezproxy_session` check with a real "last verified live: Nh ago" recency
+  signal (from `auth_state.json`), and `paper attach-pdfs` surfaces a
+  `RequiresAuthRefresh` one-liner (`research-hub ezproxy login`) when papers are
+  paywalled and the session has lapsed — instead of a silent "no PDF".
+- **Keepalive discoverable + py3.14 `--from-browser` (P1-3).** `doctor` nudges
+  `notebooklm keepalive --install-windows-task` when the NLM session is live but
+  the refresh task isn't registered; `--from-browser` gains a `browser_cookie3`
+  fallback (pure-Python, py3.14-compatible — rookiepy has no 3.14 wheel) behind
+  the existing suffix-anchored cookie filter.
+
+### Changed
+
+- `_download_via_httpx_result` refactored onto a shared `_credentialed_get` (the
+  v1.0.8 bounded-redirect cookie-scoping core), now reused by the institutional
+  landing-HTML fetch. `browser-cookie3` added to the `browser-auth` extra.
+
+
 ## [1.0.9] - 2026-06-13
 
 CI-hardening release — no shipped-behavior change. Converts the test suite's

@@ -164,7 +164,7 @@ def test_pipeline_appends_pdf_attach_summary_to_output_json(tmp_path, monkeypatc
     monkeypatch.setattr(pipeline, "_refresh_cluster_base", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "research_hub.zotero.pdf_attach.plan_attach_for_items",
-        lambda items, unpaywall_email="": [
+        lambda items, unpaywall_email="", cfg=None: [
             PdfAttachPlan("Z0", "Paper One", "10.1000/one", "", "https://ok.test/paper.pdf", "openalex-oa")
         ],
     )
@@ -215,7 +215,7 @@ def test_auto_pdf_attach_forwards_unpaywall_email(monkeypatch) -> None:
 
     captured: dict = {}
 
-    def fake_plan(items, *, unpaywall_email="", include_publisher_link=False):
+    def fake_plan(items, *, unpaywall_email="", include_publisher_link=False, cfg=None):
         captured["unpaywall_email"] = unpaywall_email
         return [PdfAttachPlan("Z0", "Paper", "10.1000/x", "", "https://ok.test/p.pdf", "unpaywall")]
 

@@ -161,10 +161,34 @@ def test_capture_from_browser_no_matching_cookies_errors(tmp_path, monkeypatch) 
     )
 
 
-def test_capture_from_browser_missing_rookiepy_degrades(tmp_path, monkeypatch) -> None:
-    # sys.modules["rookiepy"] = None makes `import rookiepy` raise ImportError.
+def test_capture_from_browser_missing_both_extractors_degrades(tmp_path, monkeypatch) -> None:
+    # Neither rookiepy nor browser_cookie3 installed → graceful rc=1.
+    # setitem(..., None) makes `import <name>` raise ImportError.
     monkeypatch.setitem(sys.modules, "rookiepy", None)
+    monkeypatch.setitem(sys.modules, "browser_cookie3", None)
     assert (
         ezproxy.capture_cookies_from_browser(tmp_path / "c.json", "chrome", domain="ezproxy.lib.lehigh.edu")
         == 1
     )
+
+
+def test_capture_from_browser_falls_back_to_browser_cookie3(tmp_path, monkeypatch) -> None:
+    # rookiepy absent (no py3.14 wheel) → browser_cookie3 fallback extracts, and
+    # the SAME suffix-anchored filter applies (P1-3). browser_cookie3 yields
+    # cookiejar-style objects (attrs), not dicts.
+    monkeypatch.setitem(sys.modules, "rookiepy", None)
+    jar = [
+        SimpleNamespace(name="ez", value="sess", domain=".ezproxy.lib.lehigh.edu", path="/"),
+        SimpleNamespace(name="other", value="z", domain=".google.com", path="/"),  # filtered out
+    ]
+    mod = types.ModuleType("browser_cookie3")
+    mod.chrome = lambda domain_name=None: jar
+    mod.load = lambda domain_name=None: jar
+    monkeypatch.setitem(sys.modules, "browser_cookie3", mod)
+
+    out = tmp_path / "ezproxy_cookies.json"
+    rc = ezproxy.capture_cookies_from_browser(out, "chrome", domain="ezproxy.lib.lehigh.edu")
+    assert rc == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))["cookies"]
+    assert [c["name"] for c in saved] == ["ez"]  # lookalike/foreign domain filtered
+    assert saved[0]["domain"] == ".ezproxy.lib.lehigh.edu"

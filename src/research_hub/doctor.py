@@ -794,6 +794,59 @@ def check_nlm_auth_paths() -> CheckResult:
     )
 
 
+def _humanize_age(iso: str) -> str:
+    """'6h ago' / '3d ago' from an ISO-8601 timestamp; raw string on parse failure."""
+    from datetime import datetime, timezone
+
+    try:
+        then = datetime.fromisoformat(iso)
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+        secs = int((datetime.now(timezone.utc) - then).total_seconds())
+    except (ValueError, TypeError):
+        return iso
+    if secs < 0:
+        return "just now"
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    return f"{secs // 86400}d ago"
+
+
+def check_ezproxy_session(cfg) -> CheckResult:
+    """Liveness of the EZproxy institutional-access session (P1-2). Advisory: a
+    not-confirmed-live probe is reported INFO (never falsely 'expired'), so
+    doctor stays useful offline."""
+    from research_hub.ezproxy import ezproxy_last_verified, ezproxy_probe, resolve_config
+
+    ezcfg = resolve_config(cfg)
+    if not ezcfg.enabled:
+        return CheckResult(
+            "ezproxy_session",
+            "INFO",
+            "EZproxy not configured (no institutional-PDF access). Set "
+            "ezproxy_host_suffix + run `research-hub ezproxy login` to enable.",
+        )
+    result = ezproxy_probe(cfg)
+    last = ezproxy_last_verified(cfg)
+    recency = f" (last verified live: {_humanize_age(last)})" if last else ""
+    if result.live:
+        return CheckResult("ezproxy_session", "OK", f"EZproxy session live{recency}.")
+    if "expired" in result.reason:
+        return CheckResult(
+            "ezproxy_session",
+            "WARN",
+            f"EZproxy session {result.reason}{recency}.",
+            remedy="Run: research-hub ezproxy login",
+        )
+    return CheckResult(
+        "ezproxy_session",
+        "INFO",
+        f"EZproxy session liveness unverified ({result.reason}){recency}.",
+    )
+
+
 def run_doctor(*, strict: bool = False) -> list[CheckResult]:
     """Run all health checks and return results.
 
@@ -1212,6 +1265,28 @@ def run_doctor(*, strict: bool = False) -> list[CheckResult]:
                 health = check_session_health(session_file)
                 if health["ok"]:
                     results.append(CheckResult("nlm_session", "OK", str(session_file)))
+                    # A live session that lapses on long idle gaps is the #1 NLM
+                    # re-auth pain. The keepalive task prevents it but is dormant
+                    # by default — nudge the install one-liner when it isn't
+                    # registered (P1-3). None => not applicable (non-Windows) =>
+                    # stay quiet.
+                    try:
+                        from research_hub.notebooklm.keepalive import (
+                            is_keepalive_task_registered,
+                        )
+
+                        if is_keepalive_task_registered() is False:
+                            results.append(
+                                CheckResult(
+                                    "nlm_keepalive",
+                                    "INFO",
+                                    "NLM session is live but the keepalive task is not "
+                                    "installed; the session will lapse on long idle gaps.",
+                                    remedy="Run: research-hub notebooklm keepalive --install-windows-task --yes",
+                                )
+                            )
+                    except Exception:
+                        pass
                 elif "auth" in str(health.get("reason", "")).lower():
                     results.append(
                         CheckResult(
@@ -1254,6 +1329,10 @@ def run_doctor(*, strict: bool = False) -> list[CheckResult]:
             results.append(check_nlm_chrome_orphans())
         except Exception as exc:
             results.append(CheckResult("nlm_chrome_orphans", "WARN", f"Could not check: {exc}"))
+        try:
+            results.append(check_ezproxy_session(cfg))
+        except Exception as exc:
+            results.append(CheckResult("ezproxy_session", "INFO", f"Could not check: {exc}"))
         try:
             results.extend(check_cluster_zotero_drift(cfg))
         except Exception as exc:

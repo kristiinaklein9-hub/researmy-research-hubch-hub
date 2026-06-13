@@ -265,6 +265,85 @@ def find_pdf_url(
     return ("", "")
 
 
+_CITATION_PDF_RES = (
+    re.compile(
+        r'<meta[^>]+name=["\']citation_pdf_url["\'][^>]+content=["\']([^"\']+)["\']',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']citation_pdf_url["\']',
+        re.IGNORECASE,
+    ),
+)
+
+
+def _extract_citation_pdf_url(html: str) -> str:
+    """Extract the de-facto-standard ``<meta name="citation_pdf_url">`` target
+    (handles both attribute orderings); '' when absent."""
+    for rx in _CITATION_PDF_RES:
+        match = rx.search(html or "")
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def find_institutional_pdf_url(
+    doi: str, cfg, *, openalex_record: Optional[dict] = None
+) -> tuple[str, str]:
+    """Resolve a paywalled-no-OA PDF URL through the institution's EZproxy (P1-1).
+
+    Fires only when EZproxy is enabled and a DOI exists. Fetches the publisher
+    landing page THROUGH the proxy (so the paywall is satisfied) via the
+    cookie-scoped ``_credentialed_get``, extracts the de-facto-standard
+    ``<meta name="citation_pdf_url">``, and returns ``(url, "ezproxy-citation-pdf")``
+    for the caller to localize. Returns ``("","")`` when EZproxy is off, no
+    landing/meta is found, or the session can't reach the publisher — an honest
+    "not localizable", never a crash. The SSO session is never forwarded
+    off-proxy (the v1.0.8 contract holds via _credentialed_get's cookie scoping).
+    """
+    if not doi or cfg is None:
+        return ("", "")
+    try:
+        from research_hub.ezproxy import load_cookies, resolve_config, wrap_url
+        from research_hub.security import is_safe_fetch_url
+
+        ezcfg = resolve_config(cfg)
+        if not ezcfg.enabled:
+            return ("", "")
+        landing = ""
+        if isinstance(openalex_record, dict):
+            primary = openalex_record.get("primary_location") or {}
+            landing = str(primary.get("landing_page_url") or "").strip()
+        if not landing:
+            landing = f"https://doi.org/{doi}"
+        if not is_safe_fetch_url(landing):
+            return ("", "")
+        wrapped = wrap_url(landing, ezcfg.url_template, ezcfg.host_suffix)
+        response, _reason = _credentialed_get(
+            wrapped,
+            cookies=load_cookies(ezcfg.cookies_path),
+            cookie_host=ezcfg.host_suffix,
+            timeout=30,
+        )
+        if response is None or not getattr(response, "is_success", getattr(response, "ok", False)):
+            return ("", "")
+        try:
+            html = response.text
+        except Exception:
+            return ("", "")
+        pdf_url = _extract_citation_pdf_url(html)
+        # Defense-in-depth: only return an http(s) citation_pdf_url. A poisoned
+        # landing page can set it to file:// / data: — reject here (the download
+        # path's is_safe_fetch_url would too, but fail early + keep the property
+        # local to this resolver).
+        if pdf_url and is_safe_fetch_url(pdf_url):
+            return (pdf_url, "ezproxy-citation-pdf")
+        return ("", "")
+    except Exception as exc:  # noqa: BLE001 - institutional resolution is best-effort
+        logger.info("institutional pdf resolution failed for %s: %s", doi, exc)
+        return ("", "")
+
+
 def _extract_arxiv_id(data: dict) -> str:
     doi = str(data.get("DOI", "") or "").strip().lower()
     match = re.match(r"10\.48550/arxiv\.(.+)", doi)
@@ -282,8 +361,14 @@ def plan_attach_for_items(
     *,
     unpaywall_email: str = "",
     include_publisher_link: bool = False,
+    cfg=None,
 ) -> list[PdfAttachPlan]:
-    """Build PDF attach plans for the provided Zotero items."""
+    """Build PDF attach plans for the provided Zotero items.
+
+    When ``cfg`` is provided and EZproxy is enabled, a paper with no OA copy
+    falls back to institutional resolution (``find_institutional_pdf_url``) so a
+    paywalled-no-OA DOI becomes localizable-via-proxy instead of a silent skip.
+    """
     plans: list[PdfAttachPlan] = []
     for item in items:
         data = item.get("data", {})
@@ -295,6 +380,10 @@ def plan_attach_for_items(
         else:
             pdf_url, source = find_pdf_url(doi=doi, arxiv_id=arxiv_id, unpaywall_email=unpaywall_email)
             error = "" if pdf_url else "no_oa_record"
+            if not pdf_url and cfg is not None and doi:
+                inst_url, inst_source = find_institutional_pdf_url(doi, cfg)
+                if inst_url:
+                    pdf_url, source, error = inst_url, inst_source, ""
         publisher_url = ""
         if not pdf_url and include_publisher_link:
             publisher_url = (
@@ -425,35 +514,39 @@ def _download_via_httpx(
 _MAX_PDF_REDIRECTS = 10
 
 
-def _download_via_httpx_result(
+def _credentialed_get(
     url: str,
     *,
     cookies: dict[str, str] | None = None,
     cookie_host: str = "",
     timeout: int = 60,
-    max_size_mb: int = 25,
-) -> _PdfBytesResult:
-    # Redirects are followed MANUALLY (follow_redirects=False) so every hop is
-    # scheme-checked (no file://, P0-4) and the EZproxy SSO session cookies are
-    # sent ONLY to hosts within the proxy scope (P0-3) — never forwarded across
-    # an off-proxy redirect. `cookie_host` is the proxy suffix; when empty the
-    # scope defaults to the initial host (so a direct, non-proxy URL with stray
-    # cookies still can't leak them past its own host).
+    max_redirects: int = _MAX_PDF_REDIRECTS,
+):
+    """Bounded manual-redirect GET with the v1.0.8 credential-safety contract.
+
+    Redirects are followed MANUALLY (follow_redirects=False) so every hop is
+    scheme-checked (no file://, P0-4) and the EZproxy SSO session cookies are
+    sent ONLY to hosts within the proxy scope (P0-3) — never forwarded across an
+    off-proxy redirect. `cookie_host` is the proxy suffix; when empty the scope
+    defaults to the initial host. Returns ``(response, None)`` on success or
+    ``(None, reason)`` (unsafe_url / too_many_redirects / network_error). Shared
+    by the PDF download AND the institutional landing-HTML fetch so both inherit
+    identical cookie scoping.
+    """
     from research_hub.security import host_in_suffix, is_safe_fetch_url
 
     cookies = cookies or {}
     # `scope` is the cookie-sending allowlist, computed ONCE from the proxy
-    # suffix (or the initial host in template mode) and deliberately held
-    # constant across every redirect hop. Do NOT "fix" this to
-    # urlparse(current).hostname — that would let an off-proxy redirect widen
-    # its own scope and re-acquire the SSO cookie.
+    # suffix (or the initial host) and deliberately held constant across every
+    # redirect hop. Do NOT "fix" this to urlparse(current).hostname — that would
+    # let an off-proxy redirect widen its own scope and re-acquire the SSO cookie.
     scope = (cookie_host or (urlparse(url).hostname or "")).lower().strip(".")
     current = url
     response = None
     try:
-        for _ in range(_MAX_PDF_REDIRECTS + 1):
+        for _ in range(max_redirects + 1):
             if not is_safe_fetch_url(current):
-                return _PdfBytesResult(None, reason="unsafe_url")
+                return None, "unsafe_url"
             host = (urlparse(current).hostname or "").lower()
             send = cookies if (cookies and host_in_suffix(host, scope)) else {}
             # Browser-mimicking headers (_PDF_DOWNLOAD_HEADERS): httpx's default
@@ -473,11 +566,27 @@ def _download_via_httpx_result(
                 continue
             break
         else:
-            return _PdfBytesResult(None, reason="too_many_redirects")
+            return None, "too_many_redirects"
     except Exception:
-        return _PdfBytesResult(None, reason="network_error")
+        return None, "network_error"
     if response is None:
-        return _PdfBytesResult(None, reason="network_error")
+        return None, "network_error"
+    return response, None
+
+
+def _download_via_httpx_result(
+    url: str,
+    *,
+    cookies: dict[str, str] | None = None,
+    cookie_host: str = "",
+    timeout: int = 60,
+    max_size_mb: int = 25,
+) -> _PdfBytesResult:
+    response, reason = _credentialed_get(
+        url, cookies=cookies, cookie_host=cookie_host, timeout=timeout
+    )
+    if response is None:
+        return _PdfBytesResult(None, reason=reason)
     status = _response_status(response)
     is_success = getattr(response, "is_success", getattr(response, "ok", False))
     if not is_success:

@@ -628,7 +628,7 @@ def _run_pdf_attach_step(
                       "no items in collection", print_progress)
             return
         plans = plan_attach_for_items(
-            items, unpaywall_email=getattr(cfg, "unpaywall_email", "")
+            items, unpaywall_email=getattr(cfg, "unpaywall_email", ""), cfg=cfg
         )
         actionable = [p for p in plans if p.pdf_url]
         if not actionable:

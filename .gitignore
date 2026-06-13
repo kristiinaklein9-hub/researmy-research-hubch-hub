@@ -69,3 +69,6 @@ dist/
 # Local dev-only patchright shim (real patchright ships via [playwright] extra)
 src/patchright/
 .coverage
+# Local maturity-audit roadmap: internal, documents UNFIXED security findings
+# (kept on disk for v1.0.8+ planning, must NOT be published to the public repo).
+.maturity_roadmap.md

@@ -22,7 +22,7 @@ import shutil
 
 import pytest
 
-import research_hub.cluster_rebind as cr
+import research_hub.fsops as fsops
 from research_hub.cluster_rebind import _robust_move, apply_rebind, emit_rebind_prompt
 from research_hub.clusters import ClusterRegistry
 from tests._persona_factory import make_persona_vault
@@ -40,8 +40,12 @@ def _seed_orphans(cfg, folder, count, tag="research/topic-x"):
 
 @pytest.fixture(autouse=True)
 def _instant_backoff(monkeypatch):
-    """Zero out _robust_move's retry sleep so these tests stay fast."""
-    monkeypatch.setattr(cr.time, "sleep", lambda *_a, **_k: None)
+    """Zero out _robust_move's retry sleep so these tests stay fast.
+
+    The retry logic lives in research_hub.fsops (cluster_rebind re-exports it),
+    so patch fsops — the module whose ``time`` / ``shutil`` robust_move uses.
+    """
+    monkeypatch.setattr(fsops.time, "sleep", lambda *_a, **_k: None)
 
 
 class _LockMove:
@@ -96,7 +100,7 @@ def test_robust_move_retries_transient_then_succeeds(monkeypatch):
             raise PermissionError("[WinError 32] transient")
         return None  # success on the 3rd attempt
 
-    monkeypatch.setattr(cr.shutil, "move", flaky)
+    monkeypatch.setattr(fsops.shutil, "move", flaky)
     _robust_move("src", "dst")  # must not raise
     assert calls["n"] == 3
 
@@ -108,10 +112,10 @@ def test_robust_move_reraises_after_exhausting_attempts(monkeypatch):
         calls["n"] += 1
         raise PermissionError("[WinError 5] access denied")
 
-    monkeypatch.setattr(cr.shutil, "move", always_fail)
+    monkeypatch.setattr(fsops.shutil, "move", always_fail)
     with pytest.raises(PermissionError):
         _robust_move("src", "dst")
-    assert calls["n"] == cr._MOVE_RETRY_ATTEMPTS
+    assert calls["n"] == fsops._MOVE_RETRY_ATTEMPTS
 
 
 def test_robust_move_fast_fails_non_permission_errors(monkeypatch):
@@ -123,7 +127,7 @@ def test_robust_move_fast_fails_non_permission_errors(monkeypatch):
         calls["n"] += 1
         raise FileNotFoundError("[WinError 2] the system cannot find the path")
 
-    monkeypatch.setattr(cr.shutil, "move", missing)
+    monkeypatch.setattr(fsops.shutil, "move", missing)
     with pytest.raises(FileNotFoundError):
         _robust_move("src", "dst")
     assert calls["n"] == 1, "permanent errors must propagate on the first attempt"
@@ -141,7 +145,7 @@ def test_rebind_autocreate_recovers_from_transient_lock(tmp_path, monkeypatch):
     report_path.write_text(emit_rebind_prompt(cfg), encoding="utf-8")
 
     stub = _LockMove(_targets_new_cluster, times=1)  # fail once, then clear
-    monkeypatch.setattr(cr.shutil, "move", stub)
+    monkeypatch.setattr(fsops.shutil, "move", stub)
 
     result = apply_rebind(cfg, report_path, dry_run=False, auto_create_new=True)
 
@@ -163,7 +167,7 @@ def test_rebind_autocreate_persistent_lock_never_strands_papers(tmp_path, monkey
     report_path.write_text(emit_rebind_prompt(cfg), encoding="utf-8")
 
     stub = _LockMove(_targets_new_cluster, times=None)  # persistent lock
-    monkeypatch.setattr(cr.shutil, "move", stub)
+    monkeypatch.setattr(fsops.shutil, "move", stub)
 
     result = apply_rebind(cfg, report_path, dry_run=False, auto_create_new=True)
 

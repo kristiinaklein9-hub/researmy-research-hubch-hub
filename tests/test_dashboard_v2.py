@@ -99,6 +99,26 @@ def test_collect_dashboard_context_loads_clusters_and_papers(tmp_path):
     assert cluster.reading_count == 1
 
 
+def test_collect_dashboard_context_omits_merged_tombstone(tmp_path):
+    """A merged-away cluster (status=merged) must not surface as a phantom
+    0-paper row, and must not inflate total_clusters (the read-side leak the
+    adversarial review reproduced)."""
+    cfg = _make_config(tmp_path)
+    reg = ClusterRegistry(cfg.clusters_file)
+    reg.create(query="agents", name="Agents", slug="agents")
+    reg.create(query="keeper", name="Keeper", slug="keeper")
+    agents = reg.get("agents")
+    agents.status = "merged"
+    agents.merged_into = "keeper"
+    reg.save()
+    _write_note(cfg, "keeper", "p1.md")
+
+    ctx = collect_dashboard_context(cfg)
+
+    assert ctx.total_clusters == 1
+    assert {row.slug for row in ctx.clusters} == {"keeper"}
+
+
 def test_collect_dashboard_context_papers_this_week_counts_only_recent(tmp_path):
     cfg = _make_config(tmp_path)
     ClusterRegistry(cfg.clusters_file).create(query="agents", name="Agents", slug="agents")

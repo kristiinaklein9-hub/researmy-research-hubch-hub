@@ -21,6 +21,49 @@ palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
 
+## [1.0.7] - 2026-06-12
+
+### Fixed
+
+- **Curation moves are now deep, retried, and fully index-synced (data-integrity
+  keystone).** `operations.move_paper` — the primitive under `clusters merge` /
+  `clusters split` — was a shallow `Path.replace` with no retry and no index/link
+  sync. On a transient Windows AV / Search-indexer lock it could strand a paper;
+  worse, every move silently drifted the persisted dedup index (observed **126
+  stale entries vs 102 alive** in the maintainer vault), left stale `[[wikilink]]`
+  footers in the old cluster's siblings, and left the moved note's `## Hub` block
+  + `topic:` body tag pointing at the old cluster. It now: moves via the
+  retry/backoff `fsops.robust_move`; invalidates the old path and registers the
+  new one in `dedup_index.json`; rewires the source/target "Related Papers in This
+  Cluster" footers; retargets the Hub block + `topic:` tag (backfilling
+  `topic_cluster` frontmatter when a note was missing it); and returns a richer
+  result dict carrying a `sync_warnings` list so degraded (non-fatal) syncs are
+  observable instead of silent.
+- **`merge` / `split` are atomic.** Each note move is verified
+  (`_verify_note_in_cluster`); if any move fails the moves roll back and the
+  source cluster stays intact (`status` unchanged) — never a half-merge or a
+  stranded paper. A `split` whose moves fail also drops the just-created (empty)
+  target cluster.
+- **Merge leaves a tombstone instead of dropping the cluster — fixes the
+  duplicate-cluster bug.** A merged source is kept as `status: merged` +
+  `merged_into: <target>` and hidden from the active cluster list;
+  `match_by_query` / `resolve_merged` redirect a re-ingest on the merged-away
+  seed query to the target (cycle-guarded) instead of RE-CREATING the cluster and
+  duplicating its papers. Orphaned `hub/<source>/` dirs and source-only sub-MOCs
+  are GC'd on merge (a shared sub-MOC referenced by any other active cluster
+  always survives).
+
+### Added
+
+- `research_hub.fsops.robust_move` — shared Windows-lock-safe move primitive
+  (retry/backoff on transient `PermissionError`), promoted out of
+  `cluster_rebind` (which now re-imports it). New `Cluster.status` /
+  `Cluster.merged_into` fields; `ClusterRegistry.resolve_merged` and
+  `list(include_merged=False)`. New regression tests cover atomic-merge rollback,
+  the dedup-index sync, the tombstone redirect, and a note missing
+  `topic_cluster` frontmatter (no spurious rollback).
+
+
 ## [1.0.6] - 2026-06-03
 
 ### Fixed

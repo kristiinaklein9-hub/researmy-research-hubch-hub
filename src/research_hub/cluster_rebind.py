@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import re
-import shutil
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from research_hub.clusters import score_cluster_match, slugify
+from research_hub.fsops import (
+    _MOVE_RETRY_ATTEMPTS,
+    _MOVE_RETRY_BASE_DELAY,
+    robust_move as _robust_move,
+)
 from research_hub.security import safe_join
 
 logger = logging.getLogger(__name__)
@@ -66,43 +69,6 @@ class NewClusterProposal:
 
 
 _AUTO_CREATE_THRESHOLD = 5
-
-# Windows antivirus / Search-indexer briefly hold a handle on a freshly created
-# or just-moved file/dir, so shutil.move can raise PermissionError (WinError 5
-# ACCESS_DENIED / 32 SHARING_VIOLATION) even though the same call succeeds a few
-# ms later. These knobs drive _robust_move's retry/backoff (module-level so tests
-# can zero out the sleep). Backoff 0.1+0.2+0.4+0.8 ≈ 1.5 s worst case.
-_MOVE_RETRY_ATTEMPTS = 5
-_MOVE_RETRY_BASE_DELAY = 0.1
-
-
-def _robust_move(src: str, dst: str) -> None:
-    """``shutil.move`` with retry/backoff for transient Windows lock errors.
-
-    Without this, a transient lock on Windows surfaced as a rare, full-suite-only
-    flake in the rebind auto-create path AND — worse — could strand a real user's
-    papers in a ``*.__rebind_tmp__`` folder when the second leg of a case-only
-    folder rename failed.
-
-    Only ``PermissionError`` is retried: the transient AV / Search-indexer locks
-    raise WinError 5 (ACCESS_DENIED) / 32 (SHARING_VIOLATION), both surfaced as
-    ``PermissionError``. Other ``OSError`` subclasses (``FileNotFoundError``,
-    ``FileExistsError``, ``shutil.Error``) are permanent in this context, so they
-    propagate immediately — letting the caller roll back at once instead of
-    burning ~1.5 s of backoff on an error that cannot self-heal. Re-raises the
-    last lock error if it never clears (callers handle that + roll back).
-    """
-    last_exc: PermissionError | None = None
-    for attempt in range(_MOVE_RETRY_ATTEMPTS):
-        try:
-            shutil.move(src, dst)
-            return
-        except PermissionError as exc:
-            last_exc = exc
-            if attempt < _MOVE_RETRY_ATTEMPTS - 1:
-                time.sleep(_MOVE_RETRY_BASE_DELAY * (2 ** attempt))
-    raise last_exc  # type: ignore[misc]  # set on every loop exit that didn't return
-
 
 def emit_rebind_prompt(cfg) -> str:
     """Walk raw/, propose cluster bindings using frontmatter heuristics."""

@@ -172,11 +172,15 @@ def test_e2e_category_b_cli_shape(monkeypatch, action, slug, fields, expected_to
         assert token in calls["args"]
 
 
-def test_e2e_merge_moves_papers_and_removes_source(sandbox_cfg):
+def test_e2e_merge_moves_papers_and_tombstones_source(sandbox_cfg):
     result = executor.execute_action("merge", "alpha", {"target": "beta"}, timeout=30)
     registry = ClusterRegistry(sandbox_cfg.clusters_file)
     assert result.ok is True, result.stderr
-    assert registry.get("alpha") is None
+    # merge now tombstones the source (status=merged + merged_into) instead of
+    # deleting it, so re-ingest on the source seed redirects to the target.
+    alpha = registry.get("alpha")
+    assert alpha is not None and alpha.status == "merged" and alpha.merged_into == "beta"
+    assert "alpha" not in {c.slug for c in registry.list()}  # hidden from active set
     assert registry.get("beta") is not None
     assert len(list((sandbox_cfg.raw / "beta").glob("*.md"))) == 5
 

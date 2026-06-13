@@ -161,6 +161,8 @@ def collect_dashboard_context(cfg) -> DashboardContext:
 
     cluster_rows: dict[str, ClusterRow] = {}
     for slug, cluster in registry.clusters.items():
+        if cluster.status == "merged":
+            continue  # merged-away tombstone is not an active cluster — omit it
         cached = nlm_cache.get(slug, {}) if isinstance(nlm_cache.get(slug, {}), dict) else {}
         artifacts = cached.get("artifacts", {}) if isinstance(cached.get("artifacts", {}), dict) else {}
         brief_meta = artifacts.get("brief", {}) if isinstance(artifacts.get("brief", {}), dict) else {}

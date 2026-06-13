@@ -13,7 +13,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from research_hub.config import get_config
-from research_hub.operations import _update_frontmatter_field, move_paper, note_matches_query
+from research_hub.operations import (
+    _frontmatter_value,
+    _update_frontmatter_field,
+    move_paper,
+    note_matches_query,
+)
 from research_hub.security import atomic_write_text, safe_join
 
 # Imported at module level so tests can patch research_hub.clusters._resolve_parent_collection_key_readonly
@@ -30,6 +35,12 @@ def _resolve_parent_collection_key_readonly(cfg) -> str:
     return _impl(cfg)
 
 logger = logging.getLogger(__name__)
+
+# Shared family-root MOC names that every cluster of a family links to. These
+# must NEVER be garbage-collected when a single cluster is merged away (only
+# source-only SUB-MOCs are). Mirror of the parents emitted by
+# research_hub.vault.hub_overview.derive_moc_links.
+_PARENT_MOCS = {"LLM-Agents", "Water-Resources"}
 
 
 class CollisionError(ValueError):
@@ -154,6 +165,7 @@ class Cluster:
     first_query: str = ""
     description: str = ""
     status: str = "active"
+    merged_into: str = ""
     archived_at: str = ""
     group: str = ""  # optional free-text group tag (e.g. "water-resources", "llm-methods")
 
@@ -316,6 +328,23 @@ class ClusterRegistry:
             return None
         return self.clusters.get(slug.strip().lower())
 
+    def resolve_merged(self, slug: str) -> Cluster | None:
+        """Resolve a merged tombstone slug to its final active target."""
+        current = self.get(slug)
+        seen: set[str] = set()
+        while current is not None and current.status == "merged":
+            current_slug = current.slug.strip().lower()
+            if current_slug in seen:
+                logger.warning("cycle detected while resolving merged cluster %s", slug)
+                return None
+            seen.add(current_slug)
+            target_slug = (current.merged_into or "").strip().lower()
+            if not target_slug:
+                logger.warning("merged cluster %s has no merged_into target", current.slug)
+                return None
+            current = self.clusters.get(target_slug)
+        return current
+
     def raw_dir(self, slug: str, vault_raw: Path | None = None) -> Path:
         """Return a cluster raw directory using safe path joining."""
         return safe_join(vault_raw or get_config().raw, slug)
@@ -325,9 +354,11 @@ class ClusterRegistry:
         root = hub_root or get_config().hub
         return safe_join(root, slug)
 
-    def list(self) -> list[Cluster]:
-        """List all clusters."""
-        return list(self.clusters.values())
+    def list(self, include_merged: bool = False) -> list[Cluster]:
+        """List clusters, hiding merged tombstones by default."""
+        if include_merged:
+            return list(self.clusters.values())
+        return [cluster for cluster in self.clusters.values() if cluster.status != "merged"]
 
     def _refresh_graph_if_possible(self) -> None:
         try:
@@ -399,7 +430,13 @@ class ClusterRegistry:
         """
         final_slug = (slug or slugify(query)).strip().lower()
         if final_slug in self.clusters:
-            return self.clusters[final_slug]
+            existing = self.clusters[final_slug]
+            if existing.status == "merged":
+                resolved = self.resolve_merged(final_slug)
+                if resolved is None:
+                    raise ValueError(f"Merged cluster tombstone cannot be resolved: {final_slug}")
+                return resolved
+            return existing
         from datetime import datetime, timezone
 
         cluster = Cluster(
@@ -579,8 +616,180 @@ class ClusterRegistry:
             self._refresh_graph_if_possible()
         return {"slug": slug, "notes_unbound": len(note_paths), "dry_run": dry_run}
 
+    @staticmethod
+    def _note_identity(note_path: Path) -> dict[str, str]:
+        """Stable identity fields a move never rewrites (doi / zotero-key).
+
+        Used to detect a slug-collision substitution: the file that lands at the
+        destination must carry the SAME identity as the file we set out to move.
+        Empty fields are dropped so notes without a DOI fall back to move_paper's
+        explicit-source-path guarantee.
+        """
+        identity = {field: _frontmatter_value(note_path, field) for field in ("doi", "zotero-key")}
+        return {field: value for field, value in identity.items() if value}
+
+    def _verify_note_in_cluster(
+        self,
+        raw_dir: Path,
+        slug: str,
+        cluster_slug: str,
+        *,
+        expect_identity: dict[str, str] | None = None,
+    ) -> Path:
+        note_path = raw_dir / cluster_slug / f"{slug}.md"
+        if not note_path.exists():
+            raise RuntimeError(f"move verification failed: missing {note_path}")
+        topic_cluster = _frontmatter_value(note_path, "topic_cluster")
+        # The physical file location is the integrity guarantee; topic_cluster
+        # frontmatter is best-effort metadata. Only a PRESENT-but-mismatched
+        # value means the wrong note was moved — a missing/empty field (a note
+        # added without that frontmatter key) must NOT trigger a spurious full
+        # rollback of an otherwise-correct merge.
+        if topic_cluster and topic_cluster != cluster_slug:
+            raise RuntimeError(
+                f"move verification failed: {note_path} topic_cluster={topic_cluster!r}"
+            )
+        # Identity guard: the note now at the destination must be the SAME paper
+        # we set out to move (catches a slug-collision substitution that the
+        # location / topic_cluster checks alone cannot see).
+        if expect_identity:
+            for field, want in expect_identity.items():
+                got = _frontmatter_value(note_path, field)
+                if got != want:
+                    raise RuntimeError(
+                        f"move verification failed: {note_path} {field}={got!r} "
+                        f"expected {want!r} (slug collision moved the wrong note)"
+                    )
+        return note_path
+
+    def _rollback_moved_notes(
+        self, moved_slugs: list[str], *, from_cluster: str, to_cluster: str, raw_dir: Path
+    ) -> None:
+        rollback_errors: list[str] = []
+        for moved_slug in reversed(moved_slugs):
+            try:
+                current = raw_dir / from_cluster / f"{moved_slug}.md"
+                expected = self._note_identity(current)
+                move_paper(moved_slug, to_cluster, source_path=current)
+                self._verify_note_in_cluster(
+                    raw_dir, moved_slug, to_cluster, expect_identity=expected
+                )
+            except Exception as exc:  # noqa: BLE001 - rollback must attempt every note
+                rollback_errors.append(f"{moved_slug}: {type(exc).__name__}: {exc}")
+        if rollback_errors:
+            logger.error(
+                "rollback to cluster %s had %d error(s): %s",
+                to_cluster,
+                len(rollback_errors),
+                "; ".join(rollback_errors),
+            )
+
+    def _move_notes_atomically(
+        self,
+        note_paths: list[Path],
+        *,
+        source_slug: str,
+        target_slug: str,
+        raw_dir: Path,
+    ) -> list[str]:
+        moved_slugs: list[str] = []
+        try:
+            for note_path in note_paths:
+                slug = note_path.stem
+                # Capture identity from the source BEFORE the move, and pass the
+                # explicit source path so move_paper never re-resolves by slug and
+                # grabs a same-slug note from a different cluster.
+                expected = self._note_identity(note_path)
+                move_paper(slug, target_slug, source_path=note_path)
+                self._verify_note_in_cluster(
+                    raw_dir, slug, target_slug, expect_identity=expected
+                )
+                moved_slugs.append(slug)
+            return moved_slugs
+        except Exception:
+            self._rollback_moved_notes(
+                moved_slugs, from_cluster=target_slug, to_cluster=source_slug, raw_dir=raw_dir
+            )
+            self._rebuild_dedup_index_best_effort()
+            raise
+
+    def _rebuild_dedup_index_best_effort(self) -> bool:
+        try:
+            cfg = get_config()
+            dedup_path = cfg.research_hub_dir / "dedup_index.json"
+            if not dedup_path.exists():
+                return False
+            from research_hub.dedup import DedupIndex
+
+            dedup = DedupIndex.load(dedup_path)
+            dedup.rebuild_from_obsidian(cfg.raw)
+            dedup.save(dedup_path)
+            return True
+        except Exception as exc:  # noqa: BLE001 - non-fatal post-move repair
+            logger.warning("dedup rebuild after cluster move failed: %s", exc)
+            return False
+
+    def _gc_merged_cluster_hub(self, source: Cluster, target: Cluster) -> None:
+        try:
+            cfg = get_config()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("merged-cluster GC skipped; config unavailable: %s", exc)
+            return
+        hub_dir = safe_join(cfg.hub, source.slug)
+        try:
+            if hub_dir.exists():
+                shutil.rmtree(hub_dir)
+        except OSError as exc:
+            logger.warning("could not remove merged hub dir %s: %s", hub_dir, exc)
+
+        try:
+            from research_hub.vault.hub_overview import derive_moc_links
+
+            def links_for(cluster: Cluster) -> list[str]:
+                return derive_moc_links(
+                    cluster.slug,
+                    cluster_queries=[str(cluster.first_query or "")],
+                    moc_links=list(cluster.moc_links or []),
+                )
+
+            source_links = links_for(source)
+            # Protect a MOC if ANY surviving cluster still derives its name —
+            # active, archived, AND merged tombstones, because their notes'
+            # wikilinks are all still live. Only the source (being merged away)
+            # is excluded. (Excluding archived/merged here was an over-deletion
+            # bug: populate_all_mocs never regenerates a wrongly-deleted MOC, so
+            # the links would dangle permanently.)
+            referenced: set[str] = set()
+            for cluster in self.list(include_merged=True):
+                if cluster.slug == source.slug:
+                    continue
+                referenced.update(links_for(cluster))
+            for name in source_links:
+                # Never GC the shared family-root MOCs (derive_moc_links returns
+                # them alongside the per-cluster sub-MOC); only source-only
+                # sub-MOCs are eligible for deletion.
+                if name in _PARENT_MOCS:
+                    continue
+                if name in referenced:
+                    continue
+                moc_path = safe_join(cfg.hub, "_moc", f"{name}.md")
+                try:
+                    if moc_path.exists():
+                        moc_path.unlink()
+                except OSError as exc:
+                    logger.warning("could not remove merged sub-MOC %s: %s", moc_path, exc)
+        except Exception as exc:  # noqa: BLE001 - GC is best-effort
+            logger.warning("merged-cluster sub-MOC GC failed for %s: %s", source.slug, exc)
+
     def merge(self, source_slug: str, target_slug: str, vault_raw: Path | None = None) -> dict[str, str | int]:
-        """Move all notes from one cluster into another and delete the source."""
+        """Move all notes from one cluster into another and tombstone the source.
+
+        Atomic: every note move is verified; any failure rolls the moves back and
+        leaves the source intact (never half-merged). On success the source is kept
+        as a ``status="merged"`` tombstone with ``merged_into`` set, so a later
+        re-ingest on the source's seed query redirects to the target instead of
+        re-creating the merged-away cluster (the duplicate-cluster bug).
+        """
         source = self.clusters.get(source_slug)
         target = self.clusters.get(target_slug)
         if source is None:
@@ -588,14 +797,18 @@ class ClusterRegistry:
         if target is None:
             raise ValueError(f"Cluster not found: {target_slug}")
         raw_dir = vault_raw or get_config().raw
-        moved = 0
-        for note_path in sorted((raw_dir / source_slug).glob("*.md")):
-            move_paper(note_path.stem, target_slug)
-            moved += 1
-        self.clusters.pop(source.slug)
+        note_paths = sorted((raw_dir / source_slug).glob("*.md"))
+        moved_slugs = self._move_notes_atomically(
+            note_paths, source_slug=source_slug, target_slug=target_slug, raw_dir=raw_dir,
+        )
+        # Tombstone instead of dropping the entry, so re-ingest can redirect.
+        source.status = "merged"
+        source.merged_into = target_slug
         self.save()
+        self._gc_merged_cluster_hub(source, target)
+        self._rebuild_dedup_index_best_effort()
         self._refresh_graph_if_possible()
-        return {"source": source_slug, "target": target_slug, "moved": moved}
+        return {"source": source_slug, "target": target_slug, "moved": len(moved_slugs)}
 
     def split(
         self,
@@ -605,37 +818,56 @@ class ClusterRegistry:
         seed_keywords: list[str] | None = None,
         vault_raw: Path | None = None,
     ) -> dict[str, str | int]:
-        """Create a new cluster and move matching notes from the source cluster."""
+        """Create a new cluster and move matching notes from the source cluster.
+
+        Atomic: if any move fails, the moved notes roll back to the source and the
+        freshly-created target is removed, so a failed split leaves no
+        half-populated cluster behind.
+        """
         source = self.clusters.get(source_slug)
         if source is None:
             raise ValueError(f"Cluster not found: {source_slug}")
         raw_dir = vault_raw or get_config().raw
+        all_notes = sorted((raw_dir / source_slug).glob("*.md"))
+        to_move = [path for path in all_notes if note_matches_query(path, query)]
+        remaining = len(all_notes) - len(to_move)
         new_cluster = self.create(query, name=new_name, seed_keywords=seed_keywords)
-        moved = 0
-        remaining = 0
-        for note_path in sorted((raw_dir / source_slug).glob("*.md")):
-            if note_matches_query(note_path, query):
-                move_paper(note_path.stem, new_cluster.slug)
-                moved += 1
-            else:
-                remaining += 1
+        try:
+            moved_slugs = self._move_notes_atomically(
+                to_move, source_slug=source_slug, target_slug=new_cluster.slug, raw_dir=raw_dir,
+            )
+        except Exception:
+            # All-or-nothing: drop the just-created (now-empty) target cluster.
+            self.clusters.pop(new_cluster.slug, None)
+            self.save()
+            raise
+        self._rebuild_dedup_index_best_effort()
         self._refresh_graph_if_possible()
         return {
             "source": source_slug,
             "new_cluster": new_cluster.slug,
-            "moved": moved,
+            "moved": len(moved_slugs),
             "remaining": remaining,
         }
 
     def match_by_query(self, query: str, min_overlap: int = 2) -> Cluster | None:
-        """Match the best existing cluster by keyword overlap."""
+        """Match the best existing cluster by keyword overlap.
+
+        A merged tombstone is resolved to its active merge target, so a re-ingest
+        on a merged-away cluster's seed query lands in the cluster its papers were
+        merged into instead of re-creating the merged cluster (the duplicate-cluster
+        bug).
+        """
         query_tokens = set(slugify(query).split("-"))
         best: tuple[int, Cluster | None] = (0, None)
         for cluster in self.clusters.values():
             overlap = score_cluster_match(query_tokens, cluster)
             if overlap > best[0] and overlap >= min_overlap:
                 best = (overlap, cluster)
-        return best[1]
+        matched = best[1]
+        if matched is not None and matched.status == "merged":
+            return self.resolve_merged(matched.slug)
+        return matched
 
 
 def compute_cluster_cascade_report(cfg, slug: str) -> CascadeReport:

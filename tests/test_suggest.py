@@ -84,6 +84,26 @@ def test_suggest_cluster_single_seed_match(tmp_path: Path):
     assert any("matches seed keyword" in reason for reason in result[0].reasons)
 
 
+def test_suggest_cluster_skips_merged_tombstone(tmp_path: Path):
+    """A merged-away cluster (status=merged tombstone) must never be suggested —
+    it has zero members and is a dead target. Without the guard it would still
+    score on its retained seed keywords (the inverse of the duplicate-cluster
+    bug the tombstone was meant to fix)."""
+    registry = make_registry(tmp_path, {})
+    registry.create(query="keeper topic", name="Keeper", slug="keeper",
+                    seed_keywords=["unrelated", "topic"])
+    registry.create(query="agent simulation", name="Agents", slug="agents",
+                    seed_keywords=["agent", "simulation"])
+    agents = registry.get("agents")
+    agents.status = "merged"
+    agents.merged_into = "keeper"
+
+    result = suggest_cluster_for_paper(
+        PaperInput(title="Agent simulation approaches"), registry, DedupIndex()
+    )
+    assert all(s.cluster_slug != "agents" for s in result)
+
+
 def test_suggest_cluster_multi_signal(tmp_path: Path):
     note = write_note(
         tmp_path / "raw" / "paper-a.md",

@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 from pathlib import Path
 
 from research_hub.config import get_config
-from research_hub.dedup import DedupIndex, normalize_doi
+from research_hub.dedup import DedupHit, DedupIndex, normalize_doi
+from research_hub.fsops import robust_move
 from research_hub._useragent import user_agent
+
+logger = logging.getLogger(__name__)
 
 VALID_STATUSES = {"unread", "reading", "deep-read", "cited"}
 _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,6}(?:v\d+)?$")
 _ARXIV_DOI_RE = re.compile(r"^10\.48550/arxiv\.(\d{4}\.\d{4,6}(?:v\d+)?)$", re.IGNORECASE)
+_HUB_SECTION_RE = re.compile(
+    r"^## Hub\s*\n.*?(?=^##\s+|\n---\n|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 def _read_frontmatter_text(md_path: Path) -> tuple[str, str, str] | None:
@@ -73,8 +81,17 @@ def _save_index_without_paths(paths: list[Path]) -> None:
     index.save(index_path)
 
 
-def _update_frontmatter_field(md_path: Path, field: str, value: str) -> bool:
-    """Replace a YAML frontmatter field value in-place."""
+def _update_frontmatter_field(
+    md_path: Path, field: str, value: str, *, insert_if_absent: bool = False
+) -> bool:
+    """Replace a YAML frontmatter field value in-place.
+
+    When ``insert_if_absent`` is True and the field is missing from an existing
+    frontmatter block, the field is appended instead of being treated as a
+    no-op. (Default False preserves the no-op contract that the ``status`` and
+    unbind callers rely on.) A note with no frontmatter block at all still
+    returns False — the caller cannot safely synthesise a whole block.
+    """
     parsed = _read_frontmatter_text(md_path)
     if parsed is None:
         return False
@@ -83,7 +100,11 @@ def _update_frontmatter_field(md_path: Path, field: str, value: str) -> bool:
     quoted = f'"{value}"' if value == "" or any(ch.isspace() for ch in value) else value
     new_frontmatter, count = re.subn(pattern, rf"\g<1>{quoted}", frontmatter, flags=re.MULTILINE)
     if count == 0:
-        return False
+        if not insert_if_absent:
+            return False
+        # Append the missing field to the existing block (frontmatter ends
+        # without a trailing newline; the closing "\n---" lives in `tail`).
+        new_frontmatter = f'{frontmatter.rstrip(chr(10))}\n{field}: {quoted}'
     md_path.write_text(f"---{new_frontmatter}{tail}", encoding="utf-8")
     return True
 
@@ -91,6 +112,88 @@ def _update_frontmatter_field(md_path: Path, field: str, value: str) -> bool:
 def _read_title(md_path: Path) -> str:
     title = _frontmatter_value(md_path, "title")
     return title or md_path.stem
+
+
+def _moc_links_for_cluster(cfg, cluster_slug: str) -> list[str]:
+    try:
+        from research_hub.clusters import ClusterRegistry
+        from research_hub.vault.hub_overview import derive_moc_links
+
+        cluster = ClusterRegistry(cfg.clusters_file).get(cluster_slug)
+        if cluster is None:
+            return derive_moc_links(cluster_slug)
+        return derive_moc_links(
+            cluster_slug,
+            cluster_queries=[str(cluster.first_query or "")],
+            moc_links=list(cluster.moc_links or []),
+        )
+    except (ImportError, OSError, ValueError, TypeError) as exc:
+        logger.warning("could not derive MOC links for %s: %s", cluster_slug, exc)
+        return []
+
+
+def _render_hub_block(cluster_slug: str, moc_links: list[str]) -> str:
+    lines = [f"- Cluster: [[{cluster_slug}/00_overview|{cluster_slug}]]"]
+    lines.extend(f"- MOC: [[{moc}]]" for moc in moc_links if str(moc).strip())
+    return "## Hub\n\n" + "\n".join(lines) + "\n\n"
+
+
+def _retarget_body_refs(md_path: Path, old_cluster: str, to_cluster: str, cfg) -> bool:
+    text = md_path.read_text(encoding="utf-8")
+    hub_block = _render_hub_block(to_cluster, _moc_links_for_cluster(cfg, to_cluster))
+    if _HUB_SECTION_RE.search(text):
+        updated = _HUB_SECTION_RE.sub(hub_block, text, count=1)
+    else:
+        footer = re.search(r"\n---\n\*Source:", text)
+        if footer:
+            updated = text[: footer.start()] + "\n" + hub_block + text[footer.start():]
+        else:
+            updated = text.rstrip() + "\n\n" + hub_block
+
+    if old_cluster:
+        updated = updated.replace(f"topic:{old_cluster}", f"topic:{to_cluster}")
+
+    if updated == text:
+        return False
+    md_path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def _sync_related_paper_links(slug: str, target_path: Path, old_cluster: str, to_cluster: str, cfg) -> dict:
+    from research_hub.vault.link_updater import remove_paper_links, update_cluster_links
+
+    cleaned = 0
+    if old_cluster and old_cluster != to_cluster:
+        cleaned = remove_paper_links(removed_slug=slug, vault_raw_dir=cfg.raw, cluster_slug=old_cluster)
+    target_result = update_cluster_links(
+        new_note_path=target_path,
+        vault_raw_dir=cfg.raw,
+        cluster_slug=to_cluster,
+    )
+    return {"old_links_cleaned": cleaned, "target_links": target_result}
+
+
+def _sync_dedup_path(old_path: Path, new_path: Path, cfg) -> dict[str, int | bool]:
+    index_path = cfg.research_hub_dir / "dedup_index.json"
+    if not index_path.exists():
+        return {"dedup_synced": False, "dedup_removed": 0}
+    index = DedupIndex.load(index_path)
+    removed = index.invalidate_obsidian_path(str(old_path))
+    removed += index.invalidate_obsidian_path(str(new_path))
+    zotero_key = _frontmatter_value(new_path, "zotero-key") or None
+    if zotero_key == "null":
+        zotero_key = None
+    index.add(
+        DedupHit(
+            source="obsidian",
+            doi=_frontmatter_value(new_path, "doi"),
+            title=_frontmatter_value(new_path, "title"),
+            zotero_key=zotero_key,
+            obsidian_path=str(new_path),
+        )
+    )
+    index.save(index_path)
+    return {"dedup_synced": True, "dedup_removed": removed}
 
 
 def remove_paper(identifier: str, include_zotero: bool = False, dry_run: bool = False) -> dict:
@@ -145,22 +248,91 @@ def mark_paper(slug: str | None, status: str, cluster: str | None = None) -> dic
     return {"updated": updated, "status": status}
 
 
-def move_paper(slug: str, to_cluster: str) -> dict:
-    """Move a note into a different raw/ cluster folder and update frontmatter."""
+def move_paper(slug: str, to_cluster: str, *, source_path: str | Path | None = None) -> dict:
+    """Move a note into a different raw/ cluster folder and sync vault indexes.
+
+    When ``source_path`` is provided the caller already knows exactly which file
+    to move and it is used verbatim. Otherwise the note is resolved by slug
+    across the whole vault (``rglob``). Callers moving a note OUT of a SPECIFIC
+    cluster (cluster merge / split) MUST pass ``source_path``: resolving by slug
+    alone returns the alphabetically-first match, which silently moves the WRONG
+    file when the same slug exists in more than one cluster.
+    """
     cfg = get_config()
-    matches = sorted(cfg.raw.rglob(f"{slug}.md"))
-    if not matches:
-        raise FileNotFoundError(f"Paper not found: {slug}")
-    source_path = matches[0]
-    old_cluster = _frontmatter_value(source_path, "topic_cluster")
+    if source_path is not None:
+        src = Path(source_path)
+        if not src.exists():
+            raise FileNotFoundError(f"Paper not found: {src}")
+    else:
+        matches = sorted(cfg.raw.rglob(f"{slug}.md"))
+        if not matches:
+            raise FileNotFoundError(f"Paper not found: {slug}")
+        src = matches[0]
+    old_cluster = _frontmatter_value(src, "topic_cluster")
     target_dir = cfg.raw / to_cluster
     target_path = target_dir / f"{slug}.md"
-    if old_cluster == to_cluster and source_path == target_path:
-        return {"from": str(source_path), "to": str(target_path), "cluster": to_cluster}
+    if old_cluster == to_cluster and src == target_path:
+        # No-op move: return the full dict shape so callers can always index
+        # old_cluster / sync_warnings / dedup_* without a KeyError.
+        return {
+            "from": str(src),
+            "to": str(target_path),
+            "cluster": to_cluster,
+            "old_cluster": old_cluster,
+            "frontmatter_updated": False,
+            "body_refs_updated": False,
+            "old_links_cleaned": 0,
+            "target_links": {"forward": 0, "backward": 0, "scanned": 0},
+            "dedup_synced": False,
+            "dedup_removed": 0,
+            "sync_warnings": [],
+        }
     target_dir.mkdir(parents=True, exist_ok=True)
-    source_path.replace(target_path)
-    _update_frontmatter_field(target_path, "topic_cluster", to_cluster)
-    return {"from": str(source_path), "to": str(target_path), "cluster": to_cluster}
+    robust_move(str(src), str(target_path))
+
+    sync_warnings: list[str] = []
+    frontmatter_updated = _update_frontmatter_field(
+        target_path, "topic_cluster", to_cluster, insert_if_absent=True
+    )
+    if not frontmatter_updated:
+        sync_warnings.append("topic_cluster frontmatter field missing or unchanged")
+
+    body_refs_updated = False
+    related_links: dict = {"old_links_cleaned": 0, "target_links": {"forward": 0, "backward": 0, "scanned": 0}}
+    dedup_result: dict[str, int | bool] = {"dedup_synced": False, "dedup_removed": 0}
+
+    try:
+        body_refs_updated = _retarget_body_refs(target_path, old_cluster, to_cluster, cfg)
+    except OSError as exc:
+        msg = f"body refs not fully retargeted: {exc}"
+        sync_warnings.append(msg)
+        logger.warning("move_paper(%s): %s", slug, msg)
+
+    try:
+        related_links = _sync_related_paper_links(slug, target_path, old_cluster, to_cluster, cfg)
+    except (OSError, ImportError) as exc:
+        msg = f"related-paper links not fully synced: {exc}"
+        sync_warnings.append(msg)
+        logger.warning("move_paper(%s): %s", slug, msg)
+
+    try:
+        dedup_result = _sync_dedup_path(src, target_path, cfg)
+    except (OSError, ValueError, TypeError) as exc:
+        msg = f"dedup index not fully synced: {exc}"
+        sync_warnings.append(msg)
+        logger.warning("move_paper(%s): %s", slug, msg)
+
+    return {
+        "from": str(src),
+        "to": str(target_path),
+        "cluster": to_cluster,
+        "old_cluster": old_cluster,
+        "frontmatter_updated": frontmatter_updated,
+        "body_refs_updated": body_refs_updated,
+        **related_links,
+        **dedup_result,
+        "sync_warnings": sync_warnings,
+    }
 
 
 def note_matches_query(md_path: Path, query: str) -> bool:

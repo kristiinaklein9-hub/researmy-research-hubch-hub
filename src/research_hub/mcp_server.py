@@ -920,8 +920,12 @@ def move_paper(slug: str, to_cluster: str) -> dict[str, Any]:
         to_cluster: destination cluster slug. The note's ``.md``
             file is moved on disk into the destination cluster dir.
 
-    Returns: ``{"from": <source path>, "to": <dest path>,
-    "cluster": <to_cluster>}`` on success, or ``{"error": ...}``.
+    Returns on success a dict with ``from`` / ``to`` / ``cluster`` /
+    ``old_cluster`` plus deep-sync status: ``frontmatter_updated``,
+    ``body_refs_updated``, ``old_links_cleaned``, ``target_links``,
+    ``dedup_synced``, ``dedup_removed``, and ``sync_warnings`` (a list of
+    non-fatal degraded-sync messages — empty when the move synced cleanly).
+    Returns ``{"error": ...}`` on failure.
     """
     try:
         validated = _validate_mcp_args(slug=slug, to_cluster=to_cluster)
@@ -1004,19 +1008,21 @@ def search_vault(
 
 
 def merge_clusters(source: str, into: str) -> dict[str, Any]:
-    """Merge all papers from one cluster into another, then delete the source.
+    """Merge all papers from one cluster into another, tombstoning the source.
 
     Delegates to ``research_hub.clusters.ClusterRegistry.merge``.
 
     Args:
-        source: slug of the cluster to drain + remove.
+        source: slug of the cluster to drain.
         into: slug of the surviving destination cluster.
 
-    Effect: every ``*.md`` note under ``source`` is moved to
-    ``into`` (via ``move_paper``), then ``source`` is popped from
-    the registry and ``clusters.yaml`` is re-saved. Destructive +
-    not auto-reversible. A missing source/target raises ValueError
-    → ``{"error": ...}``.
+    Effect: every ``*.md`` note under ``source`` is moved to ``into``
+    atomically (any failure rolls back, so the merge is all-or-nothing). The
+    source is NOT deleted — it is kept as a ``status="merged"`` tombstone with
+    ``merged_into`` set and hidden from the active cluster list, so a later
+    re-ingest on the source's seed query redirects to ``into`` instead of
+    re-creating the merged-away cluster. A missing source/target raises
+    ValueError → ``{"error": ...}``.
 
     Returns: ``{"source": <slug>, "target": <slug>, "moved": <int>}``
     on success, or ``{"error": ...}``.

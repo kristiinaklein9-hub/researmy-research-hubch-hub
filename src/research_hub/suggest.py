@@ -86,6 +86,8 @@ def suggest_cluster_for_paper(
     suggestions: list[ClusterSuggestion] = []
 
     for cluster in sorted(registry.clusters.values(), key=lambda item: item.slug):
+        if cluster.status == "merged":
+            continue  # never suggest a merged-away tombstone (0 members, dead)
         members = cluster_members.get(cluster.slug, [])
         member_tags = set().union(*(member.tags for member in members)) if members else set()
         member_surnames = set().union(*(_author_surnames(member.authors) for member in members)) if members else set()

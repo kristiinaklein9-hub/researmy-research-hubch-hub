@@ -1,6 +1,6 @@
 [project]
 name = "research-hub-pipeline"
-version = "1.0.8"
+version = "1.0.9"
 description = "AI-operable research workspace for Zotero, Obsidian, and NotebookLM. Use any two, or all three, through CLI, MCP, REST, and dashboard."
 readme = "README.md"
 license = {text = "MIT"}
@@ -54,6 +54,7 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
+    "pytest-socket>=0.7",
     "pytest-split>=0.8",
     "pytest-timeout>=2.3",
     "responses>=0.23",

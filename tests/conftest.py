@@ -16,6 +16,54 @@ def pytest_configure(config) -> None:
         "markers",
         "stress: stress/load tests (opt-in via pytest tests/stress/)",
     )
+    config.addinivalue_line(
+        "markers",
+        "real_zotero: opt-in test that may reach the real Zotero API (network allowed)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_authenticity: opt-in test that drives the real authenticity-gate network",
+    )
+
+
+# Markers whose tests are allowed to open EXTERNAL sockets (they opt into live
+# external services). Every other test is fenced to loopback + unix only.
+_LIVE_NETWORK_MARKERS = ("network", "real_zotero", "real_authenticity")
+
+
+@pytest.fixture(autouse=True)
+def _network_fence(request):
+    """v1.0.9 (P0-5): structural network fence — convert the offline-stub
+    denylist into a fence.
+
+    By default a test may only reach LOOPBACK (127.0.0.1 / ::1 / localhost — the
+    local HTTPServer / REST / dashboard tests bind there) and unix sockets; any
+    connect to an EXTERNAL host fails loudly with a pytest-socket
+    SocketConnectBlockedError. This means the moment a NEW leak to a real API
+    (arXiv, Crossref, Unpaywall, zotero.org, notebooklm) is introduced — or an
+    existing stub regresses — the test fails immediately instead of silently
+    hitting the wire and flaking on a CI network blip (the failure class behind
+    several past green-by-luck CI runs). Tests that genuinely need a live
+    external service opt in via one of `_LIVE_NETWORK_MARKERS`.
+    """
+    import pytest_socket
+
+    if any(request.node.get_closest_marker(m) for m in _LIVE_NETWORK_MARKERS):
+        pytest_socket.enable_socket()
+    else:
+        pytest_socket.socket_allow_hosts(
+            ["127.0.0.1", "localhost", "::1"], allow_unix_socket=True
+        )
+    try:
+        yield
+    finally:
+        # Fully restore the stdlib socket between tests. NOTE: enable_socket()
+        # alone does NOT undo socket_allow_hosts — it reassigns socket.socket but
+        # leaves the guarded .connect closure in place; only _remove_restrictions()
+        # also restores socket.socket.connect / getaddrinfo. Without this a future
+        # @pytest.mark.network test added under tests/ (not tests/evals/) that runs
+        # after a fenced test would be wrongly blocked. (pytest-socket >= 0.7.)
+        pytest_socket._remove_restrictions()
 
 
 @pytest.fixture(autouse=True)
@@ -343,6 +391,31 @@ def _stub_authenticity_network(monkeypatch, request):
 
     monkeypatch.setattr(
         "research_hub.authenticity.CrossrefBackend", _OfflineCrossref
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_url_quality_probe(request, monkeypatch):
+    """v1.0.9: the URL-quality classifier's active probe (``_probe_url`` →
+    ``requests.get`` for ambiguous publisher URLs) runs a real HTTP GET whenever
+    a bundled note has a URL but no local PDF. Stub it offline by default so the
+    unit suite makes ZERO external connects (the network fence would block it and
+    the classifier fail-safes to "unknown" anyway, but stubbing avoids the
+    blocked-connect warning + DNS). Tests that drive the classifier itself
+    (test_v0950_url_quality_guard) opt out so they exercise the real _probe_url
+    under their own mocks.
+    """
+    module_stem = request.module.__name__.rsplit(".", 1)[-1]
+    if module_stem == "test_v0950_url_quality_guard":
+        return
+    try:
+        import research_hub.notebooklm.url_quality as _uq
+    except Exception:
+        return
+    monkeypatch.setattr(
+        _uq,
+        "_probe_url",
+        lambda url, *, timeout=8: _uq.UrlQuality("unknown", "probe_stubbed_in_tests", ""),
     )
 
 

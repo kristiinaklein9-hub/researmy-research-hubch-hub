@@ -21,6 +21,28 @@ palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
 
+## [1.0.9] - 2026-06-13
+
+CI-hardening release — no shipped-behavior change. Converts the test suite's
+remember-every-entry-point offline-stub denylist into a structural fence.
+
+### Added
+
+- **Structural network fence in the test suite (pytest-socket).** An autouse
+  fixture in `tests/conftest.py` restricts every test to LOOPBACK
+  (127.0.0.1 / ::1 / localhost) + unix sockets by default; any connect to an
+  external host fails loudly with `SocketConnectBlockedError`. The moment a new
+  leak to a real API (arXiv, Crossref, Unpaywall, zotero.org, NotebookLM) is
+  introduced — or an existing offline stub regresses — CI fails immediately
+  instead of flaking on a network blip (the green-by-luck class behind several
+  past CI saves). Tests that genuinely need a live external service opt in via
+  `@pytest.mark.network` (plus the now-registered `real_zotero` /
+  `real_authenticity` markers). The URL-quality active probe is also stubbed
+  offline by default so the bundle tests make zero external connects.
+  `pytest-socket` added to the `dev` extra; `tests/test_v109_network_fence.py`
+  guards the fence (external connect blocked, loopback bind allowed).
+
+
 ## [1.0.8] - 2026-06-13
 
 Credential-safety release. Hardens the two highest-consequence trust paths the

@@ -20,6 +20,11 @@ def test_check_local_api_returns_false_without_library_id(tmp_path, monkeypatch)
     from research_hub import config as hub_config
     from research_hub.zotero.client import check_local_api
 
+    # Isolate from a developer's real Zotero env: without this, zotero_library_id
+    # falls back to $ZOTERO_LIBRARY_ID and a live local Zotero answers the probe,
+    # so the assertion would flip to True on any machine running Zotero.
+    monkeypatch.delenv("ZOTERO_LIBRARY_ID", raising=False)
+    monkeypatch.delenv("ZOTERO_LIBRARY_TYPE", raising=False)
     hub_config._config = None
     monkeypatch.setattr(hub_config, "CONFIG_PATH", _write_hub_config(tmp_path))
 

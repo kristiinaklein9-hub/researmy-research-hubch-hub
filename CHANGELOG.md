@@ -21,6 +21,43 @@ palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
 
+## [1.0.8] - 2026-06-13
+
+Credential-safety release. Hardens the two highest-consequence trust paths the
+maturity audit flagged: the institutional-access credential path and the
+secret-at-rest key.
+
+### Security
+
+- **EZproxy session cookies are now scoped to the proxy host and never
+  forwarded across an off-proxy redirect.** The credentialed PDF fetch loaded
+  cookies into a domain-less dict and followed redirects with
+  `follow_redirects=True`, so a proxied publisher page that 302'd to any other
+  host received the university SSO session — the hardest-to-renew credential in
+  the system, leaked silently on the default path. The fetch now follows
+  redirects manually (bounded), sending cookies ONLY to hosts within the proxy
+  suffix and dropping them on every off-proxy hop.
+- **All credentialed / redirect-followed fetches are http(s)-only.** A shared
+  `security.is_safe_fetch_url` guard rejects `file://` / `ftp://` / `data:` /
+  hostless URLs on the initial request AND every redirect hop, on both the httpx
+  (Zotero PDF) and urllib (NotebookLM PDF) paths — closing the SSRF /
+  local-file-read primitive a poisoned Unpaywall / OA / publisher record opened
+  via `urlopen`.
+- **The secret-box encryption key is now OS-ACL-hardened.** `.secret_box.key`
+  was written with a bare `os.chmod(0o600)` — a no-op on Windows that left the
+  key inheriting the parent directory ACL. It now routes through the real
+  `chmod_sensitive` user-only Windows-ACL path (loud warning on failure), so the
+  key gets the same at-rest protection as the secrets it guards.
+
+### Added
+
+- `research_hub.security.is_safe_fetch_url` + `host_in_suffix` (shared URL and
+  cookie-scope guards), a bounded manual-redirect loop in the Zotero PDF
+  download path, and a `_SafeRedirectHandler` for the urllib fetch path. New
+  `tests/test_v108_credential_safety.py` covers cookie non-forwarding, the
+  scheme guard on both fetch paths, the redirect cap, and the key hardening.
+
+
 ## [1.0.7] - 2026-06-12
 
 ### Fixed

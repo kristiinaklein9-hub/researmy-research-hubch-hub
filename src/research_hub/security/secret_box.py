@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import os
 import secrets
 from pathlib import Path
 
@@ -32,9 +31,17 @@ def _ensure_key(config_dir: Path) -> bytes:
     raw = secrets.token_bytes(32)
     key = base64.urlsafe_b64encode(raw)
     path.write_bytes(key)
+    # Route through chmod_sensitive, not bare os.chmod: on Windows os.chmod is a
+    # no-op, so the encryption key would inherit the parent ACL (readable by any
+    # account with directory access). chmod_sensitive applies the real
+    # user-only Windows ACL (icacls) and falls back with a loud warning if it
+    # cannot — the secret-box key now gets the same at-rest protection as the
+    # secrets it guards. (P0-6)
     try:
-        os.chmod(path, 0o600)
-    except (OSError, NotImplementedError):
+        from research_hub.security import chmod_sensitive
+
+        chmod_sensitive(path, mode=0o600)
+    except (OSError, NotImplementedError, ImportError):
         pass
     return key
 

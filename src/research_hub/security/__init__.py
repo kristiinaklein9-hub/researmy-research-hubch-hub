@@ -6,6 +6,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._:/\-]{1,256}$")
@@ -255,6 +256,43 @@ def chmod_sensitive(path: Path, *, mode: int) -> None:
         pass
 
 
+_SAFE_FETCH_SCHEMES = frozenset({"http", "https"})
+
+
+def is_safe_fetch_url(url: object) -> bool:
+    """True only for http(s) URLs that have a host.
+
+    The allowlist applied to every credentialed fetch AND every redirect hop.
+    Rejects ``file://`` / ``ftp://`` / ``data:`` / scheme-relative / hostless
+    URLs — the SSRF and local-file-read primitive a poisoned Unpaywall / OA /
+    publisher record opens when fed straight into ``urlopen`` / ``httpx``.
+    """
+    if not isinstance(url, str) or not url:
+        return False
+    try:
+        parts = urlsplit(url)
+    except (ValueError, TypeError):
+        return False
+    return parts.scheme.lower() in _SAFE_FETCH_SCHEMES and bool(parts.hostname)
+
+
+def host_in_suffix(host: object, suffix: object) -> bool:
+    """True when ``host`` equals ``suffix`` or is a subdomain of it.
+
+    The cookie-scoping domain match: an EZproxy session cookie scoped to
+    ``ezproxy.lib.example.edu`` is sent to ``www-nature-com.ezproxy.lib.example.edu``
+    but NEVER to an off-proxy redirect host. Empty inputs match nothing (so a
+    missing scope means "send to no one", fail-closed).
+    """
+    if not isinstance(host, str) or not isinstance(suffix, str):
+        return False
+    host = host.lower().strip(".")
+    suffix = suffix.lower().strip(".")
+    if not host or not suffix:
+        return False
+    return host == suffix or host.endswith("." + suffix)
+
+
 def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Write text atomically via tmp file + replace."""
     path = Path(path)
@@ -280,4 +318,6 @@ __all__ = [
     "safe_join",
     "chmod_sensitive",
     "atomic_write_text",
+    "is_safe_fetch_url",
+    "host_in_suffix",
 ]

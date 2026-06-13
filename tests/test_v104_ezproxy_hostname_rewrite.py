@@ -123,7 +123,7 @@ def test_pdf_attach_uses_hostname_rewrite_when_host_suffix_set(tmp_path, monkeyp
     )
     calls: list[str] = []
 
-    def fake_download_result(url, *, cookies=None, timeout=60, max_size_mb=25):
+    def fake_download_result(url, *, cookies=None, cookie_host="", timeout=60, max_size_mb=25):
         calls.append(url)
         from research_hub.zotero.pdf_attach import _PdfBytesResult
 

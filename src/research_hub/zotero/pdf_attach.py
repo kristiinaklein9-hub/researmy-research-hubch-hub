@@ -390,6 +390,7 @@ def _download_pdf_bytes_with_ezproxy_result(
                     proxy_result = _download_via_httpx_result(
                         wrapped,
                         cookies=load_cookies(ezcfg.cookies_path),
+                        cookie_host=ezcfg.host_suffix,
                         timeout=timeout,
                         max_size_mb=max_size_mb,
                     )
@@ -421,29 +422,61 @@ def _download_via_httpx(
     ).content
 
 
+_MAX_PDF_REDIRECTS = 10
+
+
 def _download_via_httpx_result(
     url: str,
     *,
     cookies: dict[str, str] | None = None,
+    cookie_host: str = "",
     timeout: int = 60,
     max_size_mb: int = 25,
 ) -> _PdfBytesResult:
+    # Redirects are followed MANUALLY (follow_redirects=False) so every hop is
+    # scheme-checked (no file://, P0-4) and the EZproxy SSO session cookies are
+    # sent ONLY to hosts within the proxy scope (P0-3) — never forwarded across
+    # an off-proxy redirect. `cookie_host` is the proxy suffix; when empty the
+    # scope defaults to the initial host (so a direct, non-proxy URL with stray
+    # cookies still can't leak them past its own host).
+    from research_hub.security import host_in_suffix, is_safe_fetch_url
+
+    cookies = cookies or {}
+    # `scope` is the cookie-sending allowlist, computed ONCE from the proxy
+    # suffix (or the initial host in template mode) and deliberately held
+    # constant across every redirect hop. Do NOT "fix" this to
+    # urlparse(current).hostname — that would let an off-proxy redirect widen
+    # its own scope and re-acquire the SSO cookie.
+    scope = (cookie_host or (urlparse(url).hostname or "")).lower().strip(".")
+    current = url
+    response = None
     try:
-        response = httpx.get(
-            url,
-            cookies=cookies or {},
-            follow_redirects=True,
-            timeout=timeout,
-            # Browser-mimicking headers. The PR #108 requests→httpx port
-            # accidentally regressed PDF coverage to 0% on master because
-            # httpx's default UA ("python-httpx/0.28.1") gets blocked by
-            # MDPI, Frontiers, Springer-pdfdirect, IEEE, and other
-            # publishers that previously let requests' UA through (or
-            # that newly tightened in 2026). A real Chrome UA + Accept
-            # header pair restores the pre-#108 success rate.
-            headers=_PDF_DOWNLOAD_HEADERS,
-        )
+        for _ in range(_MAX_PDF_REDIRECTS + 1):
+            if not is_safe_fetch_url(current):
+                return _PdfBytesResult(None, reason="unsafe_url")
+            host = (urlparse(current).hostname or "").lower()
+            send = cookies if (cookies and host_in_suffix(host, scope)) else {}
+            # Browser-mimicking headers (_PDF_DOWNLOAD_HEADERS): httpx's default
+            # UA is blocked by MDPI/Frontiers/Springer/IEEE etc. (PR #108).
+            response = httpx.get(
+                current,
+                cookies=send,
+                follow_redirects=False,
+                timeout=timeout,
+                headers=_PDF_DOWNLOAD_HEADERS,
+            )
+            if getattr(response, "is_redirect", False):
+                location = str((response.headers or {}).get("location", "") or "")
+                if not location:
+                    break
+                current = str(httpx.URL(current).join(location))
+                continue
+            break
+        else:
+            return _PdfBytesResult(None, reason="too_many_redirects")
     except Exception:
+        return _PdfBytesResult(None, reason="network_error")
+    if response is None:
         return _PdfBytesResult(None, reason="network_error")
     status = _response_status(response)
     is_success = getattr(response, "is_success", getattr(response, "ok", False))

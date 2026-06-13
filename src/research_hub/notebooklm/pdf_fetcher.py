@@ -92,11 +92,28 @@ def _filename_from_doi(normalized_doi: str) -> str:
     return re.sub(r"[^a-z0-9._-]", "_", normalized_doi)
 
 
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow a redirect to a non-http(s) URL (no file:// / ftp:// /
+    data:) — closes the SSRF / local-file-read hop a poisoned OA record opens."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        from research_hub.security import is_safe_fetch_url
+
+        if not is_safe_fetch_url(newurl):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _download(url: str, dest: Path, timeout: float, *, source: FetchSource) -> FetchResult:
     """HTTP GET with size cap + content-type sanity check."""
+    from research_hub.security import is_safe_fetch_url
+
+    if not is_safe_fetch_url(url):
+        return FetchResult(source="not-found", error="unsafe URL scheme (only http/https allowed)")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        opener = urllib.request.build_opener(_SafeRedirectHandler())
+        with opener.open(req, timeout=timeout) as resp:
             content_type = resp.headers.get("Content-Type", "").lower()
             if content_type and "pdf" not in content_type:
                 return FetchResult(source="not-found", error=f"non-PDF content-type: {content_type}")
@@ -116,6 +133,12 @@ def _download(url: str, dest: Path, timeout: float, *, source: FetchSource) -> F
 def _query_unpaywall(doi: str, timeout: float) -> str:
     """Return the best open-access PDF URL for the DOI, or '' if none."""
     query = urllib.parse.urlencode({"email": _UNPAYWALL_EMAIL})
+    # Internally-constructed https URL: this leg intentionally uses a bare
+    # urlopen (no _SafeRedirectHandler). It is safe ONLY because quote(doi)
+    # percent-encodes ':@?#' + CR/LF so an adversarial DOI cannot change the
+    # scheme/host; the oa_url it RETURNS is re-validated by _download's
+    # is_safe_fetch_url. A refactor that interpolates the DOI raw would silently
+    # open an SSRF hole — keep quote().
     url = f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?{query}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})

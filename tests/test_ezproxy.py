@@ -85,7 +85,7 @@ def test_pdf_attach_falls_back_to_original_url_when_proxy_404s(tmp_path, monkeyp
     )
     calls: list[str] = []
 
-    def fake_download_result(url, *, cookies=None, timeout=60, max_size_mb=25):
+    def fake_download_result(url, *, cookies=None, cookie_host="", timeout=60, max_size_mb=25):
         calls.append(url)
         # Live function name is _PdfBytesResult; importing locally to
         # avoid coupling the test to the private dataclass at module top.

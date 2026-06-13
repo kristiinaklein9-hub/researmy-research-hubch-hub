@@ -4,6 +4,8 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from research_hub.notebooklm.pdf_fetcher import fetch_paper_pdf
 
 
@@ -20,6 +22,26 @@ class FakeResponse:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+@pytest.fixture(autouse=True)
+def _route_build_opener_through_urlopen(monkeypatch):
+    """v1.0.8: _download() now fetches via
+    ``urllib.request.build_opener(_SafeRedirectHandler()).open()`` instead of a
+    bare ``urllib.request.urlopen`` (so every redirect hop is scheme-guarded).
+    Route the stub opener back through ``urllib.request.urlopen`` so the existing
+    per-test urlopen mocks cover BOTH the _download opener leg AND the
+    _query_unpaywall leg — and nothing in this unit suite touches the real
+    network. (The redirect handler + scheme guard themselves are exercised
+    directly in test_v108_credential_safety.py.)
+    """
+    import urllib.request
+
+    class _OpenerViaUrlopen:
+        def open(self, req, timeout=0):
+            return urllib.request.urlopen(req, timeout=timeout)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a, **k: _OpenerViaUrlopen())
 
 
 def test_fetch_paper_pdf_prefers_local_doi_cache(tmp_path):

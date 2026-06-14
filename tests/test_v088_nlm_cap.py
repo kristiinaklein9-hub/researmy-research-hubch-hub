@@ -12,6 +12,37 @@ from research_hub.notebooklm.client import NotebookHandle, UploadResult
 from research_hub.notebooklm.upload import NotebookLMCapacityError, upload_cluster
 
 
+@pytest.fixture(autouse=True)
+def _refresh_stale_module_refs():
+    """Rebind this file's import-time module references to the LIVE modules.
+
+    An earlier suite (test_v033_workflows) pops research_hub.notebooklm.upload /
+    research_hub.clusters from sys.modules via its autouse re-import fixture
+    (with no restore), so this file's collection-time `upload_mod` /
+    `upload_cluster` / `ClusterRegistry` can go stale vs the module the
+    production code re-imports — a module-identity mismatch that intermittently
+    corrupts the shard round-trip (the documented full-suite flake). The
+    "module-reference monkeypatch pattern" alone is insufficient because
+    `upload_mod` ITSELF is a stale object after a reload; refreshing here keeps
+    the test refs and the production code on the same module instance.
+    """
+    import importlib
+
+    global upload_mod, upload_cluster, NotebookLMCapacityError
+    global Cluster, ClusterRegistry, NotebookShard, NotebookHandle, UploadResult
+    upload_mod = importlib.import_module("research_hub.notebooklm.upload")
+    upload_cluster = upload_mod.upload_cluster
+    NotebookLMCapacityError = upload_mod.NotebookLMCapacityError
+    _clusters = importlib.import_module("research_hub.clusters")
+    Cluster = _clusters.Cluster
+    ClusterRegistry = _clusters.ClusterRegistry
+    NotebookShard = _clusters.NotebookShard
+    _client = importlib.import_module("research_hub.notebooklm.client")
+    NotebookHandle = _client.NotebookHandle
+    UploadResult = _client.UploadResult
+    yield
+
+
 def _cfg(tmp_path: Path) -> SimpleNamespace:
     root = tmp_path / "vault"
     raw = root / "raw"

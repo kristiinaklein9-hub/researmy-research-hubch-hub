@@ -208,5 +208,6 @@ def test_explicit_override_propagates_to_paper_note_hub_section(tmp_path):
     assert "[[LLM-Agents-HumanNature]]" in out
     # The slug-derived auto sub-MOC must NOT appear.
     assert "[[LLM-Agents-Coupled]]" not in out
-    # Parent MOC still present.
-    assert "[[LLM-Agents]]" in out
+    # P1-4a: a PAPER NOTE drops the bare parent — only the sub-MOC links (the
+    # parent [[LLM-Agents]] lives on sub-MOC + overview pages, not on every note).
+    assert "[[LLM-Agents]]" not in out

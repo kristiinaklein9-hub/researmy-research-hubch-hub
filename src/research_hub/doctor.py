@@ -847,6 +847,43 @@ def check_ezproxy_session(cfg) -> CheckResult:
     )
 
 
+def check_cluster_crystal_coverage(cfg) -> CheckResult:
+    """Flag active clusters that have papers but ZERO crystals (P1-5d).
+
+    Crystal coverage is frequently inverted (the biggest clusters left
+    uncrystalized while a tiny one is done), so the ~18x crystal token saving is
+    dead weight at low coverage. This surfaces the gap so an AI can crystalize
+    on demand."""
+    from research_hub import crystal
+    from research_hub.clusters import ClusterRegistry
+    from research_hub.vault.sync import list_cluster_notes
+
+    registry = ClusterRegistry(cfg.clusters_file)
+    uncrystalized: list[tuple[str, int]] = []
+    for cluster in registry.list():  # active only (merged tombstones hidden)
+        try:
+            papers = list_cluster_notes(cluster.slug, cfg.raw)
+            if papers and not crystal.list_crystals(cfg, cluster.slug):
+                uncrystalized.append((cluster.slug, len(papers)))
+        except Exception:  # noqa: BLE001 - a single bad cluster shouldn't fail doctor
+            continue
+    if not uncrystalized:
+        return CheckResult(
+            "cluster/crystal_coverage", "OK", "All clusters with papers are crystalized."
+        )
+    uncrystalized.sort(key=lambda item: -item[1])  # biggest cluster first
+    listing = ", ".join(f"{slug} ({n}p)" for slug, n in uncrystalized[:5])
+    return CheckResult(
+        "cluster/crystal_coverage",
+        "INFO",
+        f"{len(uncrystalized)} cluster(s) with papers have 0 crystals: {listing}",
+        remedy=(
+            "Crystalize on demand — ask_cluster(cluster='<slug>') returns an "
+            "emit_crystal_prompt, or run `research-hub crystal emit --cluster <slug>`."
+        ),
+    )
+
+
 def run_doctor(*, strict: bool = False) -> list[CheckResult]:
     """Run all health checks and return results.
 
@@ -1337,6 +1374,10 @@ def run_doctor(*, strict: bool = False) -> list[CheckResult]:
             results.extend(check_cluster_zotero_drift(cfg))
         except Exception as exc:
             results.append(CheckResult("cluster/zotero_drift", "WARN", f"check failed: {exc}"))
+        try:
+            results.append(check_cluster_crystal_coverage(cfg))
+        except Exception as exc:
+            results.append(CheckResult("cluster/crystal_coverage", "INFO", f"check failed: {exc}"))
         try:
             results.append(check_cluster_name_drift(cfg))
         except Exception as exc:

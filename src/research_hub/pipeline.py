@@ -711,6 +711,7 @@ def _render_obsidian_note(
             cluster_slug,
             cluster_queries=cluster_queries_for_note,
             moc_links=list(cluster_moc_links or []),
+            for_paper_note=True,
         )
     content = make_raw_md(
         item_data,

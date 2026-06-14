@@ -121,11 +121,12 @@ def _moc_links_for_cluster(cfg, cluster_slug: str) -> list[str]:
 
         cluster = ClusterRegistry(cfg.clusters_file).get(cluster_slug)
         if cluster is None:
-            return derive_moc_links(cluster_slug)
+            return derive_moc_links(cluster_slug, for_paper_note=True)
         return derive_moc_links(
             cluster_slug,
             cluster_queries=[str(cluster.first_query or "")],
             moc_links=list(cluster.moc_links or []),
+            for_paper_note=True,
         )
     except (ImportError, OSError, ValueError, TypeError) as exc:
         logger.warning("could not derive MOC links for %s: %s", cluster_slug, exc)

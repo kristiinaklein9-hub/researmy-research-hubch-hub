@@ -178,6 +178,18 @@ def ask_cluster(
 
     paper_slugs = [p.slug for p in getattr(digest, "papers", [])[:10]]
 
+    # P1-5d: when the cluster is uncrystalized, return the crystallization prompt
+    # INLINE so the calling AI can crystalize on demand (no separate
+    # emit_crystal_prompt round-trip), instead of only being told to run a CLI.
+    emit_prompt = ""
+    if len(crystals) == 0:
+        try:
+            from research_hub.crystal import emit_crystal_prompt as _emit
+
+            emit_prompt = _emit(cfg, cluster_slug)
+        except Exception:
+            emit_prompt = ""
+
     return {
         "ok": True,
         "source": "digest",
@@ -188,6 +200,7 @@ def ask_cluster(
         "confidence": "low",
         "stale": False,
         "suggest_regenerate": len(crystals) == 0,
+        "emit_crystal_prompt": emit_prompt,
         "hint": (
             f"Run `research-hub crystal emit --cluster {cluster_slug}` to "
             "pre-compute canonical answers for faster future queries."

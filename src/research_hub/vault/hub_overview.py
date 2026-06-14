@@ -550,12 +550,26 @@ def _sub_moc_token_from_slug(cluster_slug: str) -> str:
     return "".join(t.capitalize() for t in pick)
 
 
+# Shared family-root MOC names. Paper notes must NOT link these directly
+# (P1-4a) — only sub-MOC + overview PAGES do — so the Obsidian graph is a
+# star-of-stars, not a clique. Mirror in research_hub.clusters._PARENT_MOCS
+# (the v1.0.7 merged-cluster-GC parent-MOC protection).
+PARENT_MOCS = ("LLM-Agents", "Water-Resources")
+
+
 def derive_moc_links(
     cluster_slug: str,
     cluster_queries: list[str] | None = None,
     moc_links: list[str] | None = None,
+    *,
+    for_paper_note: bool = False,
 ) -> list[str]:
     """Return v0.87 default MOC names for a cluster.
+
+    ``for_paper_note=True`` (P1-4a) returns ONLY the per-cluster sub-MOC,
+    omitting the bare parent (``LLM-Agents`` / ``Water-Resources``). Paper notes
+    link the sub-MOC only; the parent link lives on sub-MOC + overview pages, so
+    the graph stops collapsing into a super-hub clique.
 
     Two-level hub-and-spoke: each LLM/water cluster gets BOTH a parent
     MOC (e.g. ``LLM-Agents``) and a per-cluster sub-MOC (e.g.
@@ -614,6 +628,9 @@ def derive_moc_links(
         _append_unique(links, "Water-Resources")
         if sub_tag and not has_explicit_water_sub:
             _append_unique(links, f"Water-Resources-{sub_tag}")
+    if for_paper_note:
+        # P1-4a: drop the bare parent(s) — a paper note links only its sub-MOC.
+        return [name for name in links if name not in PARENT_MOCS]
     return links
 
 

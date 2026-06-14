@@ -1080,8 +1080,15 @@ def suggest_cluster_split(
         return _tool_error(exc)
 
 
-def get_topic_digest(cluster_slug: str) -> dict[str, Any]:
-    """Return every paper in a cluster plus a markdown digest for overview writing."""
+def get_topic_digest(
+    cluster_slug: str, limit: int = 10, offset: int = 0, include_markdown: bool = False
+) -> dict[str, Any]:
+    """Return papers in a cluster (paginated) plus an optional markdown digest.
+
+    P1-5c: ``papers`` is paginated (default 10; pass ``limit=0`` for all) and the
+    full markdown digest is opt-in (``include_markdown=True``). Shipping every
+    paper + the full prose by default was a large, rarely-needed token cost.
+    """
     try:
         cluster_slug = _validate_mcp_args(cluster_slug=cluster_slug)["cluster_slug"]
         from research_hub.config import get_config
@@ -1089,13 +1096,19 @@ def get_topic_digest(cluster_slug: str) -> dict[str, Any]:
 
         cfg = get_config()
         digest = _digest(cfg, cluster_slug)
-        return {
+        page = digest.papers[offset:] if limit <= 0 else digest.papers[offset:offset + limit]
+        result = {
             "cluster_slug": digest.cluster_slug,
             "cluster_title": digest.cluster_title,
             "paper_count": digest.paper_count,
-            "papers": [asdict(paper) for paper in digest.papers],
-            "markdown": digest.to_markdown(),
+            "papers": [asdict(paper) for paper in page],
+            "returned": len(page),
+            "offset": offset,
+            "limit": limit,
         }
+        if include_markdown:
+            result["markdown"] = digest.to_markdown()
+        return result
     except Exception as exc:  # pragma: no cover
         return _tool_error(exc)
 
@@ -1443,20 +1456,26 @@ def read_crystal(cluster_slug: str, crystal_slug: str, level: str = "gist") -> d
         if item is None:
             return {"status": "not_found", "cluster": cluster_slug, "slug": crystal_slug}
         answer = item.tldr if level == "tldr" else item.full if level == "full" else item.gist
-        return {
+        result = {
             "status": "ok",
             "cluster": cluster_slug,
             "slug": item.question_slug,
             "question": item.question,
             "level": level,
             "answer": answer,
-            "evidence": [{"claim": ev.claim, "papers": ev.papers} for ev in item.evidence],
-            "based_on_papers": item.based_on_papers,
             "based_on_paper_count": item.based_on_paper_count,
             "last_generated": item.last_generated,
             "confidence": item.confidence,
-            "see_also": item.see_also,
         }
+        # Detail-gated projection (P1-5b): the full based_on_papers slug list +
+        # per-claim evidence + see_also are token weight a tldr/gist caller
+        # rarely needs (based_on_paper_count conveys the provenance scale). Only
+        # ship them at level="full".
+        if level == "full":
+            result["evidence"] = [{"claim": ev.claim, "papers": ev.papers} for ev in item.evidence]
+            result["based_on_papers"] = item.based_on_papers
+            result["see_also"] = item.see_also
+        return result
     except Exception as exc:
         return _entrypoint_tool_error(exc, str(cluster_slug))
 
@@ -2183,10 +2202,42 @@ def download_artifacts(
         return _tool_error(exc)
 
 
-_BRIEFING_MAX_CHARS = 100_000
+# Lowered 100_000 → 12_000 (P1-5a): a single ask_cluster(mode='briefing') was the
+# most under-budgeted MCP surface (~25K tokens of already-summarized text).
+# Truncation flags already existed; only the default was wrong. A caller that
+# genuinely needs the full briefing passes an explicit larger max_chars.
+_BRIEFING_MAX_CHARS = 12_000
 
 
-def _read_briefing_impl(cluster_slug: str, max_chars: int = _BRIEFING_MAX_CHARS) -> dict:
+def _project_briefing_section(text: str, section: str) -> str:
+    """Return only the markdown section whose header CONTAINS ``section``
+    (case-insensitive), from that header to the next same-or-higher header.
+    Returns the full text unchanged when no header matches (graceful)."""
+    if not section:
+        return text
+    lines = text.splitlines()
+    header_re = re.compile(r"^(#{1,6})\s+(.*)$")
+    start = None
+    start_level = 0
+    for i, line in enumerate(lines):
+        m = header_re.match(line)
+        if m and section.lower() in m.group(2).lower():
+            start, start_level = i, len(m.group(1))
+            break
+    if start is None:
+        return text
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        m = header_re.match(lines[j])
+        if m and len(m.group(1)) <= start_level:
+            end = j
+            break
+    return "\n".join(lines[start:end])
+
+
+def _read_briefing_impl(
+    cluster_slug: str, max_chars: int = _BRIEFING_MAX_CHARS, section: str = ""
+) -> dict:
     """Return the most recently downloaded briefing text for a cluster.
 
     Reads the latest `brief-*.txt` from
@@ -2226,6 +2277,8 @@ def _read_briefing_impl(cluster_slug: str, max_chars: int = _BRIEFING_MAX_CHARS)
                 "error": str(exc),
                 "remedy": f"Call download_artifacts(cluster_slug='{cluster_slug}') first.",
             }
+        if section:
+            text = _project_briefing_section(text, section)
         full_chars = len(text)
         if full_chars > max_chars:
             return {
@@ -2743,6 +2796,7 @@ def _ask_cluster_dispatch(
     force_regenerate: bool = False,
     mode: str = "ask",
     cluster_slug: str | None = None,
+    section: str = "",
 ) -> dict:
     target_cluster = cluster or cluster_slug
     if not target_cluster:
@@ -2753,7 +2807,7 @@ def _ask_cluster_dispatch(
         if mode == "brief":
             return _brief_cluster_impl(target_cluster, force_regenerate=force_regenerate)
         if mode == "briefing":
-            return _read_briefing_impl(target_cluster, max_chars=max_chars)
+            return _read_briefing_impl(target_cluster, max_chars=max_chars, section=section)
         if question:
             return _ask_cluster_notebooklm_impl(
                 target_cluster,
@@ -2761,7 +2815,7 @@ def _ask_cluster_dispatch(
                 headless=headless,
                 timeout_sec=timeout_sec,
             )
-        return _read_briefing_impl(target_cluster, max_chars=max_chars)
+        return _read_briefing_impl(target_cluster, max_chars=max_chars, section=section)
     return {"error": "source must be 'local' or 'notebooklm'"}
 
 
@@ -2777,6 +2831,7 @@ def ask_cluster(
     force_regenerate: bool = False,
     mode: str = "ask",
     cluster_slug: str | None = None,
+    section: str = "",
 ) -> dict:
     """Answer a question about one cluster, dispatching to the source named by ``source`` / ``mode``.
 
@@ -2879,6 +2934,7 @@ def ask_cluster(
         force_regenerate=force_regenerate,
         mode=mode,
         cluster_slug=cluster_slug,
+        section=section,
     )
 
 

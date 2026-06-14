@@ -241,6 +241,28 @@ def _vault_tag_migrate(
         print("\nRe-run with --apply to write the changes.")
     return 0
 
+def _vault_prune_footers(*, top_n: int, apply: bool, emit_json: bool = False) -> int:
+    """P1-4c: re-cap every Related-Papers footer to the top-N most-related."""
+    from research_hub.config import get_config
+    from research_hub.vault.link_updater import prune_footers
+
+    cfg = get_config()
+    report = prune_footers(cfg.raw, top_n=top_n, apply=apply)
+    if emit_json:
+        import json as _json
+
+        print(_json.dumps(report))
+    else:
+        n = report["changed"] if apply else report["would_change"]
+        verb = "rewrote" if apply else "would rewrite"
+        tail = "" if apply else "  (re-run with --apply to write)"
+        print(
+            f"  [vault] prune-footers: scanned {report['scanned']} note(s) in "
+            f"{report['clusters']} cluster(s); {verb} {n} footer(s) to top-{top_n}.{tail}"
+        )
+    return 0
+
+
 def _vault_rebuild_overviews(
     *,
     cluster_slug: str | None,

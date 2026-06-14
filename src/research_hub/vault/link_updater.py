@@ -155,6 +155,7 @@ def update_cluster_links(
         new_note_path, [note.slug for note in related], existing_stems
     ) else 0
     backward = 0
+    meta_by_slug = {note.slug: note for note in all_notes}
 
     if bidirectional:
         for other in related:
@@ -164,13 +165,69 @@ def update_cluster_links(
                 existing_slugs = re.findall(r"\[\[([^\]]+)\]\]", match.group(2))
                 if new_meta.slug in existing_slugs:
                     continue
-                new_slugs = existing_slugs + [new_meta.slug]
+                candidates = list(dict.fromkeys(existing_slugs + [new_meta.slug]))
             else:
-                new_slugs = [new_meta.slug]
+                candidates = [new_meta.slug]
+            # P1-4b: re-rank the OTHER note's footer by tag overlap with it and
+            # cap at the same top-N (10) as the forward path. The old
+            # `existing_slugs + [new]` appended WITHOUT re-truncation, so a busy
+            # cluster's footers grew unbounded — the O(n²) clique tax. Orphan
+            # slugs (no live NoteMeta) sort last so they are dropped first.
+            other_tags = set(other.tags)
+            new_slugs = sorted(
+                candidates,
+                key=lambda s: -len(other_tags & set(meta_by_slug[s].tags)) if s in meta_by_slug else 1,
+            )[:10]
             if add_wikilinks_to_note(other.path, new_slugs, existing_stems):
                 backward += 1
 
     return {"forward": forward, "backward": backward, "scanned": len(all_notes)}
+
+
+def _existing_footer_slugs(note_path: Path) -> list[str]:
+    """The slugs currently in a note's Related-Papers footer ([] if none)."""
+    text = note_path.read_text(encoding="utf-8", errors="ignore")
+    match = SECTION_PATTERN.search(text)
+    if not match:
+        return []
+    return re.findall(r"\[\[([^\]]+)\]\]", match.group(2))
+
+
+def prune_footers(vault_raw_dir: Path, *, top_n: int = 10, apply: bool = False) -> dict[str, int]:
+    """Re-truncate every note's Related-Papers footer to its top-N most-related
+    siblings (re-ranked by tag overlap), fixing ALREADY-bloated footers (P1-4c).
+
+    Idempotent. ``apply=False`` (default) only reports how many footers WOULD
+    change. The forward ranking (find_related_in_cluster) is the same one the
+    live link writer uses, so a pruned footer matches what a fresh ingest writes.
+    """
+    by_cluster: dict[str, list[NoteMeta]] = {}
+    for md_path in vault_raw_dir.rglob("*.md"):
+        meta = parse_frontmatter(md_path)
+        if meta and meta.topic_cluster:
+            by_cluster.setdefault(meta.topic_cluster, []).append(meta)
+
+    scanned = 0
+    would_change = 0
+    changed = 0
+    for notes in by_cluster.values():
+        existing_stems = {note.path.stem for note in notes}
+        for note in notes:
+            scanned += 1
+            desired = [n.slug for n in find_related_in_cluster(note, notes)][:top_n]
+            desired = [slug for slug in dict.fromkeys(desired) if slug in existing_stems]
+            if desired == _existing_footer_slugs(note.path):
+                continue
+            would_change += 1
+            if apply and add_wikilinks_to_note(note.path, desired, existing_stems):
+                changed += 1
+    return {
+        "clusters": len(by_cluster),
+        "scanned": scanned,
+        "would_change": would_change,
+        "changed": changed,
+        "applied": apply,
+    }
 
 
 def remove_paper_links(

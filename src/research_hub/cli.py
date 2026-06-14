@@ -144,6 +144,7 @@ from research_hub.cli_vault import (
     _vault_hub_backlink_migrate,
     _vault_install_theme,
     _vault_polish_markdown,
+    _vault_prune_footers,
     _vault_rebuild_overviews,
     _vault_tag_migrate,
 )
@@ -1663,6 +1664,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Emit machine-readable JSON report on stdout (v0.89)",
+    )
+
+    vault_prune_footers = vault_subparsers.add_parser(
+        "prune-footers",
+        help="Re-cap every Related-Papers footer to the top-N most-related (P1-4c)",
+    )
+    vault_prune_footers.add_argument(
+        "--top", type=int, default=10,
+        help="Keep the top-N most-related papers per footer (default 10)",
+    )
+    vault_prune_footers.add_argument(
+        "--apply", action="store_true",
+        help="Actually rewrite the footers (default: report only)",
+    )
+    vault_prune_footers.add_argument(
+        "--json", action="store_true",
+        help="Emit machine-readable JSON report on stdout",
     )
 
     vault_hub_backlink = vault_subparsers.add_parser(
@@ -3393,6 +3411,12 @@ def _main_dispatch(args, parser) -> int:
             return _vault_tag_migrate(
                 cluster_slug=args.cluster,
                 dry_run=args.dry_run,
+                emit_json=getattr(args, "json", False),
+            )
+        if args.vault_command == "prune-footers":
+            return _vault_prune_footers(
+                top_n=args.top,
+                apply=args.apply,
                 emit_json=getattr(args, "json", False),
             )
         if args.vault_command == "hub-backlink-migrate":

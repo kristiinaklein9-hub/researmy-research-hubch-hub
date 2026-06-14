@@ -21,6 +21,36 @@ palette + onboarding demo; no 3-pane / citation-graph rebuild (link
 out to the real tools instead)._
 
 
+## [1.0.11] - 2026-06-13
+
+"Token economy + Obsidian graph" — make the vault graph a readable star-of-stars
+and stop the MCP surface from blowing the agent context window.
+
+### Changed
+
+- **Token-economy caps (P1-5).** `ask_cluster(mode='briefing')` default cap
+  lowered 100K→12K chars + a `section=` markdown-section projection. `read_crystal`
+  at tldr/gist returns `based_on_paper_count` only — the full `based_on_papers`
+  slug list + per-claim `evidence` + `see_also` ship only at `level='full'`.
+  `get_topic_digest` paginates `papers` (default 10; `limit=0` for all) and makes
+  the markdown digest opt-in (`include_markdown=True`).
+- **Per-cluster MOC, capped footers (P1-4).** `derive_moc_links(for_paper_note=True)`
+  → paper notes link the per-cluster sub-MOC ONLY; the parent `[[LLM-Agents]]` /
+  `[[Water-Resources]]` link now lives on sub-MOC + overview pages, not on every
+  note — killing the O(n^2) super-hub clique. The backward footer-append re-ranks
+  by tag overlap and caps at the same top-10 as the forward path (was unbounded).
+  The v1.0.7 merged-cluster GC still protects the parent MOC (it uses the page
+  variant of derive_moc_links).
+
+### Added
+
+- `research-hub vault prune-footers [--top N] [--apply]` re-caps already-bloated
+  Related-Papers footers (P1-4c). A `doctor cluster/crystal_coverage` check flags
+  clusters that have papers but 0 crystals, and `ask_cluster`'s digest fallback
+  now returns an inline `emit_crystal_prompt` so an AI can crystalize on demand
+  (P1-5d).
+
+
 ## [1.0.10] - 2026-06-13
 
 "Institutional access end-to-end" — make a paywalled-no-OA paper with a DOI

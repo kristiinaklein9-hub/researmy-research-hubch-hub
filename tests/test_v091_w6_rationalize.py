@@ -130,7 +130,7 @@ def test_mcp_ask_cluster_dispatch_and_aliases_warn(monkeypatch):
     monkeypatch.setattr(
         mcp_server,
         "_read_briefing_impl",
-        lambda cluster_slug, max_chars=mcp_server._BRIEFING_MAX_CHARS: {
+        lambda cluster_slug, max_chars=mcp_server._BRIEFING_MAX_CHARS, section="": {
             "cluster": cluster_slug,
             "source": "briefing",
             "max_chars": max_chars,

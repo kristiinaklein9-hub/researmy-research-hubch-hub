@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from research_hub.fsops import robust_move
+
 logger = logging.getLogger(__name__)
 
 CANONICAL_LABELS: frozenset[str] = frozenset(
@@ -228,7 +230,7 @@ def prune_cluster(
         for state in candidates:
             dest = target_dir / state.path.name
             try:
-                shutil.move(str(state.path), str(dest))
+                robust_move(str(state.path), str(dest))
             except OSError as exc:
                 logger.warning("prune: failed to archive %s: %s", state.path, exc)
                 continue
@@ -261,7 +263,7 @@ def unarchive(cfg, cluster_slug: str, slug: str) -> dict:
     dest_dir = Path(cfg.raw) / cluster_slug
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{slug}.md"
-    shutil.move(str(source), str(dest))
+    robust_move(str(source), str(dest))
 
     state = _parse_paper_label(dest, slug=slug)
     _rewrite_paper_frontmatter(
@@ -423,7 +425,7 @@ def bulk_move(
             else ""
         )
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source_path), str(target_path))
+        robust_move(str(source_path), str(target_path))
 
         meta = _parse_frontmatter(target_path.read_text(encoding="utf-8"))
         updates: dict[str, object] = {"topic_cluster": to_cluster}

@@ -300,6 +300,15 @@ def make_raw_md(
         backends_yaml = '[' + ', '.join(f'"{_yaml_scalar(str(item))}"' for item in backends) + ']'
         fit_score = provenance.get("fit_score")
         fit_score_yaml = "null" if fit_score in (None, "") else str(fit_score)
+        # P2-3: persist the no-LLM gate's "kept but unscreened" flag so an
+        # unverified paper leaves an auditable trace (and `doctor` / fit-check
+        # can find it later). Emit the line ONLY when set, so screened papers
+        # stay clean.
+        rel_unverified_line = (
+            "  relevance_unverified: true\n"
+            if provenance.get("relevance_unverified")
+            else ""
+        )
         provenance_block = (
             "provenance:\n"
             f'  resolved_via: "{_yaml_scalar(str(provenance.get("resolved_via", "")))}"\n'
@@ -307,6 +316,7 @@ def make_raw_md(
             f"  backends: {backends_yaml}\n"
             f'  doi_checked_at: "{_yaml_scalar(str(provenance.get("doi_checked_at", "")))}"\n'
             f"  fit_score: {fit_score_yaml}\n"
+            f"{rel_unverified_line}"
         )
 
     citation_line = journal

@@ -41,7 +41,12 @@ def _seed_note(
     path.write_text('\n'.join(body_parts), encoding='utf-8')
 
 
-def test_adds_hub_section_with_cluster_and_mocs(tmp_path: Path) -> None:
+def test_adds_hub_section_links_sub_moc_only_not_bare_parent(tmp_path: Path) -> None:
+    """v1.1 follow-up: the backfilled `## Hub` block is a PAPER NOTE, so it links
+    the per-cluster sub-MOC only — NOT the bare family parent (consistent with the
+    P1-4a live-ingest path). Before `migrate_one_note` passed `for_paper_note=True`
+    the backfill re-added [[LLM-Agents]]/[[Water-Resources]], re-forming the
+    super-hub clique P1-4a removed."""
     note = tmp_path / "raw" / "human-water-llm" / "p2024-a.md"
     _seed_note(note, topic_cluster="human-water-llm")
     result = migrate_one_note(note)
@@ -49,8 +54,12 @@ def test_adds_hub_section_with_cluster_and_mocs(tmp_path: Path) -> None:
     text = note.read_text(encoding="utf-8")
     assert "## Hub" in text
     assert "[[human-water-llm/00_overview|human-water-llm]]" in text
-    assert "[[LLM-Agents]]" in text
-    assert "[[Water-Resources]]" in text
+    # sub-MOCs linked...
+    assert "[[LLM-Agents-Human]]" in text
+    assert "[[Water-Resources-Human]]" in text
+    # ...bare family parents dropped (kills the clique on every paper note).
+    assert "[[LLM-Agents]]" not in text
+    assert "[[Water-Resources]]" not in text
 
 
 def test_hub_section_inserted_before_notes_section(tmp_path: Path) -> None:

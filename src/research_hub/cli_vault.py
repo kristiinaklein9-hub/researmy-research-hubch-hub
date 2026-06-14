@@ -263,6 +263,60 @@ def _vault_prune_footers(*, top_n: int, apply: bool, emit_json: bool = False) ->
     return 0
 
 
+def _vault_gc(
+    *,
+    older_than_days: int,
+    apply: bool,
+    strip_parents: bool,
+    emit_json: bool = False,
+) -> int:
+    """Vault garbage collection (v1.1 P2-5d): aged ``_deleted_`` purge + orphan
+    ``hub/`` and ``hub/_moc/`` removal + paper-note Hub-block parent-strip."""
+    from research_hub.vault.gc import run_gc
+
+    cfg = get_config()
+    report = run_gc(
+        cfg,
+        older_than_days=older_than_days,
+        apply=apply,
+        strip_parents=strip_parents,
+    )
+    if emit_json:
+        _emit_cli_json(
+            "vault gc",
+            0,
+            {
+                "applied": report.applied,
+                "older_than_days": report.older_than_days,
+                "aged_deleted": report.aged_deleted,
+                "orphan_hubs": report.orphan_hubs,
+                "orphan_mocs": report.orphan_mocs,
+                "hub_parents_stripped": report.hub_parents_stripped,
+                "total_actions": report.total_actions(),
+            },
+        )
+        return 0
+    verb = "Removed" if apply else "Would remove"
+    print(f"vault gc ({'applied' if apply else 'dry-run'}):")
+    print(f"  {verb} {len(report.aged_deleted)} aged _deleted_ dir(s) (> {report.older_than_days}d)")
+    for rec in report.aged_deleted:
+        print(f"      {rec['name']}  ({rec['age_days']}d)")
+    print(f"  {verb} {len(report.orphan_hubs)} orphan hub dir(s)")
+    for rel in report.orphan_hubs:
+        print(f"      {rel}")
+    print(f"  {verb} {len(report.orphan_mocs)} orphan _moc page(s)")
+    for name in report.orphan_mocs:
+        print(f"      {name}")
+    strip_verb = "Stripped" if apply else "Would strip"
+    print(
+        f"  {strip_verb} bare parent MOC from "
+        f"{len(report.hub_parents_stripped)} paper-note Hub block(s)"
+    )
+    if not apply and report.total_actions():
+        print("\nRe-run with --apply to execute.")
+    return 0
+
+
 def _vault_rebuild_overviews(
     *,
     cluster_slug: str | None,

@@ -159,6 +159,9 @@ List structured methods stored in cluster memory.
 ### `read_cluster_memory(cluster: str)`
 Return the full memory registry for a cluster, or `found=false` if memory has not been generated yet.
 
+### `cluster_prisma(cluster: str)`
+PRISMA screening-provenance counts for a cluster: `identified` / `deduped` / `screened` (= `included` + `screened_out`, with `screened_out` broken down by reason) / and the `unverified` subset of `included`. Sourced from the append-only `.research_hub/screening_log.jsonl` written during no-LLM-fit-gated ingests. CLI: `clusters prisma <slug>`.
+
 ---
 
 ## Fit-check (scope drift detection)

@@ -1060,20 +1060,48 @@ def _run_fit_check_step(
         # Replaces the old `term_overlap >= 0.1` gate, which kept any paper
         # sharing one common word and let generic hydrology papers flood
         # an LLM cluster.
+        from research_hub.screening import (
+            STAGE_INCLUDED,
+            STAGE_SCREENED_OUT,
+            record_screening,
+        )
+
         verdicts = screen_relevance(papers, definition)
         kept: list[dict] = []
+        unverified_count = 0
         for paper, verdict in zip(papers, verdicts):
             if verdict["kept"]:
                 provenance = dict(paper.get("provenance") or {})
                 provenance["fit_score"] = verdict["score"]
                 provenance["fit_check_mode"] = "bm25_relevance"
                 provenance["fit_check_tier"] = verdict["tier"]
-                if verdict["tier"] == "cold-start":
+                unverified = verdict["tier"] == "cold-start"
+                if unverified:
                     # Kept but unscreened -- mark for later re-screening.
                     provenance["relevance_unverified"] = True
+                    unverified_count += 1
                 paper["provenance"] = provenance
+                record_screening(
+                    cfg,
+                    stage=STAGE_INCLUDED,
+                    cluster=slug,
+                    doi=str(paper.get("doi", "")),
+                    arxiv=str(paper.get("arxiv", "")),
+                    title=str(paper.get("title", "")),
+                    reason=str(verdict.get("reason", "")),
+                    unverified=unverified,
+                )
                 kept.append(paper)
                 continue
+            record_screening(
+                cfg,
+                stage=STAGE_SCREENED_OUT,
+                cluster=slug,
+                doi=str(paper.get("doi", "")),
+                arxiv=str(paper.get("arxiv", "")),
+                title=str(paper.get("title", "")),
+                reason="low_relevance",
+            )
             quarantine_paper(
                 cfg,
                 paper,
@@ -1090,6 +1118,14 @@ def _run_fit_check_step(
                   f"kept {len(kept)}/{len(papers)}; quarantined {len(papers) - len(kept)} "
                   "(mode=bm25_relevance)",
                   print_progress)
+        if unverified_count and print_progress:
+            # Cold-start nudge: the gate could not clearly screen this batch, so
+            # it deferred (recall-biased keep). Tell the user to confirm later.
+            print(
+                f"[fit-check] {unverified_count} paper(s) ingested unverified "
+                "(relevance_unverified) -- run an LLM fit-check to confirm; "
+                f"`clusters prisma {slug}` shows the screening provenance"
+            )
         return kept
 
     cli = llm_cli or detect_llm_cli()

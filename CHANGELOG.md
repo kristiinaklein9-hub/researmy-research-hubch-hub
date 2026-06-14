@@ -12,13 +12,74 @@
 
 ## [Unreleased]
 
-_Phase B (UI 80/20 — ⌘K command palette + mobile breakpoints +
-`_HOME` wayfinding) and Phase D (Zotero metadata correctness —
-type-aware `itemType` mapping + `fit/<bucket>` tag + provenance
-child-note parity) are staged on `feature/v1.1-ui-80-20` for **v1.1**.
-UI scope is capped: the dashboard stays a thin status-mirror +
-palette + onboarding demo; no 3-pane / citation-graph rebuild (link
-out to the real tools instead)._
+_The UI 80/20 track (Phase B: ⌘K command palette + mobile breakpoints +
+`_HOME` wayfinding; Phase D: Zotero metadata correctness) is a SEPARATE
+future release — it was never folded into v1.1.0, which is the P2
+"scale + provenance" release below. UI scope stays capped: the dashboard
+remains a thin status-mirror + palette + onboarding demo; no 3-pane /
+citation-graph rebuild (link out to the real tools instead)._
+
+
+## [1.1.0] - 2026-06-14
+
+"Scale + provenance" — the roadmap P2 block (robustness sweep, PRISMA
+screening provenance, config-rot hygiene, `vault gc`), plus the v1.0.11
+graph follow-ups that unblock the real-vault graph migration.
+
+### Added
+- **PRISMA screening provenance** (P2-3): an append-only
+  `.research_hub/screening_log.jsonl` records every relevance-gate decision
+  (`included` / `screened_out` by reason, plus a `unverified` flag on papers the
+  no-LLM gate kept without a clear verdict). New `clusters prisma <slug>` CLI +
+  `cluster_prisma` MCP tool render the PRISMA flow counts. The no-LLM fit gate
+  now emits these records and prints a cold-start nudge ("N papers ingested
+  unverified — run an LLM fit-check to confirm").
+- **`vault gc`** (P2-5d): garbage-collect aged `raw/_deleted_<slug>/` residue
+  (`--older-than-days`, default 30), orphan `hub/<slug>/` dirs with no registry
+  entry, and orphan `hub/_moc/*.md` pages no live cluster references; plus a
+  paper-note `## Hub`-block bare-parent strip (`--no-strip-parents` to skip).
+  Dry-run by default; `--apply` to execute. `PARENT_MOCS` and query-derived
+  sub-MOCs are protected from deletion.
+- `relevance_unverified` is now persisted to paper-note frontmatter (it was
+  computed by the no-LLM fit gate but discarded) — an unverified paper leaves an
+  auditable trace.
+
+### Changed
+- **Windows FS-lock hardening** (P2-1): the 6 remaining bare `shutil.move`
+  sites (cluster archive / unarchive / cascade-delete soft-move; paper
+  prune / unarchive / bulk-move) now route through `fsops.robust_move`
+  (retry/backoff on transient `PermissionError`), completing the v1.0.7 sweep.
+- **Graph view label colors** (P2-5a): `vault graph-colors --refresh` now emits
+  label color groups ONLY for `#label/*` tags that actually exist in the vault,
+  so a refresh no longer re-injects the 9 canonical label groups every time
+  (a user who deleted the dead ones can now keep them deleted). The one-time
+  init/bootstrap still pre-seeds the full palette.
+- `clusters._PARENT_MOCS` is now `frozenset(PARENT_MOCS)` derived from the single
+  source of truth in `vault.hub_overview` (was a hand-maintained literal mirror).
+- The `## Hub`-backfill path (`vault hub-backlink-migrate`) now drops the bare
+  family parent on paper notes (`for_paper_note=True`), matching the live-ingest
+  P1-4a policy (paper notes link the sub-MOC only).
+- `vault prune-footers` now skips soft-deleted `raw/_deleted_<slug>/` residue.
+
+### Removed
+- Dead duplicate `[tool.pytest.ini_options]` block in `pyproject.toml`
+  (`pytest.ini` is the authoritative pytest config; the pyproject block was
+  ignored and silently drifting). Reconciled the stale "≥1-week RC bake" claim
+  in `docs/stable-api.md` to the real release-gate cadence.
+
+### Security
+- **Typed MCP path-param validation contract** (P2-5e): the MCP slug/identifier
+  validation set is now an explicit module-level contract
+  (`_SLUG_PARAM_NAMES` / `_IDENTIFIER_PARAM_NAMES`) and `_validate_mcp_args`
+  **fails closed** on an unregistered slug-like kwarg. A new meta-test proves
+  every slug-like parameter across the live tool registry is covered, closing
+  the silent-bypass drift class (a new tool adding a path param under an
+  unrecognized name).
+
+### Deferred (tracked for a follow-up)
+- `vault gc` stale `topic:`-tag rewrite (the riskiest, content-mutating pass) and
+  full PRISMA `identified` / `deduped` funnel emission (the screening log schema
+  supports both stages; v1.1 auto-emits only the relevance-screen stage).
 
 
 ## [1.0.11] - 2026-06-13

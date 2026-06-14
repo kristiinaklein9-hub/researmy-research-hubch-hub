@@ -69,6 +69,7 @@ EXPECTED_MAPPINGS = {
     "list_claims": "memory list --kind claims",
     "list_methods": "memory list --kind methods",
     "read_cluster_memory": "memory read",
+    "cluster_prisma": "clusters prisma",
     "label_paper": "label",
     "list_papers_by_label": "find --label",
     "prune_cluster": "paper prune",

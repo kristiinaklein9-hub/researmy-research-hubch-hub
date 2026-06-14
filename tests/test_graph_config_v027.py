@@ -55,7 +55,11 @@ def test_build_label_color_groups_has_all_canonical_labels():
         assert any(group["query"] == f"tag:#label/{label}" for group in groups)
 
 
-def test_refresh_graph_from_vault_writes_both_dimensions(tmp_path: Path):
+def test_refresh_graph_no_label_tags_emits_only_cluster_groups(tmp_path: Path):
+    """P2-5a: with 0 notes carrying `#label/` tags, `--refresh` emits NO label
+    color groups. The old behavior re-injected all 9 canonical label groups on
+    every refresh, so a user who deleted the dead ones (showTags:false, 0
+    labelled notes) got them back every time and could not keep them deleted."""
     cfg = _cfg(tmp_path)
     ClusterRegistry(cfg.clusters_file).create(query="alpha", name="Alpha", slug="alpha")
     ClusterRegistry(cfg.clusters_file).create(query="beta", name="Beta", slug="beta")
@@ -64,11 +68,42 @@ def test_refresh_graph_from_vault_writes_both_dimensions(tmp_path: Path):
 
     data = json.loads((cfg.root / ".obsidian" / "graph.json").read_text(encoding="utf-8"))
     queries = [group["query"] for group in data["colorGroups"]]
-    assert count == 11
+    assert count == 2  # 2 cluster groups, 0 label groups
     assert "path:raw/alpha/" in queries
     assert "path:raw/beta/" in queries
+    assert not any(q.startswith("tag:#label/") for q in queries)
+
+
+def test_refresh_graph_emits_label_groups_only_for_present_tags(tmp_path: Path):
+    """When notes DO carry `#label/<x>` tags, refresh emits a color group for
+    each present label — and only those (absent labels stay out)."""
+    cfg = _cfg(tmp_path)
+    ClusterRegistry(cfg.clusters_file).create(query="alpha", name="Alpha", slug="alpha")
+    note_dir = cfg.raw / "alpha"
+    note_dir.mkdir(parents=True, exist_ok=True)
+    (note_dir / "paper.md").write_text(
+        '---\ntopic_cluster: "alpha"\n---\nBody\n\n#label/seed #label/method\n',
+        encoding="utf-8",
+    )
+
+    refresh_graph_from_vault(cfg)
+
+    data = json.loads((cfg.root / ".obsidian" / "graph.json").read_text(encoding="utf-8"))
+    queries = [group["query"] for group in data["colorGroups"]]
+    assert "path:raw/alpha/" in queries
     assert "tag:#label/seed" in queries
-    assert "tag:#label/archived" in queries
+    assert "tag:#label/method" in queries
+    assert "tag:#label/archived" not in queries  # absent label → no group
+    # residue under raw/_deleted_* must not resurrect a label group
+    deleted = cfg.raw / "_deleted_gone"
+    deleted.mkdir(parents=True, exist_ok=True)
+    (deleted / "old.md").write_text(
+        '---\ntopic_cluster: "gone"\n---\nBody\n\n#label/archived\n', encoding="utf-8"
+    )
+    refresh_graph_from_vault(cfg)
+    data2 = json.loads((cfg.root / ".obsidian" / "graph.json").read_text(encoding="utf-8"))
+    q2 = [group["query"] for group in data2["colorGroups"]]
+    assert "tag:#label/archived" not in q2
 
 
 def test_refresh_graph_preserves_user_color_groups(tmp_path: Path):

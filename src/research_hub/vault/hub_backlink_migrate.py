@@ -89,7 +89,10 @@ def migrate_one_note(
         return HubMigrationResult(path=path, action="already_present")
 
     explicit_moc_links = list((cluster_moc_links_map or {}).get(cluster_slug, []))
-    moc_links = derive_moc_links(cluster_slug, moc_links=explicit_moc_links)
+    # P1-4a/v1.1: this backfills a PAPER NOTE's Hub block, so link the sub-MOC
+    # only (not the bare parent) — consistent with the live-ingest path; without
+    # this the backfill re-adds the super-hub clique P1-4a removed.
+    moc_links = derive_moc_links(cluster_slug, moc_links=explicit_moc_links, for_paper_note=True)
     hub_section = _build_hub_section(cluster_slug, moc_links)
 
     # Find injection point: before any of the user-facing sections, after

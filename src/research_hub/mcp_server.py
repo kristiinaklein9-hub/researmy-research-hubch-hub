@@ -148,15 +148,57 @@ def _entrypoint_tool_error(exc: Exception, cluster_slug: str | None = None) -> d
     }
 
 
+# v1.1 P2-5e — the typed MCP path-param validation contract. Every tool
+# parameter whose NAME looks like a slug / cluster path segment (see
+# ``_looks_like_slug_param``) MUST appear in one of these sets, so that
+# ``_validate_mcp_args`` validates it and a hostile value (``../``, separators,
+# nulls) can never reach ``safe_join`` unchecked. Completeness against the LIVE
+# tool registry is proven by ``tests/test_v110_mcp_path_param_contract.py``;
+# the validator below ALSO fails closed, so a call site that passes an
+# unregistered slug-like kwarg raises instead of silently passing it through.
+_IDENTIFIER_PARAM_NAMES = frozenset({"identifier", "doi_or_slug"})
+_SLUG_PARAM_NAMES = frozenset(
+    {"cluster", "cluster_slug", "slug", "crystal_slug", "to_cluster", "source", "into"}
+)
+_VALIDATED_PARAM_NAMES = _SLUG_PARAM_NAMES | _IDENTIFIER_PARAM_NAMES
+
+
+def _looks_like_slug_param(name: str) -> bool:
+    """Naming convention for a param that denotes a slug / cluster path segment.
+
+    Conservative — only names that strongly imply a filesystem-path slug, so a
+    new tool param like ``dest_slug`` / ``target_cluster`` is caught while a
+    plain ``query`` / ``kind`` is not. Any name flagged here MUST be in
+    ``_VALIDATED_PARAM_NAMES`` (enforced fail-closed below + by the meta-test).
+    """
+    return (
+        name == "slug"
+        or name == "cluster"
+        or name == "source"   # cluster-merge source slug
+        or name == "into"     # cluster-merge target slug
+        or name.endswith("_slug")
+        or name.endswith("_cluster")
+    )
+
+
 def _validate_mcp_args(**kwargs: object) -> dict[str, object]:
     validated: dict[str, object] = {}
     for field, value in kwargs.items():
         if value is None:
             validated[field] = None
-        elif field in {"identifier", "doi_or_slug"}:
+        elif field in _IDENTIFIER_PARAM_NAMES:
             validated[field] = validate_identifier(value, field=field)
-        elif field in {"cluster", "cluster_slug", "slug", "crystal_slug", "to_cluster", "source", "into"}:
+        elif field in _SLUG_PARAM_NAMES:
             validated[field] = validate_slug(value, field=field)
+        elif _looks_like_slug_param(field):
+            # Fail closed: a slug-like param reached the validator without being
+            # registered. This is a programming error (a tool added a path param
+            # but forgot the contract) — refuse rather than pass an unvalidated
+            # path segment downstream to safe_join.
+            raise ValidationError(
+                f"path-like MCP param {field!r} is not in the validation contract; "
+                "add it to _SLUG_PARAM_NAMES / _IDENTIFIER_PARAM_NAMES in mcp_server.py"
+            )
         else:
             validated[field] = value
     return validated
@@ -1662,6 +1704,24 @@ def _read_cluster_memory_dispatch(cluster: str, kind: str = "all", min_confidenc
 def read_cluster_memory(cluster: str, kind: str = "all", min_confidence: str = "low") -> dict:
     """Read cluster memory. kind may be entities, claims, methods, or all."""
     return _read_cluster_memory_dispatch(cluster, kind=kind, min_confidence=min_confidence)
+
+
+@mcp.tool()
+def cluster_prisma(cluster: str) -> dict:
+    """PRISMA screening-provenance counts for a cluster: identified / deduped /
+    screened (included + screened-out, with screened-out broken down by reason)
+    / of-which-unverified. Sourced from the append-only screening log written
+    during no-LLM-fit-gated ingests (v1.1 P2-3)."""
+    try:
+        cluster = _validate_mcp_args(cluster=cluster)["cluster"]
+        from research_hub.config import get_config
+        from research_hub.screening import prisma_counts, read_screening_log
+
+        cfg = get_config()
+        records = read_screening_log(cfg, cluster=cluster)
+        return {"cluster": cluster, "counts": prisma_counts(records)}
+    except Exception as exc:
+        return _tool_error(exc)
 
 
 @_deprecated_mcp_tool()

@@ -81,6 +81,7 @@ from research_hub.cli_clusters import (
     _clusters_merge,
     _clusters_new,
     _clusters_rename,
+    _clusters_prisma,
     _clusters_resolve_collision,
     _clusters_restore_zotero_coll,
     _clusters_scaffold_missing,
@@ -140,6 +141,7 @@ from research_hub.cli_vault import (
     _cleanup_hub,
     _synthesize,
     _vault_cleanup_frontmatter,
+    _vault_gc,
     _vault_graph_colors,
     _vault_hub_backlink_migrate,
     _vault_install_theme,
@@ -952,6 +954,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     show_parser = clusters_subparsers.add_parser("show", help="Show cluster details")
     show_parser.add_argument("slug")
+    prisma_parser = clusters_subparsers.add_parser(
+        "prisma", help="Show PRISMA screening-provenance summary for a cluster (P2-3)"
+    )
+    prisma_parser.add_argument("slug")
+    prisma_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON counts"
+    )
     new_parser = clusters_subparsers.add_parser("new", help="Create a new cluster")
     new_parser.add_argument("--query", required=True)
     new_parser.add_argument("--name", default=None)
@@ -1679,6 +1688,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually rewrite the footers (default: report only)",
     )
     vault_prune_footers.add_argument(
+        "--json", action="store_true",
+        help="Emit machine-readable JSON report on stdout",
+    )
+
+    vault_gc = vault_subparsers.add_parser(
+        "gc",
+        help="GC aged _deleted_ residue, orphan hub/_moc pages, and bare parent MOCs (P2-5d)",
+    )
+    vault_gc.add_argument(
+        "--older-than-days", type=int, default=30,
+        help="Purge raw/_deleted_<slug>/ residue older than N days (default 30)",
+    )
+    vault_gc.add_argument(
+        "--apply", action="store_true",
+        help="Actually remove/rewrite (default: report only)",
+    )
+    vault_gc.add_argument(
+        "--no-strip-parents", dest="strip_parents", action="store_false",
+        help="Skip the paper-note Hub-block bare-parent-MOC strip pass",
+    )
+    vault_gc.add_argument(
         "--json", action="store_true",
         help="Emit machine-readable JSON report on stdout",
     )
@@ -3035,6 +3065,8 @@ def _main_dispatch(args, parser) -> int:
             return _clusters_set_group(args.slug, getattr(args, "group", ""))
         if args.clusters_command == "show":
             return _clusters_show(args.slug)
+        if args.clusters_command == "prisma":
+            return _clusters_prisma(args.slug, emit_json=getattr(args, "json", False))
         if args.clusters_command == "new":
             return _clusters_new(args.query, args.name, args.slug)
         if args.clusters_command == "bind":
@@ -3417,6 +3449,13 @@ def _main_dispatch(args, parser) -> int:
             return _vault_prune_footers(
                 top_n=args.top,
                 apply=args.apply,
+                emit_json=getattr(args, "json", False),
+            )
+        if args.vault_command == "gc":
+            return _vault_gc(
+                older_than_days=args.older_than_days,
+                apply=args.apply,
+                strip_parents=getattr(args, "strip_parents", True),
                 emit_json=getattr(args, "json", False),
             )
         if args.vault_command == "hub-backlink-migrate":

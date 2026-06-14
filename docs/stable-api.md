@@ -5,8 +5,11 @@
 > post-release scorecard. Anything documented here follows
 > semantic-versioning guarantees; anything NOT here is internal and may
 > change in any release without a deprecation cycle. The mechanical
-> release gate + ≥1-week RC bake precede every `v*` tag — see
-> [RELEASING.md](RELEASING.md).
+> release gate — clean working tree, version-sync across all release
+> files, and the FULL test suite (including e2e) on a fresh basetemp —
+> precedes every `v*` tag (see [RELEASING.md](RELEASING.md)). Patch and
+> minor releases ship on a rapid cadence behind that gate; there is no
+> fixed multi-day RC-bake window.
 
 research-hub has three public surfaces. Only the items listed below are
 covered by the stability guarantee.
@@ -120,5 +123,5 @@ Rules:
 
 - [`file-formats.md`](file-formats.md) — hidden file format schema versions
 - [`authenticity.md`](authenticity.md) — the v1.0 no-fabricated-references guarantee + L0–L5 + quarantine triage
-- [`RELEASING.md`](RELEASING.md) — the mechanical release gate + RC-bake runbook
+- [`RELEASING.md`](RELEASING.md) — the mechanical release-gate runbook (version-sync + full-suite gate before every tag)
 - `research_hub.describe` — runtime capability manifest

@@ -1,6 +1,6 @@
 [project]
 name = "research-hub-pipeline"
-version = "1.0.11"
+version = "1.1.0"
 description = "AI-operable research workspace for Zotero, Obsidian, and NotebookLM. Use any two, or all three, through CLI, MCP, REST, and dashboard."
 readme = "README.md"
 license = {text = "MIT"}
@@ -73,13 +73,6 @@ packages = ["src/research_hub"]
 # Hatch's default package discovery includes all files under packages/,
 # so src/research_hub/skills_data/**/SKILL.md and samples/** ship automatically.
 
-[tool.pytest.ini_options]
-markers = [
-    "stress: stress/load tests excluded from default pytest run",
-    "network: Tests that hit real external APIs (OpenAlex, arXiv, etc)",
-    "evals: Evaluation tests measuring search accuracy and fit-check quality",
-    "slow: Tests that take >30 seconds or block at C level (e.g. threading/subprocess timeouts)",
-    "real_zotero: bypass the real-Zotero block (rare)",
-]
-testpaths = ["tests"]
-addopts = "--ignore=tests/stress -m 'not slow and not stress' -p no:cacheprovider -p no:tmpdir -p no:langsmith -p no:logfire --timeout=30"
+# pytest config lives in pytest.ini, which pytest prefers over a pyproject
+# [tool.pytest.ini_options] block — so the duplicate block here was IGNORED and
+# silently drifting. Removed in v1.1 (P2-5b); edit pytest.ini for pytest config.

@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from research_hub.config import get_config
+from research_hub.fsops import robust_move
 from research_hub.operations import (
     _frontmatter_value,
     _update_frontmatter_field,
@@ -20,6 +21,7 @@ from research_hub.operations import (
     note_matches_query,
 )
 from research_hub.security import atomic_write_text, safe_join
+from research_hub.vault.hub_overview import PARENT_MOCS
 
 # Imported at module level so tests can patch research_hub.clusters._resolve_parent_collection_key_readonly
 # without patching the source module (avoids local-import binding issues).
@@ -38,9 +40,11 @@ logger = logging.getLogger(__name__)
 
 # Shared family-root MOC names that every cluster of a family links to. These
 # must NEVER be garbage-collected when a single cluster is merged away (only
-# source-only SUB-MOCs are). Mirror of the parents emitted by
-# research_hub.vault.hub_overview.derive_moc_links.
-_PARENT_MOCS = {"LLM-Agents", "Water-Resources"}
+# source-only SUB-MOCs are). Single source of truth: PARENT_MOCS (imported from
+# hub_overview) — the same tuple derive_moc_links emits. v1.1 (P2-5) replaced the
+# former literal mirror, which could silently drift, with this derived frozenset
+# (O(1) membership for the GC guard at line ~771).
+_PARENT_MOCS = frozenset(PARENT_MOCS)
 
 
 class CollisionError(ValueError):
@@ -561,7 +565,7 @@ class ClusterRegistry:
             archived_parent.mkdir(parents=True, exist_ok=True)
             if archived_dir.exists():
                 shutil.rmtree(archived_dir)
-            shutil.move(str(hub_dir), str(archived_dir))
+            robust_move(str(hub_dir), str(archived_dir))
 
         cluster.status = "archived"
         cluster.archived_at = _utc_now()
@@ -594,7 +598,7 @@ class ClusterRegistry:
             hub_dir.parent.mkdir(parents=True, exist_ok=True)
             if hub_dir.exists():
                 shutil.rmtree(hub_dir)
-            shutil.move(str(archived_dir), str(hub_dir))
+            robust_move(str(archived_dir), str(hub_dir))
 
         cluster.status = "active"
         cluster.archived_at = ""
@@ -1028,7 +1032,7 @@ def cascade_delete_cluster(
         deleted_dir.parent.mkdir(parents=True, exist_ok=True)
         if deleted_dir.exists():
             shutil.rmtree(deleted_dir)
-        shutil.move(str(raw_dir), str(deleted_dir))
+        robust_move(str(raw_dir), str(deleted_dir))
 
     if coll_key:
         zot_client = ZoteroDualClient()

@@ -184,6 +184,18 @@ def update_cluster_links(
     return {"forward": forward, "backward": backward, "scanned": len(all_notes)}
 
 
+def _under_deleted_dir(path: Path) -> bool:
+    """True if *path* sits inside a soft-delete residue dir.
+
+    ``clusters.delete`` soft-deletes a cluster by moving ``raw/<slug>/`` to
+    ``raw/_deleted_<slug>/`` (note the per-slug suffix — the dir name *starts
+    with* ``_deleted_`` rather than being exactly that). Footer pruning / link
+    rewriting must skip these so we never re-rank or resurrect links inside
+    tombstoned notes (v1.1 P2-5 follow-up).
+    """
+    return any(part.startswith("_deleted_") for part in path.parts)
+
+
 def _existing_footer_slugs(note_path: Path) -> list[str]:
     """The slugs currently in a note's Related-Papers footer ([] if none)."""
     text = note_path.read_text(encoding="utf-8", errors="ignore")
@@ -203,6 +215,8 @@ def prune_footers(vault_raw_dir: Path, *, top_n: int = 10, apply: bool = False) 
     """
     by_cluster: dict[str, list[NoteMeta]] = {}
     for md_path in vault_raw_dir.rglob("*.md"):
+        if _under_deleted_dir(md_path):
+            continue  # never re-rank/prune footers inside soft-deleted residue
         meta = parse_frontmatter(md_path)
         if meta and meta.topic_cluster:
             by_cluster.setdefault(meta.topic_cluster, []).append(meta)

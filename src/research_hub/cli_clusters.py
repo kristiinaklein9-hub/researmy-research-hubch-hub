@@ -84,6 +84,32 @@ def _clusters_set_group(slug: str, group: str) -> int:
     return 0
 
 
+def _clusters_prisma(slug: str, *, emit_json: bool = False) -> int:
+    """Render the PRISMA screening-provenance summary for a cluster (v1.1 P2-3)."""
+    from research_hub.security import validate_slug
+    from research_hub.screening import (
+        prisma_counts,
+        read_screening_log,
+        render_prisma,
+    )
+
+    slug = validate_slug(slug)
+    cfg = get_config()
+    registry = ClusterRegistry(cfg.clusters_file)
+    if registry.get(slug) is None:
+        raise ValueError(f"Cluster not found: {slug}")
+    if emit_json:
+        records = read_screening_log(cfg, cluster=slug)
+        _emit_cli_json(
+            "clusters prisma",
+            0,
+            {"cluster": slug, "counts": prisma_counts(records)},
+        )
+        return 0
+    print(render_prisma(cfg, slug))
+    return 0
+
+
 def _clusters_show(slug: str) -> int:
     from research_hub.vault.sync import compute_sync_status
 

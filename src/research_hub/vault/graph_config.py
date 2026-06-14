@@ -8,10 +8,13 @@ graph settings are preserved.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from research_hub.paper import CANONICAL_LABELS
+
+_LABEL_TAG_RE = re.compile(r"#label/([A-Za-z0-9_\-]+)")
 
 
 PALETTE = [
@@ -91,10 +94,52 @@ def build_color_groups(cluster_slugs: list[str]) -> list[dict[str, object]]:
     return groups
 
 
+def present_label_tags(vault_root: Path) -> set[str]:
+    """Which canonical ``#label/<x>`` tags actually appear on paper notes.
+
+    Label color groups are only meaningful for labels that exist on disk.
+    ``refresh_graph_from_vault`` uses this so ``--refresh`` never re-injects
+    color groups for labels no note carries (P2-5a). Before this gate, every
+    refresh re-wrote all 9 canonical label groups, so a user who deleted the
+    dead ones (``showTags:false``, 0 labelled notes) got them back every time.
+
+    Soft-deleted residue (``raw/_deleted_<slug>/``) is skipped. The bootstrap
+    paths (``update_graph_json`` create / init wizard) still pre-seed the full
+    palette; only refresh reconciles it down to what is actually present.
+    """
+    raw_root = vault_root / "raw"
+    if not raw_root.exists():
+        return set()
+    canonical = {label for label in LABEL_ORDER if label in CANONICAL_LABELS}
+    present: set[str] = set()
+    for md_path in raw_root.rglob("*.md"):
+        if any(part.startswith("_deleted_") for part in md_path.parts):
+            continue
+        try:
+            text = md_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for match in _LABEL_TAG_RE.finditer(text):
+            label = match.group(1)
+            if label in canonical:
+                present.add(label)
+        if present >= canonical:
+            break  # every canonical label already seen — stop scanning
+    return present
+
+
 def build_label_color_groups(
     label_palette: dict[str, str] | None = None,
+    present_labels: set[str] | None = None,
 ) -> list[dict[str, object]]:
-    """Build one deterministic color group per canonical paper label."""
+    """Build one deterministic color group per canonical paper label.
+
+    ``present_labels`` (when not None) gates the output to labels that actually
+    appear in the vault — ``refresh_graph_from_vault`` passes the scanned set so
+    a refresh does not re-inject color groups for absent labels. ``None``
+    (default) emits the full palette, which the bootstrap/create path relies on
+    to pre-seed colors for a fresh vault.
+    """
 
     palette = label_palette or LABEL_PALETTE
     return [
@@ -104,13 +149,24 @@ def build_label_color_groups(
         }
         for label in LABEL_ORDER
         if label in CANONICAL_LABELS
+        and (present_labels is None or label in present_labels)
     ]
 
 
-def build_all_color_groups(cluster_slugs: list[str]) -> list[dict[str, object]]:
-    """Build both cluster-path and label-tag graph color groups."""
+def build_all_color_groups(
+    cluster_slugs: list[str],
+    present_labels: set[str] | None = None,
+) -> list[dict[str, object]]:
+    """Build both cluster-path and label-tag graph color groups.
 
-    return build_color_groups(cluster_slugs) + build_label_color_groups()
+    ``present_labels`` is forwarded to :func:`build_label_color_groups`; pass the
+    scanned vault set to gate label groups (refresh), or ``None`` to pre-seed the
+    full palette (bootstrap).
+    """
+
+    return build_color_groups(cluster_slugs) + build_label_color_groups(
+        present_labels=present_labels
+    )
 
 
 def _is_managed_query(query: object) -> bool:
@@ -215,7 +271,11 @@ def refresh_graph_from_vault(cfg) -> int:
         existing = {}
     if not isinstance(existing, dict):
         existing = {}
-    managed_groups = build_all_color_groups(slugs)
+    # P2-5a: gate label color groups to labels actually present on disk, so a
+    # refresh never re-injects color groups for labels no note carries (the
+    # bootstrap/create path still pre-seeds the full palette).
+    present_labels = present_label_tags(Path(cfg.root))
+    managed_groups = build_all_color_groups(slugs, present_labels=present_labels)
     preserved_groups = [
         group
         for group in (existing.get("colorGroups") or [])

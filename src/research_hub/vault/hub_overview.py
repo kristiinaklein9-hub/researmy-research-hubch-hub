@@ -552,8 +552,10 @@ def _sub_moc_token_from_slug(cluster_slug: str) -> str:
 
 # Shared family-root MOC names. Paper notes must NOT link these directly
 # (P1-4a) — only sub-MOC + overview PAGES do — so the Obsidian graph is a
-# star-of-stars, not a clique. Mirror in research_hub.clusters._PARENT_MOCS
-# (the v1.0.7 merged-cluster-GC parent-MOC protection).
+# star-of-stars, not a clique. This tuple is the SINGLE SOURCE OF TRUTH:
+# research_hub.clusters._PARENT_MOCS is `frozenset(PARENT_MOCS)` (the v1.0.7
+# merged-cluster-GC parent protection) and vault/gc.py + graph_config.py import
+# it directly.
 PARENT_MOCS = ("LLM-Agents", "Water-Resources")
 
 

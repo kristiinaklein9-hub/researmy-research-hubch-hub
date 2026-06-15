@@ -20,6 +20,22 @@ remains a thin status-mirror + palette + onboarding demo; no 3-pane /
 citation-graph rebuild (link out to the real tools instead)._
 
 
+## [1.1.1] - 2026-06-14
+
+### Fixed
+- **`vault gc` dangling-link bug** (found on a real vault during the v1.1.0
+  graph migration): `find_orphan_mocs` treated a `hub/_moc/<name>.md` page as
+  orphan when no live cluster *derived* it — but did not check whether live
+  paper notes still *linked* it. A note carrying a stale sub-MOC link after a
+  rebind/merge (whose `## Hub` block was never rewritten) would have had its
+  `_moc` page deleted by `vault gc --apply`, stranding dangling wikilinks.
+  `run_gc` now computes every wikilink target live (non-deleted) notes point at
+  (`note_linked_targets`) and protects both the `_moc` pass AND the orphan-hub
+  pass (a `hub/<slug>/` linked by a cross-cluster `[[slug/00_overview]]` body
+  reference is likewise protected). gc never makes the graph worse. Regression
+  tests pin both guards. (The stale link itself is a separate, deferred cleanup.)
+
+
 ## [1.1.0] - 2026-06-14
 
 "Scale + provenance" — the roadmap P2 block (robustness sweep, PRISMA

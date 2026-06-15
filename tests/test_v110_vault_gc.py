@@ -271,6 +271,56 @@ def test_run_gc_apply_executes_all_passes(tmp_path):
     assert "[[LLM-Agents-Human]]" in note.read_text(encoding="utf-8")
 
 
+def test_run_gc_keeps_moc_still_linked_by_a_live_note(tmp_path):
+    """Regression (found on the real vault during the v1.1 graph migration): a
+    `_moc` page no cluster DERIVES but a live note still LINKS must NOT be
+    deleted — doing so would strand dangling wikilinks. gc must never make the
+    graph worse (the stale link is a separate, deferred cleanup)."""
+    cfg = _cfg(tmp_path)
+    moc_dir = cfg.hub / "_moc"
+    moc_dir.mkdir(parents=True, exist_ok=True)
+    # No cluster derives this sub-MOC, but a live note links it (stale rebind).
+    (moc_dir / "LLM-Agents-StaleButLinked.md").write_text("# moc", encoding="utf-8")
+    (moc_dir / "LLM-Agents-TrulyOrphan.md").write_text("# moc", encoding="utf-8")
+    note = cfg.raw / "some-cluster" / "p1.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        "---\ntopic_cluster: some-cluster\n---\n## Hub\n\n- MOC: [[LLM-Agents-StaleButLinked]]\n",
+        encoding="utf-8",
+    )
+
+    report = run_gc(cfg, apply=True, strip_parents=False)
+
+    # The linked one survives; the truly-unreferenced one is removed.
+    assert "LLM-Agents-StaleButLinked.md" not in report.orphan_mocs
+    assert (moc_dir / "LLM-Agents-StaleButLinked.md").exists()
+    assert "LLM-Agents-TrulyOrphan.md" in report.orphan_mocs
+    assert not (moc_dir / "LLM-Agents-TrulyOrphan.md").exists()
+
+
+def test_run_gc_keeps_hub_still_linked_by_a_live_note(tmp_path):
+    """Same data-corruption class as the _moc guard: a `hub/<slug>/` with no
+    registry entry that a live note links into (`[[ghost/00_overview]]`) must NOT
+    be removed — deleting it would strand dangling wikilinks."""
+    cfg = _cfg(tmp_path)
+    (cfg.hub / "ghost-but-linked").mkdir(parents=True, exist_ok=True)
+    (cfg.hub / "truly-orphan-hub").mkdir(parents=True, exist_ok=True)
+    note = cfg.raw / "some-cluster" / "p1.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        "---\ntopic_cluster: some-cluster\n---\n"
+        "## Hub\n\n- Cluster: [[ghost-but-linked/00_overview|ghost-but-linked]]\n",
+        encoding="utf-8",
+    )
+
+    report = run_gc(cfg, apply=True, strip_parents=False)
+
+    assert "ghost-but-linked" not in report.orphan_hubs
+    assert (cfg.hub / "ghost-but-linked").exists()
+    assert "truly-orphan-hub" in report.orphan_hubs
+    assert not (cfg.hub / "truly-orphan-hub").exists()
+
+
 def test_run_gc_no_strip_parents_skips_content_rewrite(tmp_path):
     cfg = _cfg(tmp_path)
     note = _paper_with_hub(cfg.raw / "c", "p1.md")

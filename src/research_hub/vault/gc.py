@@ -45,6 +45,8 @@ _BARE_PARENT_MOC_RE = re.compile(
     + r")\]\][ \t]*(?:\r?\n|$)",
     re.MULTILINE,
 )
+# Wikilink target (drops a ``|alias`` and a ``#heading``/``^block`` suffix).
+_WIKILINK_RE = re.compile(r"\[\[([^\]|#^]+)")
 
 
 def _under_deleted_dir(path: Path) -> bool:
@@ -164,6 +166,31 @@ def referenced_mocs_for(registry) -> set[str]:
     return refs
 
 
+def note_linked_targets(raw_dir: Path) -> set[str]:
+    """Every wikilink target that LIVE (non-deleted) paper notes point at.
+
+    Used to protect a ``_moc`` page from deletion when notes still link it — a
+    ``_moc`` no live cluster *derives* may still be *linked* by notes (e.g. a
+    note carries a stale sub-MOC link after a rebind/merge whose Hub block was
+    never rewritten). Deleting such a page would strand dangling wikilinks, so
+    ``run_gc`` treats note-linked names as referenced. (The stale link itself is
+    a separate, deferred cleanup — gc must not make the graph WORSE.)
+    """
+    targets: set[str] = set()
+    if not raw_dir.exists():
+        return targets
+    for md_path in raw_dir.rglob("*.md"):
+        if _under_deleted_dir(md_path):
+            continue
+        try:
+            text = md_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for match in _WIKILINK_RE.finditer(text):
+            targets.add(match.group(1).strip())
+    return targets
+
+
 def strip_hub_parents(
     vault_raw_dir: Path,
     *,
@@ -225,13 +252,22 @@ def run_gc(
         raw_dir, older_than_days=older_than_days, apply=apply, now=now
     )
 
-    orphan_hub_paths = find_orphan_hubs(hub_dir, live_slugs)
+    # Compute every wikilink target live notes point at, ONCE, before any
+    # destructive pass — both the hub and _moc passes use it so gc never deletes
+    # a page/dir that live notes still link (which would strand dangling links).
+    note_targets = note_linked_targets(raw_dir)
+    # A hub/<slug>/ is protected when the registry knows it OR a note links into
+    # it (e.g. a cross-cluster body link `[[ghost/00_overview]]`).
+    note_linked_slugs = {t.split("/", 1)[0] for t in note_targets if "/" in t}
+    orphan_hub_paths = find_orphan_hubs(hub_dir, live_slugs | note_linked_slugs)
     report.orphan_hubs = [str(p.relative_to(hub_dir)) for p in orphan_hub_paths]
     if apply:
         for p in orphan_hub_paths:
             shutil.rmtree(p)
 
-    orphan_moc_paths = find_orphan_mocs(hub_dir, referenced_mocs_for(registry))
+    # A _moc is "referenced" if a live cluster DERIVES it OR a live note LINKS it.
+    referenced = referenced_mocs_for(registry) | note_targets
+    orphan_moc_paths = find_orphan_mocs(hub_dir, referenced)
     report.orphan_mocs = [p.name for p in orphan_moc_paths]
     if apply:
         for p in orphan_moc_paths:
